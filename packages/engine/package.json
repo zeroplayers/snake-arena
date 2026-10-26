@@ -8,6 +8,9 @@
   "scripts": {
     "typecheck": "tsc -p ."
   },
+  "dependencies": {
+    "@zerosnake/sdk": "workspace:*"
+  },
   "devDependencies": {
     "vitest": "^5.0.5"
   }

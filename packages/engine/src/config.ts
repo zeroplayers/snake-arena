@@ -92,6 +92,18 @@ export interface EngineConfig {
   /** Random positions tried before settling for the last one. */
   spawnAttempts: number;
 
+  // --- Vision (bot state) --------------------------------------------------------------------
+  /** A bot sees snake points and food at most this far from its head. */
+  visionRadius: number;
+  /** Most other snakes in one state (the nearest are kept). */
+  visionMaxSnakes: number;
+  /** Most body points over all other snakes in one state; bodies are downsampled to fit. */
+  visionMaxSegments: number;
+  /** Most points of the bot's own body in its state; downsampled to fit. */
+  visionMaxSelfSegments: number;
+  /** Most food pellets in one state (the nearest are kept). */
+  visionMaxFood: number;
+
   // --- Internals -----------------------------------------------------------------------------
   /** Spatial hash cell size. Does not affect results, only speed. */
   gridCellSize: number;
@@ -143,6 +155,12 @@ export const DEFAULT_CONFIG: Readonly<EngineConfig> = Object.freeze({
   spawnRadiusFactor: 0.8,
   spawnClearance: 10,
   spawnAttempts: 30,
+
+  visionRadius: 40,
+  visionMaxSnakes: 32,
+  visionMaxSegments: 256,
+  visionMaxSelfSegments: 128,
+  visionMaxFood: 128,
 
   gridCellSize: 8,
 });

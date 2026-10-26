@@ -78,6 +78,10 @@ importers:
   packages/cli: {}
 
   packages/engine:
+    dependencies:
+      '@zerosnake/sdk':
+        specifier: workspace:*
+        version: link:../sdk
     devDependencies:
       vitest:
         specifier: ^5.0.5

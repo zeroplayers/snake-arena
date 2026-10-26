@@ -38,11 +38,17 @@ export async function bundleBot(entry: string = BOT_ENTRY): Promise<string> {
   return out.outputFiles[0]?.text ?? "";
 }
 
+/**
+ * The house bots `npm run bench` plays against. Pass it as `opponents` (with the same `seed` and
+ * `ticks`) to reproduce a bench match exactly; a different lineup is a different match.
+ */
+export const BENCH_LINEUP: readonly HouseBotName[] = ["easy", "easy", "medium", "hard", "chaos"];
+
 export interface MatchOptions {
   seed: number;
   ticks: number;
-  /** House bots to play against; each gets its own snake. */
-  opponents?: HouseBotName[];
+  /** House bots to play against; each gets its own snake. Default: none. */
+  opponents?: readonly HouseBotName[];
 }
 
 /** One tick of your bot, as it saw and answered it. */

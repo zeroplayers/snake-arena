@@ -8,6 +8,14 @@ locally and check that it really is better before they deploy.
 Everything below matches `@zerosnake/sdk`, `@zerosnake/sandbox` and the engine's default config. If
 something here disagrees with the types in `node_modules/@zerosnake/sdk/src/`, the types win.
 
+## Setup
+
+The `@zerosnake/*` packages are not on npm yet. This folder works inside a checkout of the
+`zeroplayers/snake-arena` monorepo (it is `template/` there): `pnpm install` at the repo root, then
+run the scripts below from this folder (`pnpm test` or `npm test`, same thing). In a copy outside
+the monorepo, `npm install` fails until the packages are published; if that is the situation, tell
+the author instead of trying to work around it (don't edit `package.json` ranges or vendor the SDK).
+
 ## Files
 
 | Path               | What                                                                         |
@@ -59,8 +67,10 @@ Only `src/` is deployed. Keep tests and tools out of it.
   - your head touches another snake's body → `collision`, and the kill goes to that snake;
   - two heads touch → the shorter snake dies (kill to the longer one); equal length, both die;
   - head crosses the arena edge → `wall`;
-  - over the op budget 3 ticks in a row → `timeout`; throwing 3 ticks in a row (or running out of
-    memory, or failing to load) → `error`.
+  - over the op budget 3 ticks in a row → `timeout`; throwing 3 ticks in a row, or running out of
+    memory → `error`;
+  - at load: module evaluation + `init()` over their 100-interrupt budget → `timeout` before the
+    first tick; throwing there → `error`.
   - Your own body is harmless: you cannot hit yourself.
   - Collisions are swept along the move: a fast head cannot jump through a thin body.
   - A dead snake drops its whole length as food.
@@ -76,8 +86,10 @@ Only `src/` is deployed. Keep tests and tools out of it.
 - `x` grows east (right), **`y` grows north (up)**, like maths, not like screens.
 - Angles are radians, **counter-clockwise** from +x: `0` east, `π/2` north, `-π/2` south, `π` west.
   Angles in state are normalised to (-π, π]. `Math.atan2(dy, dx)` is the heading to a point.
-- **`turn > 0` turns right (clockwise, the angle decreases); `turn < 0` turns left.** The engine does
-  `angle -= clamp(turn, -1, 1) * turnRate`, then rounds `turn` to a multiple of 1/128.
+- **`turn > 0` turns right (clockwise, the angle decreases); `turn < 0` turns left.** The engine
+  first clamps `turn` to [-1, 1] (`NaN` = 0) and rounds it to the nearest multiple of 1/128, then
+  does `angle -= rounded * turnRate`. Look-ahead code that wants to match the engine exactly should
+  round the same way: `Math.round(turn * 128) / 128`.
 - `angleDiff(from, to)` is positive when `to` is to your **left**, the opposite sign of `turn`. Do not
   convert by hand: use `turnToward(self, angle)`, `steerToward(self, point)`, `steerAway(self, point)`.
 - Compare angles with `angleDiff`, never with `a - b` (breaks across ±π).
@@ -161,16 +173,16 @@ Return `BotAction`: `{ turn: number in [-1, 1], boost?: boolean }`. Out-of-range
 
 ## Limits
 
-| Limit                | Value                                       | Over it                                                    |
-| -------------------- | ------------------------------------------- | ---------------------------------------------------------- |
-| Per-tick budget      | `info.opBudget` = **10** interrupts         | Previous action reused + a strike; 3 in a row → `timeout`. |
-| Native work per tick | `opBudget × 1 000 000` units (~10 ms)       | Same as above.                                             |
-| Load + `init()`      | 100 interrupts                              | Dead on arrival (`error`).                                 |
-| Memory per bot       | 8 MiB (checked every 10 ticks)              | `error` (oom), at once.                                    |
-| Array length         | 100 000 for built-in array methods          | `RangeError` (counts as a throw).                          |
-| Stack                | 256 KiB                                     | Deep recursion throws.                                     |
-| Log                  | 1024 bytes per tick                         | Truncated, never fatal.                                    |
-| Deploy               | ≤ 50 files, sources ≤ 1 MB, bundle ≤ 256 KB | Deploy rejected.                                           |
+| Limit                | Value                                       | Over it                                                                 |
+| -------------------- | ------------------------------------------- | ----------------------------------------------------------------------- |
+| Per-tick budget      | `info.opBudget` = **10** interrupts         | Previous action reused + a strike; 3 in a row → `timeout`.              |
+| Native work per tick | `opBudget × 1 000 000` units (~10 ms)       | Same as above.                                                          |
+| Load + `init()`      | 100 interrupts                              | Dead before the first tick: `timeout` (over budget) or `error` (threw). |
+| Memory per bot       | 8 MiB (checked every 10 ticks)              | `error` (oom), at once.                                                 |
+| Array length         | 100 000 for built-in array methods          | `RangeError` (counts as a throw).                                       |
+| Stack                | 256 KiB                                     | Deep recursion throws.                                                  |
+| Log                  | 1024 bytes per tick                         | Truncated, never fatal.                                                 |
+| Deploy               | ≤ 50 files, sources ≤ 1 MB, bundle ≤ 256 KB | Deploy rejected.                                                        |
 
 An interrupt is QuickJS checking in, about every 10 000 bytecode branches or calls. Built-ins that
 loop internally (`sort`, `map`, `JSON.stringify`, `split`, Set/Map iteration, ...) are charged by
@@ -181,20 +193,21 @@ candidate move is not. Precompute once per tick, filter by distance before inner
 
 ## Common causes of death
 
-| Symptom (in a death replay)                              | Likely cause                                                                                          | Fix                                                                                                              |
-| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `wall`, turning hard the last few ticks                  | Started turning back too late                                                                         | Turn away when `wallDistance` < ~3 turning radii (`speed / turnRate`); more while boosting.                      |
-| `wall` while chasing food near the edge                  | Food target overrides safety                                                                          | Check safety after choosing a target, not before.                                                                |
-| Snake turns away from food / spins / hugs the wall       | `turn` sign flipped                                                                                   | Use `steerToward`/`turnToward`; `turn > 0` is right.                                                             |
-| Circles one pellet forever, starves                      | Pellet inside the turning circle                                                                      | Skip food that would need a tighter circle than `speed / turnRate` (see `nearestReachableFood` in `src/bot.ts`). |
-| `collision` with a body that was in view for many ticks  | Steered away from the nearest point into another part of the body, or only checked straight ahead     | Simulate a few candidate turns several ticks ahead and check every nearby point (the template's feelers).        |
-| `collision` with a body that was moving across your path | Treated other snakes as static                                                                        | Project other heads forward (`project(head, angle, speed × t)`), keep a bigger margin near heads.                |
-| `collision` with something that "wasn't there"           | Body outside vision or between downsampled points                                                     | Assume bodies are solid between listed points; slow down your risk near the vision edge.                         |
-| Head-on `collision`                                      | Met a longer (or equal) snake head first                                                              | Only go head-to-head with clearly shorter snakes; dodge heads of others.                                         |
-| `collision` right after boosting                         | Boost doubled the turning radius                                                                      | Don't boost near bodies or the wall; boost in short bursts.                                                      |
-| Length melts away, low score without dying               | Boosting too much, or hunger with no food                                                             | Boost only when it buys a kill or escape; always keep eating.                                                    |
-| `timeout`                                                | Too much work in one tick                                                                             | See Limits; check `max ops` in `npm run bench`.                                                                  |
-| `error`                                                  | An exception, e.g. `snake.head.x` when `head` is `null`, `arr[0]` on an empty array, a deep recursion | Handle `null`/empty cases (the types force you to with `noUncheckedIndexedAccess`).                              |
+| Symptom (in a death replay)                                       | Likely cause                                                                                                      | Fix                                                                                                              |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `wall`, turning hard the last few ticks                           | Started turning back too late                                                                                     | Turn away when `wallDistance` < ~3 turning radii (`speed / turnRate`); more while boosting.                      |
+| `wall` while chasing food near the edge                           | Food target overrides safety                                                                                      | Check safety after choosing a target, not before.                                                                |
+| Snake turns away from food / spins / hugs the wall                | `turn` sign flipped                                                                                               | Use `steerToward`/`turnToward`; `turn > 0` is right.                                                             |
+| Circles one pellet forever, starves                               | Pellet inside the turning circle                                                                                  | Skip food that would need a tighter circle than `speed / turnRate` (see `nearestReachableFood` in `src/bot.ts`). |
+| `collision` with a body that was in view for many ticks           | Steered away from the nearest point into another part of the body, or only checked straight ahead                 | Simulate a few candidate turns several ticks ahead and check every nearby point (the template's feelers).        |
+| `collision` with a body that was moving across your path          | Treated other snakes as static                                                                                    | Project other heads forward (`project(head, angle, speed × t)`), keep a bigger margin near heads.                |
+| `collision` with something that "wasn't there"                    | Body outside vision or between downsampled points                                                                 | Assume bodies are solid between listed points; slow down your risk near the vision edge.                         |
+| Head-on `collision`                                               | Met a longer (or equal) snake head first                                                                          | Only go head-to-head with clearly shorter snakes; dodge heads of others.                                         |
+| `collision` right after boosting                                  | Boost doubled the turning radius                                                                                  | Don't boost near bodies or the wall; boost in short bursts.                                                      |
+| Length melts away, low score without dying                        | Boosting too much, or hunger with no food                                                                         | Boost only when it buys a kill or escape; always keep eating.                                                    |
+| `timeout`                                                         | Too much work in one tick                                                                                         | See Limits; check `max ops` in `npm run bench`.                                                                  |
+| `timeout` after 0 life ticks, error "... went over its op budget" | Heavy precomputation at module load or in `init()` (lookup tables, big arrays) over the 100-interrupt load budget | Precompute less, or spread it over the first ticks (keep progress in `mem`).                                     |
+| `error`                                                           | An exception, e.g. `snake.head.x` when `head` is `null`, `arr[0]` on an empty array, a deep recursion             | Handle `null`/empty cases (the types force you to with `noUncheckedIndexedAccess`).                              |
 
 ## Testing and debugging
 

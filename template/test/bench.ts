@@ -7,17 +7,16 @@
  *   npm run bench -- --seeds 40 --ticks 3000 src/bot.ts
  *   npm run bench -- --deaths 3                    # also print the last ticks before 3 deaths
  *
- * Every bot plays the same seeds against the same lineup, so differences come from the bots.
+ * Every bot plays the same seeds against the same lineup (`BENCH_LINEUP` in match.ts), so
+ * differences come from the bots, and `playMatch(bundle, { seed, ticks, opponents: BENCH_LINEUP })`
+ * replays any bench match exactly.
  * Scores are per life (the arena rates a version by its mean life score); lives still going when
  * a match ends count with their score so far. `±` is the standard error of the mean: treat two
  * versions as different only when their means are further apart than about twice that.
  */
 import { parseArgs } from "node:util";
-import type { HouseBotName } from "@zerosnake/house-bots";
 import { nearestDanger } from "@zerosnake/sdk";
-import { BUDGET, bundleBot, type Life, playMatch } from "./match.ts";
-
-const LINEUP: HouseBotName[] = ["easy", "easy", "medium", "hard", "chaos"];
+import { BUDGET, bundleBot, BENCH_LINEUP as LINEUP, type Life, playMatch } from "./match.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -87,10 +86,17 @@ function printDeath(entry: string, life: Life) {
   for (const t of life.trace.slice(-contextTicks)) {
     const { self, wallDistance, snakes, food } = t.state;
     const danger = nearestDanger(t.state);
-    const near = danger ? `${danger.snake.id} gap ${danger.gap.toFixed(1)}` : "none";
+    let near = "none";
+    if (danger) {
+      const { snake, point, gap } = danger;
+      // A head is the dangerous part: head to head, the shorter snake dies (equal: both).
+      const isHead = snake.head !== null && snake.head.x === point.x && snake.head.y === point.y;
+      const part = isHead ? `HEAD (length ${snake.length.toFixed(1)})` : "body";
+      near = `${snake.id} ${part} gap ${gap.toFixed(1)}`;
+    }
     const act = `turn ${t.action.turn.toFixed(2)}${t.action.boost ? " boost" : ""}`;
     console.log(
-      `  [${t.tick}] head (${self.head.x.toFixed(1)}, ${self.head.y.toFixed(1)}) angle ${self.angle.toFixed(2)} length ${self.length.toFixed(1)} wall ${wallDistance.toFixed(1)} | ${snakes.length} snakes, nearest body ${near} | ${food.length} food | ${act} | ${t.outcome}, ${t.interrupts} ops`,
+      `  [${t.tick}] head (${self.head.x.toFixed(1)}, ${self.head.y.toFixed(1)}) angle ${self.angle.toFixed(2)} length ${self.length.toFixed(1)} wall ${wallDistance.toFixed(1)} | ${snakes.length} snakes, nearest ${near} | ${food.length} food | ${act} | ${t.outcome}, ${t.interrupts} ops`,
     );
     for (const line of t.log) console.log(`      log: ${line}`);
     if (t.error) console.log(`      error: ${t.error}`);

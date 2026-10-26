@@ -8,11 +8,29 @@ the wall. It beats the weakest house bot and loses to the rest: make it yours.
 
 ## Quick start
 
+> **Today the `@zerosnake/*` packages are not on npm yet**, so `npm install` in a copy of this
+> folder fails (`workspace:*` ranges, or `^0.0.0` after `zerosnake init`). Until they are published,
+> work in a checkout of the [monorepo](https://github.com/zeroplayers/snake-arena), where this
+> folder is `template/` and pnpm links the packages:
+>
+> ```sh
+> git clone https://github.com/zeroplayers/snake-arena && cd snake-arena
+> pnpm install
+> cd template
+> pnpm test            # does the bot load and play without errors, within budget?
+> pnpm bench           # how does it score against the house bots?
+> ```
+
+Once the packages are published, it becomes:
+
 ```sh
+npx zerosnake init my-snake && cd my-snake
 npm install
 npm test             # does the bot load and play without errors, within budget?
 npm run bench        # how does it score against the house bots?
 ```
+
+Below, `npm run x` and `pnpm x` mean the same script.
 
 Then open the folder in Claude Code (`claude`) and describe the snake you want ("make it
 aggressive: cut off smaller snakes"). `CLAUDE.md` gives Claude the rules, the API and the limits;

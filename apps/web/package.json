@@ -10,13 +10,20 @@
     "preview": "vite preview",
     "deploy:staging": "CLOUDFLARE_ENV=staging vite build && wrangler deploy",
     "cf-typegen": "wrangler types",
-    "typecheck": "wrangler types >/dev/null && tsc -p ."
+    "typecheck": "wrangler types >/dev/null && tsc -p .",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "wrangler d1 migrations apply DB --local --persist-to ../../.wrangler/state",
+    "db:seed": "wrangler d1 execute DB --local --persist-to ../../.wrangler/state --file seed/dev.sql",
+    "db:reset": "rm -rf ../../.wrangler/state/v3/d1 && pnpm db:migrate && pnpm db:seed"
   },
   "dependencies": {
     "@tanstack/react-router": "^1.170.46",
     "@tanstack/react-start": "^1.169.4",
+    "better-auth": "^1.7.13",
+    "drizzle-orm": "^0.45.4",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.65.0",
@@ -24,6 +31,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "drizzle-kit": "^0.31.11",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "vitest": "^5.0.5",

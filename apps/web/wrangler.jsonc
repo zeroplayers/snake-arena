@@ -5,6 +5,9 @@
  * Bindings are not inherited by environments, so every binding is declared twice.
  * Values marked PLACEHOLDER must be replaced with real IDs before the first staging deploy
  * (the deploy workflow refuses to run while any remain).
+ *
+ * Secrets (BETTER_AUTH_SECRET, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET) are not in this file:
+ * `.dev.vars` locally (see `.dev.vars.example`), `wrangler secret put --env staging` on staging.
  */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
@@ -14,10 +17,16 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
 
-  "vars": { "ENVIRONMENT": "development" },
+  "vars": { "ENVIRONMENT": "development", "BETTER_AUTH_URL": "http://localhost:3000" },
   "d1_databases": [
     // Same database as apps/arena. Local ID is arbitrary but must match apps/arena.
-    { "binding": "DB", "database_name": "zerosnake-dev", "database_id": "zerosnake-dev" }
+    // Migrations live here (src/db/schema.ts → `pnpm db:generate`) and are applied from here.
+    {
+      "binding": "DB",
+      "database_name": "zerosnake-dev",
+      "database_id": "zerosnake-dev",
+      "migrations_dir": "migrations"
+    }
   ],
   "r2_buckets": [
     { "binding": "BUNDLES", "bucket_name": "zerosnake-dev-bundles" },
@@ -41,13 +50,14 @@
     "staging": {
       // Deployed as `zerosnake-web-staging`.
       "routes": [{ "pattern": "arena.surninsynergy.dev", "custom_domain": true }],
-      "vars": { "ENVIRONMENT": "staging" },
+      "vars": { "ENVIRONMENT": "staging", "BETTER_AUTH_URL": "https://arena.surninsynergy.dev" },
       "d1_databases": [
         {
           "binding": "DB",
           "database_name": "zerosnake-staging",
           // PLACEHOLDER: `wrangler d1 create zerosnake-staging` → database_id
-          "database_id": "00000000-0000-0000-0000-000000000000"
+          "database_id": "00000000-0000-0000-0000-000000000000",
+          "migrations_dir": "migrations"
         }
       ],
       "r2_buckets": [

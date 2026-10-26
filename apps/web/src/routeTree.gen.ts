@@ -11,8 +11,13 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AtChar123usernameChar125RouteImport } from './routes/@{$username}'
+import { Route as DeviceRouteImport } from './routes/device'
 import { Route as LeaderboardRouteImport } from './routes/leaderboard'
+import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
+import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiUsersUsernameRouteImport } from './routes/api/users/$username'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -25,9 +30,24 @@ const AtChar123usernameChar125Route =
     path: '/@{$username}',
     getParentRoute: () => rootRouteImport,
   } as any)
+const DeviceRoute = DeviceRouteImport.update({
+  id: '/device',
+  path: '/device',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LeaderboardRoute = LeaderboardRouteImport.update({
   id: '/leaderboard',
   path: '/leaderboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WelcomeRoute = WelcomeRouteImport.update({
+  id: '/welcome',
+  path: '/welcome',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
@@ -35,39 +55,97 @@ const ApiHealthRoute = ApiHealthRouteImport.update({
   path: '/api/health',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
+  id: '/api/auth/$',
+  path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiUsersUsernameRoute = ApiUsersUsernameRouteImport.update({
+  id: '/api/users/$username',
+  path: '/api/users/$username',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/@{$username}': typeof AtChar123usernameChar125Route
+  '/device': typeof DeviceRoute
   '/leaderboard': typeof LeaderboardRoute
+  '/settings': typeof SettingsRoute
+  '/welcome': typeof WelcomeRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/users/$username': typeof ApiUsersUsernameRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/@{$username}': typeof AtChar123usernameChar125Route
+  '/device': typeof DeviceRoute
   '/leaderboard': typeof LeaderboardRoute
+  '/settings': typeof SettingsRoute
+  '/welcome': typeof WelcomeRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/users/$username': typeof ApiUsersUsernameRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/@{$username}': typeof AtChar123usernameChar125Route
+  '/device': typeof DeviceRoute
   '/leaderboard': typeof LeaderboardRoute
+  '/settings': typeof SettingsRoute
+  '/welcome': typeof WelcomeRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/users/$username': typeof ApiUsersUsernameRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/@{$username}' | '/leaderboard' | '/api/health'
+  fullPaths:
+    | '/'
+    | '/@{$username}'
+    | '/device'
+    | '/leaderboard'
+    | '/settings'
+    | '/welcome'
+    | '/api/health'
+    | '/api/auth/$'
+    | '/api/users/$username'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/@{$username}' | '/leaderboard' | '/api/health'
-  id: '__root__' | '/' | '/@{$username}' | '/leaderboard' | '/api/health'
+  to:
+    | '/'
+    | '/@{$username}'
+    | '/device'
+    | '/leaderboard'
+    | '/settings'
+    | '/welcome'
+    | '/api/health'
+    | '/api/auth/$'
+    | '/api/users/$username'
+  id:
+    | '__root__'
+    | '/'
+    | '/@{$username}'
+    | '/device'
+    | '/leaderboard'
+    | '/settings'
+    | '/welcome'
+    | '/api/health'
+    | '/api/auth/$'
+    | '/api/users/$username'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AtChar123usernameChar125Route: typeof AtChar123usernameChar125Route
+  DeviceRoute: typeof DeviceRoute
   LeaderboardRoute: typeof LeaderboardRoute
+  SettingsRoute: typeof SettingsRoute
+  WelcomeRoute: typeof WelcomeRoute
   ApiHealthRoute: typeof ApiHealthRoute
+  ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiUsersUsernameRoute: typeof ApiUsersUsernameRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -86,11 +164,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AtChar123usernameChar125RouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/device': {
+      id: '/device'
+      path: '/device'
+      fullPath: '/device'
+      preLoaderRoute: typeof DeviceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/leaderboard': {
       id: '/leaderboard'
       path: '/leaderboard'
       fullPath: '/leaderboard'
       preLoaderRoute: typeof LeaderboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/welcome': {
+      id: '/welcome'
+      path: '/welcome'
+      fullPath: '/welcome'
+      preLoaderRoute: typeof WelcomeRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/health': {
@@ -100,14 +199,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiHealthRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/users/$username': {
+      id: '/api/users/$username'
+      path: '/api/users/$username'
+      fullPath: '/api/users/$username'
+      preLoaderRoute: typeof ApiUsersUsernameRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AtChar123usernameChar125Route: AtChar123usernameChar125Route,
+  DeviceRoute: DeviceRoute,
   LeaderboardRoute: LeaderboardRoute,
+  SettingsRoute: SettingsRoute,
+  WelcomeRoute: WelcomeRoute,
   ApiHealthRoute: ApiHealthRoute,
+  ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiUsersUsernameRoute: ApiUsersUsernameRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

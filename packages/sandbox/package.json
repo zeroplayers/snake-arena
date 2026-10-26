@@ -7,5 +7,16 @@
   "exports": "./src/index.ts",
   "scripts": {
     "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "esbuild": "^0.28.2",
+    "miniflare": "5.20261023.0-beta",
+    "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "@jitl/quickjs-wasmfile-release-sync": "^0.32.0",
+    "@zerosnake/sdk": "workspace:*",
+    "quickjs-emscripten-core": "^0.32.0"
   }
 }

@@ -37,3 +37,25 @@ The staging deploy applies new migrations with `wrangler d1 migrations apply DB 
 - `/settings`: list and revoke CLI tokens (`GET /api/auth/cli/tokens`, `POST /api/auth/cli/tokens/revoke`).
 
 Tests run Better Auth against a real D1 (wrangler's platform proxy) with GitHub mocked at `fetch`.
+
+## CLI API (deploy)
+
+`src/server/cli-api.ts`, behind `Authorization: Bearer zsk_…` only (browser sessions get 401).
+Shapes and error codes: `src/shared/deploy.ts`.
+
+| Endpoint                         | For                |
+| -------------------------------- | ------------------ |
+| `GET /api/me`                    | `zerosnake status` |
+| `POST /api/bots`                 | create a bot       |
+| `POST /api/bots/:bot/versions`   | `zerosnake deploy` |
+| `GET /api/bots/:bot/versions/:n` | status and report  |
+
+A deploy is JSON `{ bundle, sources: [{ path, content }], meta? }`, optionally with an
+`Idempotency-Key` header. Limits (`DEPLOY_LIMITS`): ≤ 50 source files, ≤ 1 MB of sources, bundle
+≤ 256 KB, sane relative paths, `DEPLOYS_PER_DAY` per author per UTC day and `BOTS_PER_AUTHOR`
+(wrangler vars). The bundle and a `SourceArchive` JSON go to R2 under `<sha256>.js` / `<sha256>.json`,
+the version is created `validating`, and a `CheckJob` goes on `CHECKS_QUEUE`.
+
+`@zerosnake/web/shared` (`src/shared/`) is what other workspaces may import without pulling in the
+site: `CheckJob` and `isCheckJob` for apps/arena's consumer, `CheckReport`, `SourceArchive`, and
+the CLI API types.

@@ -56,7 +56,7 @@ export function step(world: World, actions: ActionMap = {}, faults: FaultMap = {
     }
 
     const action = actions[snake.id];
-    const turn = clamp(Number(action?.turn) || 0, -1, 1);
+    const turn = quantizeTurn(action?.turn) / TURN_STEPS;
     snake.angle = wrapAngle(snake.angle - turn * c.turnRate);
     const dx = cos(snake.angle);
     const dy = sin(snake.angle);
@@ -135,6 +135,20 @@ export function step(world: World, actions: ActionMap = {}, faults: FaultMap = {
   for (let k = 0; k < spawn; k++) spawnAmbientFood(world, rng);
 
   return world;
+}
+
+/**
+ * Turn input is rounded to a multiple of 1 / TURN_STEPS, so a replay can store each turn exactly
+ * in a byte or so instead of a float64 (#9). 0.5, 0.25 and the like stay exact.
+ */
+export const TURN_STEPS = 128;
+
+/**
+ * The integer in [-TURN_STEPS, TURN_STEPS] that `step` turns by (in units of
+ * turnRate / TURN_STEPS): clamped to [-1, 1], NaN and non-numbers as 0, never -0.
+ */
+export function quantizeTurn(turn: unknown): number {
+  return Math.round(clamp(Number(turn) || 0, -1, 1) * TURN_STEPS) | 0;
 }
 
 type Die = (i: number, t: number, cause: DeathCause, killer: number) => void;

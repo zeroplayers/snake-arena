@@ -25,21 +25,62 @@ let platform: Awaited<ReturnType<typeof createTestPlatform>>;
 let env: TestPlatformEnv;
 /** Every `CheckJob` sent, in order; sending goes on to the real (local) queue. */
 let sent: CheckJob[];
-let failQueue: boolean;
 let clock: Date;
+/** Fault injection around the real bindings. */
+let faults: {
+  queue?: boolean;
+  upload?: boolean;
+  /** Only the `UPDATE … SET status` that marks a failed deploy. */
+  abandon?: boolean;
+  /** Every D1 query. */
+  db?: boolean;
+  /** Awaited (once) before the next queue send. */
+  beforeSend?: () => Promise<void>;
+};
 
 beforeEach(async () => {
   platform = await createTestPlatform();
   env = platform.env;
   sent = [];
-  failQueue = false;
+  faults = {};
   clock = new Date("2026-10-26T12:00:00Z");
 });
 
 afterEach(async () => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   await platform.dispose();
 });
+
+/** `target` with one method replaced; everything else bound to the real object. */
+function override<T extends object>(target: T, name: keyof T, replacement: unknown): T {
+  return new Proxy(target, {
+    get(t, p) {
+      if (p === name) return replacement;
+      const value = Reflect.get(t, p);
+      return typeof value === "function" ? value.bind(t) : value;
+    },
+  });
+}
+
+/** Holds the next queue send until `release()` or `fail()`; `reached` resolves once it's waiting. */
+function holdNextSend() {
+  let reached!: () => void;
+  let release!: () => void;
+  let fail!: (error: Error) => void;
+  const reachedPromise = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const gate = new Promise<void>((resolve, reject) => {
+    release = resolve;
+    fail = reject;
+  });
+  faults.beforeSend = () => {
+    reached();
+    return gate;
+  };
+  return { reached: reachedPromise, release, fail: () => fail(new Error("queue down")) };
+}
 
 function api(options: { limits?: Partial<DeployLimits>; vars?: Record<string, string> } = {}) {
   const apiOptions: CliApiOptions = { now: () => clock };
@@ -48,9 +89,22 @@ function api(options: { limits?: Partial<DeployLimits>; vars?: Record<string, st
     {
       ...env,
       ...options.vars,
+      DB: override(env.DB, "prepare", (query: string) => {
+        if (faults.db || (faults.abandon && /^update "versions" set "status"/.test(query))) {
+          throw new Error("D1_ERROR: internal detail");
+        }
+        return env.DB.prepare(query);
+      }),
+      BUNDLES: override(env.BUNDLES, "put", (...args: Parameters<R2Bucket["put"]>) => {
+        if (faults.upload) throw new Error("R2 down");
+        return env.BUNDLES.put(...args);
+      }),
       CHECKS_QUEUE: {
         send: async (body, sendOptions) => {
-          if (failQueue) throw new Error("queue down");
+          const gate = faults.beforeSend;
+          delete faults.beforeSend;
+          await gate?.();
+          if (faults.queue) throw new Error("queue down");
           await env.CHECKS_QUEUE.send(body, sendOptions);
           sent.push(body);
         },
@@ -588,15 +642,17 @@ describe("POST /api/bots/:bot/versions", () => {
     });
   });
 
-  it("undoes the version when the queue is down, so a retry works", async () => {
+  it("checks the file count before validating every entry", async () => {
     const { token } = await cliUser();
     await createBot(token, "bot");
-    failQueue = true;
-    await expectError(await deploy(token, "bot"), 503, "queue_unavailable");
-    expect(await versionCount()).toBe(0);
-    failQueue = false;
-    const res = await deploy(token, "bot");
-    expect((await json<DeployResponse>(res)).version.n).toBe(1);
+    const sources = Array.from({ length: 100_000 }, () => ({}));
+    const body = await expectError(
+      await deploy(token, "bot", { bundle: "x", sources }),
+      422,
+      "too_many_files",
+    );
+    expect(body.actual).toBe(100_000);
+    await expectNothingStored();
   });
 });
 
@@ -612,9 +668,10 @@ describe("daily deploy quota", () => {
     // 18 earlier deploys today and some yesterday, straight into D1 to keep the test fast.
     const insert = (bot: string, n: number, at: Date) =>
       env.DB.prepare(
-        `INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key, created_at, updated_at)
-         SELECT ?, id, ?, 'rejected', 'b', 's', ?, ? FROM bots WHERE slug = ?`,
-      ).bind(crypto.randomUUID(), n, at.getTime(), at.getTime(), bot);
+        `INSERT INTO versions
+           (id, bot_id, n, status, bundle_key, source_key, enqueued_at, created_at, updated_at)
+         SELECT ?, id, ?, 'rejected', 'b', 's', ?3, ?3, ?3 FROM bots WHERE slug = ?4`,
+      ).bind(crypto.randomUUID(), n, at.getTime(), bot);
     await env.DB.batch([
       ...Array.from({ length: 18 }, (_, i) => insert(i % 2 ? "a" : "b", 10 + i, clock)),
       ...Array.from({ length: 5 }, (_, i) =>
@@ -716,13 +773,15 @@ describe("Idempotency-Key", () => {
         deploy(token, "bot", deployBody(), { headers: { "idempotency-key": key } }),
       ),
     );
-    expect(results.map((r) => r.status).sort()).toEqual([200, 200, 200, 200, 201]);
-    const ids = new Set(
-      await Promise.all(results.map(async (r) => (await json<DeployResponse>(r)).version.id)),
-    );
-    expect(ids.size).toBe(1);
+    // The others either see it in flight (409) or already queued (200).
+    const statuses = results.map((r) => r.status);
+    expect(statuses.filter((s) => s === 201)).toHaveLength(1);
+    expect(statuses.every((s) => [200, 201, 409].includes(s))).toBe(true);
     expect(await versionCount()).toBe(1);
     expect(sent).toHaveLength(1);
+    const retry = await deploy(token, "bot", deployBody(), { headers: { "idempotency-key": key } });
+    expect(retry.status).toBe(200);
+    expect((await json<DeployResponse>(retry)).version.n).toBe(1);
   });
 
   it("is scoped to the bot and validated", async () => {
@@ -797,5 +856,138 @@ describe("GET /api/me", () => {
       deploysPerDay: 20,
       botsPerAuthor: 3,
     });
+  });
+});
+
+// ─── Failures ────────────────────────────────────────────────────────────────────────────────────
+
+describe("interrupted and failed deploys", () => {
+  const key = "c1d2e3f4-0000-4000-8000-000000000001";
+  const headers = { "idempotency-key": key };
+  let token: string;
+
+  beforeEach(async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    ({ token } = await cliUser());
+    await createBot(token, "bot");
+  });
+
+  const version = async (n: number) => json<VersionInfo>(await getVersion(token, "bot", `${n}`));
+
+  it("answers a retry with 409 while the first attempt is queueing, then replays it", async () => {
+    const hold = holdNextSend();
+    const first = deploy(token, "bot", deployBody(), { headers });
+    await hold.reached;
+    await expectError(
+      await deploy(token, "bot", deployBody(), { headers }),
+      409,
+      "deploy_in_progress",
+    );
+    hold.release();
+    expect((await first).status).toBe(201);
+    const retry = await deploy(token, "bot", deployBody(), { headers });
+    expect(retry.status).toBe(200);
+    expect((await json<DeployResponse>(retry)).version.n).toBe(1);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("never reports success for a deploy whose queueing then fails", async () => {
+    const hold = holdNextSend();
+    const first = deploy(token, "bot", deployBody(), { headers });
+    await hold.reached;
+    // The CLI timed out and retries while the first attempt is still sending.
+    await expectError(
+      await deploy(token, "bot", deployBody(), { headers }),
+      409,
+      "deploy_in_progress",
+    );
+    hold.fail();
+    await expectError(await first, 503, "unavailable");
+
+    // The version stays visible, rejected with the reason, and out of the quota.
+    expect(await version(1)).toMatchObject({
+      status: "rejected",
+      report: {
+        ok: false,
+        checks: [{ name: "deploy", ok: false, message: expect.stringContaining("queued") }],
+      },
+    });
+    expect((await me(token)).quota.deploysToday).toBe(0);
+
+    // The key is free again: the next retry deploys anew.
+    const retry = await deploy(token, "bot", deployBody(), { headers });
+    expect(retry.status).toBe(201);
+    expect((await json<DeployResponse>(retry)).version.n).toBe(2);
+    expect(sent.map((j) => j.n)).toEqual([2]);
+    expect((await me(token)).quota.deploysToday).toBe(1);
+  });
+
+  it("takes over a deploy stuck before queueing for over a minute", async () => {
+    const hold = holdNextSend();
+    const first = deploy(token, "bot", deployBody(), { headers });
+    await hold.reached;
+    clock = new Date(clock.getTime() + 61_000);
+    const retry = await deploy(token, "bot", deployBody(), { headers });
+    expect(retry.status).toBe(201);
+    expect((await json<DeployResponse>(retry)).version.n).toBe(2);
+
+    // The first attempt's send goes through late; it was replaced, so it doesn't claim success
+    // and its job points at a rejected version, which the consumer skips.
+    hold.release();
+    await expectError(await first, 503, "unavailable");
+    expect(await version(1)).toMatchObject({ status: "rejected" });
+    expect(await version(2)).toMatchObject({ status: "validating" });
+    expect(sent.map((j) => j.n).sort()).toEqual([1, 2]);
+    expect((await me(token)).quota.deploysToday).toBe(1);
+  });
+
+  it("rejects the version without queueing it when the upload fails", async () => {
+    faults.upload = true;
+    await expectError(await deploy(token, "bot"), 503, "unavailable");
+    expect(await version(1)).toMatchObject({
+      status: "rejected",
+      report: { checks: [{ message: expect.stringContaining("stored") }] },
+    });
+    expect(sent).toEqual([]);
+    faults.upload = false;
+    expect((await json<DeployResponse>(await deploy(token, "bot"))).version.n).toBe(2);
+    expect((await me(token)).quota.deploysToday).toBe(1);
+  });
+
+  it("rejects the version when queueing fails, without using quota", async () => {
+    faults.queue = true;
+    await expectError(await deploy(token, "bot"), 503, "unavailable");
+    expect(await version(1)).toMatchObject({ status: "rejected" });
+    expect((await me(token)).quota.deploysToday).toBe(0);
+    faults.queue = false;
+    expect((await deploy(token, "bot")).status).toBe(201);
+  });
+
+  it("recovers on retry when even marking the failure fails", async () => {
+    faults.queue = true;
+    faults.abandon = true;
+    await expectError(await deploy(token, "bot", deployBody(), { headers }), 503, "unavailable");
+    expect(await version(1)).toMatchObject({ status: "validating" });
+    faults.queue = false;
+    faults.abandon = false;
+    // Looks in flight at first; after a minute a retry takes it over.
+    await expectError(
+      await deploy(token, "bot", deployBody(), { headers }),
+      409,
+      "deploy_in_progress",
+    );
+    clock = new Date(clock.getTime() + 61_000);
+    const retry = await deploy(token, "bot", deployBody(), { headers });
+    expect(retry.status).toBe(201);
+    expect((await json<DeployResponse>(retry)).version.n).toBe(2);
+    expect(await version(1)).toMatchObject({ status: "rejected" });
+  });
+
+  it("turns unexpected errors into a generic JSON 500", async () => {
+    faults.db = true;
+    for (const res of [await api().me(request("/api/me", { token })), await deploy(token, "bot")]) {
+      const body = await expectError(res, 500, "internal_error");
+      expect(body.message).not.toContain("D1");
+    }
   });
 });

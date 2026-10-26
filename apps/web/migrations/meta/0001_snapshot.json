@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4524fcbe-4973-43ad-8ffc-b6327d28850d",
+  "id": "82be80a9-74c2-4766-be11-527dd3805a3c",
   "prevId": "cea47983-2d95-4781-9fd3-26ac8588a88f",
   "tables": {
     "accounts": {
@@ -955,6 +955,13 @@
         "idempotency_key": {
           "name": "idempotency_key",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "enqueued_at": {
+          "name": "enqueued_at",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

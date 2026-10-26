@@ -5,19 +5,25 @@
  * Only CLI tokens (`authenticateCli`) get in; browser sessions don't, and CLI tokens in turn
  * can't use Better Auth (see cli-auth.ts). No CORS headers, so other sites' scripts can't call it.
  *
- * A deploy: limits are checked on the request alone, the bundle and the source archive go to R2
- * under content-addressed keys (`<sha256>.js` in `BUNDLES`, `<sha256>.json` in `SOURCES`), then a
- * single `INSERT … SELECT` makes the `validating` version: it picks the next `n` and enforces the
- * daily quota in the same statement, so concurrent deploys can't share an `n` or overrun the
- * quota. Last, a `CheckJob` goes on `CHECKS_QUEUE` for apps/arena.
+ * A deploy: limits are checked on the request alone. A single `INSERT … SELECT` makes the
+ * `validating` version: it picks the next `n` and enforces the daily quota in the same statement,
+ * so concurrent deploys can't share an `n` or overrun the quota. Then the bundle and the source
+ * archive go to R2 under content-addressed keys (`<sha256>.js` in `BUNDLES`, `<sha256>.json` in
+ * `SOURCES`), a `CheckJob` goes on `CHECKS_QUEUE` for apps/arena, and the row gets `enqueued_at`.
+ * If uploading or queueing fails, the version is `abandon`ed (`rejected`, not counted).
+ *
+ * With an `Idempotency-Key`, a retry returns the version once it's queued, gets 409
+ * `deploy_in_progress` while the first request is still going, and takes over a deploy stuck
+ * unqueued for over a minute.
  */
-import { and, count, desc, eq, gte, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, isNull, or, type SQLWrapper, sql } from "drizzle-orm";
 import * as z from "zod";
 import { createDb, type Db } from "../db";
 import { bots, versions } from "../db/schema";
 import {
   CHECK_JOB_VERSION,
   type CheckJob,
+  type CheckReport,
   SOURCE_ARCHIVE_FORMAT,
   type SourceArchive,
   type SourceFile,
@@ -58,6 +64,13 @@ const IDEMPOTENCY_KEY = /^[A-Za-z0-9_-]{8,128}$/;
 const PATH_SEGMENT = /^[A-Za-z0-9._@+-]+$/;
 const BOT_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
 
+/** An unqueued `validating` deploy older than this is taken over by a retry with its key. */
+const STALE_DEPLOY_MS = 60_000;
+
+/** Versions that never got queued (`abandon`ed) don't use up the daily quota. */
+const countsAgainstQuota = (v: SQLWrapper) =>
+  sql`NOT (${v}.enqueued_at IS NULL AND ${v}.status = 'rejected')`;
+
 class HttpError extends Error {
   constructor(
     readonly status: number,
@@ -69,6 +82,13 @@ class HttpError extends Error {
 
 function fail(status: number, body: ApiErrorBody): never {
   throw new HttpError(status, body);
+}
+
+function unavailable(what: string): never {
+  return fail(503, {
+    error: "unavailable",
+    message: `${what}, so nothing was deployed. Try again in a minute.`,
+  });
 }
 
 function json(body: unknown, status = 200, headers: Record<string, string> = {}) {
@@ -179,16 +199,21 @@ export function sourcePathProblem(path: string, maxLength: number = DEPLOY_LIMIT
   return null;
 }
 
-/** Applies every per-request limit; returns the archive to store, files sorted by path. */
-function checkDeploy(body: z.infer<typeof deployBody>, limits: DeployLimits) {
-  if (body.sources.length > limits.maxSourceFiles) {
+/** Before schema validation, so a huge `sources` array isn't validated entry by entry. */
+function checkFileCount(raw: unknown, limits: DeployLimits) {
+  const sources = (raw as { sources?: unknown } | null)?.sources;
+  if (Array.isArray(sources) && sources.length > limits.maxSourceFiles) {
     fail(422, {
       error: "too_many_files",
-      message: `${body.sources.length} source files; the limit is ${limits.maxSourceFiles}.`,
+      message: `${sources.length} source files; the limit is ${limits.maxSourceFiles}.`,
       limit: limits.maxSourceFiles,
-      actual: body.sources.length,
+      actual: sources.length,
     });
   }
+}
+
+/** Applies the per-request limits; returns the bytes to store, source files sorted by path. */
+function checkDeploy(body: z.infer<typeof deployBody>, limits: DeployLimits) {
   const seen = new Set<string>();
   let sourceBytes = 0;
   for (const { path, content } of body.sources) {
@@ -321,7 +346,16 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
       }
       return await fn(identity);
     } catch (error) {
-      if (!(error instanceof HttpError)) throw error;
+      if (!(error instanceof HttpError)) {
+        console.error("CLI API error", request.method, new URL(request.url).pathname, error);
+        return json(
+          {
+            error: "internal_error",
+            message: "Something went wrong on our side. Try again; if it keeps failing, report it.",
+          } satisfies ApiErrorBody,
+          500,
+        );
+      }
       const headers: Record<string, string> =
         error.status === 401 ? { "www-authenticate": 'Bearer realm="zerosnake"' } : {};
       return json(error.body, error.status, headers);
@@ -352,7 +386,13 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
       .select({ n: count() })
       .from(versions)
       .innerJoin(bots, eq(bots.id, versions.botId))
-      .where(and(eq(bots.ownerId, ownerId), gte(versions.createdAt, dayStart)))
+      .where(
+        and(
+          eq(bots.ownerId, ownerId),
+          gte(versions.createdAt, dayStart),
+          countsAgainstQuota(versions),
+        ),
+      )
       .limit(1);
     return {
       deploysToday: row?.n ?? 0,
@@ -378,18 +418,143 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
     return row;
   }
 
-  /** The answer to a retry that found its version already made. */
-  async function replay(bot: BotRow, existing: VersionRow, bundleKey: string, sourceKey: string) {
-    if (existing.bundleKey !== bundleKey || existing.sourceKey !== sourceKey) {
-      fail(409, {
-        error: "idempotency_conflict",
-        message: "This Idempotency-Key was already used for a different upload.",
-      });
+  const inProgress = (): never =>
+    fail(409, {
+      error: "deploy_in_progress",
+      message: "A deploy with this Idempotency-Key is still being processed. Try again shortly.",
+    });
+
+  /**
+   * Makes the `validating` version, not yet queued. Next `n` and the daily quota in one
+   * statement: D1 runs statements one at a time, so concurrent deploys can't take the same `n`
+   * or squeeze past the quota. `undefined` if the quota is used up or the key is taken.
+   */
+  async function insertVersion(
+    bot: BotRow,
+    ownerId: string,
+    keys: { bundleKey: string; sourceKey: string },
+    rawMeta: z.infer<typeof deployBody>["meta"],
+    idempotencyKey: string | null,
+  ) {
+    const id = crypto.randomUUID();
+    const createdAt = now().getTime();
+    const meta = toMeta(rawMeta);
+    const inserted = await db.all<{ n: number }>(sql`
+      INSERT INTO ${versions}
+        (id, bot_id, n, status, bundle_key, source_key, meta, idempotency_key, created_at, updated_at)
+      SELECT ${id}, ${bot.id},
+        coalesce((SELECT max(n) FROM ${versions} WHERE bot_id = ${bot.id}), 0) + 1,
+        'validating', ${keys.bundleKey}, ${keys.sourceKey}, ${meta && JSON.stringify(meta)},
+        ${idempotencyKey}, ${createdAt}, ${createdAt}
+      WHERE (
+        SELECT count(*) FROM ${versions} AS v JOIN ${bots} AS b ON b.id = v.bot_id
+        WHERE b.owner_id = ${ownerId} AND v.created_at >= ${utcDayStart(now()).getTime()}
+          AND ${countsAgainstQuota(sql`v`)}
+      ) < ${limits.deploysPerDay}
+      ON CONFLICT DO NOTHING
+      RETURNING n`);
+    const n = inserted[0]?.n;
+    return n === undefined ? undefined : { id, n };
+  }
+
+  /**
+   * Ends a deploy that never got queued (upload or enqueue failed, or it was interrupted):
+   * `rejected` with a report saying why, out of the daily quota, Idempotency-Key released so a
+   * retry starts over. Only touches a row that is still `validating` and unqueued; `false` if
+   * the row moved on meanwhile.
+   */
+  async function abandon(id: string, reason: string) {
+    const report: CheckReport = {
+      ok: false,
+      checks: [{ name: "deploy", ok: false, message: reason }],
+    };
+    const ended = await db
+      .update(versions)
+      .set({ status: "rejected", report, idempotencyKey: null })
+      .where(
+        and(eq(versions.id, id), eq(versions.status, "validating"), isNull(versions.enqueuedAt)),
+      )
+      .returning({ id: versions.id });
+    return ended.length > 0;
+  }
+
+  /** Like `abandon`, for error paths. If D1 fails here too, a retry takes the row over later. */
+  async function abandonQuietly(id: string, reason: string) {
+    try {
+      await abandon(id, reason);
+    } catch (error) {
+      console.error("abandoning version failed", id, error);
     }
-    return json({
-      version: versionInfo(bot, existing),
-      quota: await quota(bot.ownerId),
-    } satisfies DeployResponse);
+  }
+
+  /** Uploads to R2, enqueues the `CheckJob`, marks the version queued. */
+  async function finishDeploy(
+    bot: BotRow,
+    { id, n }: { id: string; n: number },
+    upload: {
+      bundle: Uint8Array<ArrayBuffer>;
+      archive: Uint8Array<ArrayBuffer>;
+      bundleHash: string;
+      archiveHash: string;
+    },
+    idempotencyKey: string | null,
+  ) {
+    const [row] = await db.select().from(versions).where(eq(versions.id, id)).limit(1);
+    if (!row) throw new Error(`version ${id} vanished after insert`);
+    try {
+      // Content-addressed, so a retry or another author's identical upload rewrites the same bytes.
+      await Promise.all([
+        env.BUNDLES.put(row.bundleKey, upload.bundle, {
+          httpMetadata: { contentType: "text/javascript; charset=utf-8" },
+          sha256: upload.bundleHash,
+        }),
+        env.SOURCES.put(row.sourceKey, upload.archive, {
+          httpMetadata: { contentType: "application/json; charset=utf-8" },
+          sha256: upload.archiveHash,
+        }),
+      ]);
+    } catch (error) {
+      console.error("R2 upload failed", id, error);
+      await abandonQuietly(id, "The upload couldn't be stored.");
+      unavailable("Couldn't store the upload");
+    }
+
+    const job: CheckJob = {
+      v: CHECK_JOB_VERSION,
+      versionId: id,
+      botId: bot.id,
+      ownerId: bot.ownerId,
+      n,
+      bundleKey: row.bundleKey,
+      sourceKey: row.sourceKey,
+      enqueuedAt: Date.now(),
+    };
+    try {
+      await env.CHECKS_QUEUE.send(job, { contentType: "json" });
+    } catch (error) {
+      // `send` may have delivered anyway; the consumer skips versions that aren't `validating`.
+      console.error("CHECKS_QUEUE.send failed", id, error);
+      await abandonQuietly(id, "The checks couldn't be queued.");
+      unavailable("Couldn't queue the checks");
+    }
+
+    // Unless a retry took this deploy over meanwhile (that releases the key). The checks may
+    // already have run, so don't require `validating`.
+    const marked = await db
+      .update(versions)
+      .set({ enqueuedAt: now() })
+      .where(and(eq(versions.id, id), sql`${versions.idempotencyKey} IS ${idempotencyKey}`))
+      .returning();
+    const version = marked[0];
+    if (!version) unavailable("This deploy was interrupted and a retry replaced it");
+    return json(
+      {
+        version: versionInfo(bot, version),
+        quota: await quota(bot.ownerId),
+      } satisfies DeployResponse,
+      201,
+      { location: `/api/bots/${bot.slug}/versions/${n}` },
+    );
   }
 
   return {
@@ -477,94 +642,54 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
             message: "Idempotency-Key must be 8–128 of A-Z, a-z, 0-9, _ and -.",
           });
         }
-        const body = parse(deployBody, await readJson(request, limits.maxBodyBytes));
+        const raw = await readJson(request, limits.maxBodyBytes);
+        checkFileCount(raw, limits);
+        const body = parse(deployBody, raw);
         const { bundle, archive } = checkDeploy(body, limits);
         const [bundleHash, archiveHash] = await Promise.all([sha256(bundle), sha256(archive)]);
-        const bundleKey = `${bundleHash}.js`;
-        const sourceKey = `${archiveHash}.json`;
+        const keys = { bundleKey: `${bundleHash}.js`, sourceKey: `${archiveHash}.json` };
+        const upload = { bundle, archive, bundleHash, archiveHash };
 
-        if (idempotencyKey) {
-          const existing = await versionByKey(bot.id, idempotencyKey);
-          if (existing) return replay(bot, existing, bundleKey, sourceKey);
-        }
-        // Fail fast before uploading; the insert below re-checks atomically.
-        const before = await quota(user.id);
-        if (before.deploysToday >= limits.deploysPerDay) quotaExceeded(before);
-
-        // Content-addressed, so a retry or a race rewrites identical bytes.
-        await Promise.all([
-          env.BUNDLES.put(bundleKey, bundle, {
-            httpMetadata: { contentType: "text/javascript; charset=utf-8" },
-            sha256: bundleHash,
-          }),
-          env.SOURCES.put(sourceKey, archive, {
-            httpMetadata: { contentType: "application/json; charset=utf-8" },
-            sha256: archiveHash,
-          }),
-        ]);
-
-        const id = crypto.randomUUID();
-        const createdAt = now().getTime();
-        const meta = toMeta(body.meta);
-        const dayStart = utcDayStart(now()).getTime();
-        // Next `n` and the daily quota in one statement: D1 runs statements one at a time, so
-        // concurrent deploys can't take the same `n` or squeeze past the quota.
-        const inserted = await db.all<{ n: number }>(sql`
-          INSERT INTO ${versions}
-            (id, bot_id, n, status, bundle_key, source_key, meta, idempotency_key, created_at, updated_at)
-          SELECT ${id}, ${bot.id},
-            coalesce((SELECT max(n) FROM ${versions} WHERE bot_id = ${bot.id}), 0) + 1,
-            'validating', ${bundleKey}, ${sourceKey}, ${meta && JSON.stringify(meta)},
-            ${idempotencyKey}, ${createdAt}, ${createdAt}
-          WHERE (
-            SELECT count(*) FROM ${versions} AS v JOIN ${bots} AS b ON b.id = v.bot_id
-            WHERE b.owner_id = ${user.id} AND v.created_at >= ${dayStart}
-          ) < ${limits.deploysPerDay}
-          ON CONFLICT DO NOTHING
-          RETURNING n`);
-        const n = inserted[0]?.n;
-        if (n === undefined) {
-          // A concurrent retry with the same key won, or the quota ran out meanwhile.
-          if (idempotencyKey) {
+        /**
+         * What an earlier request with this Idempotency-Key left: replay it if it got queued
+         * (or checked), 409 while it's in flight, or take it over once it's stale. `null` means
+         * the key is free.
+         */
+        async function settle(): Promise<Response | null> {
+          if (!idempotencyKey) return null;
+          for (let attempt = 0; attempt < 3; attempt++) {
             const existing = await versionByKey(bot.id, idempotencyKey);
-            if (existing) return replay(bot, existing, bundleKey, sourceKey);
+            if (!existing) return null;
+            if (existing.bundleKey !== keys.bundleKey || existing.sourceKey !== keys.sourceKey) {
+              fail(409, {
+                error: "idempotency_conflict",
+                message: "This Idempotency-Key was already used for a different upload.",
+              });
+            }
+            if (existing.enqueuedAt || existing.status !== "validating") {
+              return json({
+                version: versionInfo(bot, existing),
+                quota: await quota(user.id),
+              } satisfies DeployResponse);
+            }
+            if (now().getTime() - existing.createdAt.getTime() < STALE_DEPLOY_MS) break;
+            // The request that made it died before queueing it: end it and start over.
+            if (await abandon(existing.id, "This deploy was interrupted and retried.")) return null;
           }
-          return quotaExceeded(await quota(user.id));
+          return inProgress();
         }
 
-        const job: CheckJob = {
-          v: CHECK_JOB_VERSION,
-          versionId: id,
-          botId: bot.id,
-          ownerId: user.id,
-          n,
-          bundleKey,
-          sourceKey,
-          enqueuedAt: Date.now(),
-        };
-        try {
-          await env.CHECKS_QUEUE.send(job, { contentType: "json" });
-        } catch (error) {
-          // Without a job the version would sit in `validating` forever: undo it so a plain
-          // retry works (and doesn't count against the quota).
-          console.error("CHECKS_QUEUE.send failed", error);
-          await db.delete(versions).where(eq(versions.id, id));
-          fail(503, {
-            error: "queue_unavailable",
-            message: "Couldn't queue the checks, so nothing was deployed. Try again in a minute.",
-          });
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const settled = await settle();
+          if (settled) return settled;
+          const version = await insertVersion(bot, user.id, keys, body.meta, idempotencyKey);
+          if (version) return finishDeploy(bot, version, upload, idempotencyKey);
+          // Nothing inserted: the quota is used up, or a concurrent retry took the key.
+          if (!idempotencyKey || !(await versionByKey(bot.id, idempotencyKey))) {
+            quotaExceeded(await quota(user.id));
+          }
         }
-
-        const [[version], after] = await Promise.all([
-          db.select().from(versions).where(eq(versions.id, id)).limit(1),
-          quota(user.id),
-        ]);
-        if (!version) throw new Error(`version ${id} vanished after insert`);
-        return json(
-          { version: versionInfo(bot, version), quota: after } satisfies DeployResponse,
-          201,
-          { location: `/api/bots/${bot.slug}/versions/${n}` },
-        );
+        return inProgress();
       }),
 
     getVersion: (request: Request, botParam: string, nParam: string) =>

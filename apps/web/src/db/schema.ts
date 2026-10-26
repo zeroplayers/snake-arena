@@ -190,6 +190,12 @@ export const versions = sqliteTable(
     meta: text("meta", { mode: "json" }).$type<DeployMeta>(),
     /** `Idempotency-Key` of the deploy request, so a retried upload doesn't make a second version. */
     idempotencyKey: text("idempotency_key"),
+    /**
+     * When the deploy API put the `CheckJob` on `CHECKS_QUEUE`. `null` on a `validating` row means
+     * the deploy is still in flight; on a `rejected` row, that it failed before being queued (it
+     * doesn't count against the daily quota).
+     */
+    enqueuedAt: integer("enqueued_at", { mode: "timestamp_ms" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

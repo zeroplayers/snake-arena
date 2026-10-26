@@ -6,11 +6,13 @@
  */
 
 /**
- * `CHECKS_QUEUE` message, one per new version.
+ * `CHECKS_QUEUE` message, one per new version, sent once the bundle and sources are in R2.
  *
- * Delivery is at least once: the deploy API re-sends it when a retried deploy finds the version
- * never got enqueued, and Queues may redeliver. The consumer should load the `versions` row and do
- * nothing unless it is still `validating`.
+ * The deploy API sends it once per version (an idempotent retry never re-sends), but delivery is
+ * still at least once: Queues may redeliver, and a `send()` that threw may have delivered anyway,
+ * after which the API marks that version `rejected` ("couldn't be queued"). So the consumer must
+ * load the `versions` row first and skip the job if the row is missing or no longer `validating`,
+ * and write its result with `WHERE status = 'validating'`.
  */
 export interface CheckJob {
   /** Message shape version; bumped on incompatible changes. */

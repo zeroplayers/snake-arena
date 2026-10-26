@@ -25,7 +25,10 @@ export const DEPLOY_LIMITS = {
   maxPathLength: 200,
   /** The whole request body, JSON escaping included. */
   maxBodyBytes: 3 * MiB,
-  /** Deploys per author per UTC day, rejected ones included (`DEPLOYS_PER_DAY`). */
+  /**
+   * Deploys per author per UTC day (`DEPLOYS_PER_DAY`). Versions the checks reject count; deploys
+   * that failed with 503 before being queued don't.
+   */
   deploysPerDay: 20,
   /** Bots per author (`BOTS_PER_AUTHOR`). */
   botsPerAuthor: 3,
@@ -46,9 +49,12 @@ export interface CreateBotRequest {
  * one of the caller's bots.
  *
  * Optional `Idempotency-Key` header (8–128 of `[A-Za-z0-9_-]`, e.g. a UUID per `zerosnake deploy`
- * run): a retry with the same key and the same content returns the version the first attempt made
- * (200 instead of 201) and doesn't count against the quota. The same key with different content
- * is a 409 `idempotency_conflict`.
+ * run, reused for its retries):
+ * - once the first attempt's version is queued, a retry returns it (200 instead of 201) without
+ *   using quota or queueing it again;
+ * - while the first attempt is still running, 409 `deploy_in_progress`: wait a little and retry;
+ * - if the first attempt failed (503), the key is free again and a retry deploys anew;
+ * - the same key with different content is a 409 `idempotency_conflict`.
  */
 export interface DeployRequest {
   /** The bundle: a single ESM file, as text. */
@@ -153,8 +159,12 @@ export type ApiErrorCode =
   | "quota_exceeded"
   /** 409: `Idempotency-Key` reused for different content. */
   | "idempotency_conflict"
-  /** 503: the checks queue refused the job; nothing was stored as a version, retry. */
-  | "queue_unavailable";
+  /** 409: an earlier request with this `Idempotency-Key` is still running; retry shortly. */
+  | "deploy_in_progress"
+  /** 503: storing or queueing failed; nothing was deployed (that version is `rejected`). Retry. */
+  | "unavailable"
+  /** 500: anything unexpected. */
+  | "internal_error";
 
 export interface ApiErrorBody {
   error: ApiErrorCode;

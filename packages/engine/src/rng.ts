@@ -13,28 +13,32 @@ export interface Rng {
   fork(): Rng;
 }
 
-export function createRng(seed: number): Rng {
-  let a = 0x9e3779b9;
-  let b = 0x243f6a88;
-  let c = 0xb7e15162;
-  let d = seed >>> 0;
+/** The four 32-bit words of an sfc32 stream, as plain data so a world can be cloned or stored. */
+export type RngState = [number, number, number, number];
 
+/** Fresh, warmed-up state for a seed. */
+export function seedRngState(seed: number): RngState {
+  const state: RngState = [0x9e3779b9, 0x243f6a88, 0xb7e15162, seed >>> 0];
+  // Warm up so nearby seeds diverge immediately.
+  const rng = rngFromState(state);
+  for (let i = 0; i < 15; i++) rng.next();
+  return state;
+}
+
+/** An Rng that reads and advances `state` in place. */
+export function rngFromState(state: RngState): Rng {
   const next = (): number => {
-    a >>>= 0;
-    b >>>= 0;
-    c >>>= 0;
-    d >>>= 0;
+    const a = state[0] >>> 0;
+    const b = state[1] >>> 0;
+    const c = state[2] >>> 0;
+    const d = state[3] >>> 0;
     const t = (((a + b) | 0) + d) | 0;
-    d = (d + 1) | 0;
-    a = b ^ (b >>> 9);
-    b = (c + (c << 3)) | 0;
-    c = (c << 21) | (c >>> 11);
-    c = (c + t) | 0;
+    state[3] = (d + 1) | 0;
+    state[0] = b ^ (b >>> 9);
+    state[1] = (c + (c << 3)) | 0;
+    state[2] = (((c << 21) | (c >>> 11)) + t) | 0;
     return (t >>> 0) / 4294967296;
   };
-
-  // Warm up so nearby seeds diverge immediately.
-  for (let i = 0; i < 15; i++) next();
 
   return {
     next,
@@ -42,4 +46,8 @@ export function createRng(seed: number): Rng {
     int: (n) => Math.floor(next() * n),
     fork: () => createRng(Math.floor(next() * 4294967296)),
   };
+}
+
+export function createRng(seed: number): Rng {
+  return rngFromState(seedRngState(seed));
 }

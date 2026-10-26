@@ -8,4 +8,12 @@ export {
   resamplePolyline,
 } from "./interpolate.ts";
 export { resolveSkin, SKINS, type SkinDefinition, SNAKE_PALETTE } from "./skins/index.ts";
-export type { CameraMode, RenderFood, RenderFrame, RenderSnake, SnakeSkin, Vec2 } from "./types.ts";
+export type {
+  CameraMode,
+  Highlight,
+  RenderFood,
+  RenderFrame,
+  RenderSnake,
+  SnakeSkin,
+  Vec2,
+} from "./types.ts";

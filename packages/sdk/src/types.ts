@@ -16,7 +16,8 @@ export interface BotAction {
    * `1` is full right (clockwise, the angle decreases), `0` goes straight.
    * The heading changes by `-turn * self.turnRate` radians this tick (note the minus: angles
    * are counter-clockwise, but positive `turn` means right).
-   * Values outside [-1, 1] are clamped; `NaN` and non-numbers count as `0`.
+   * Values outside [-1, 1] are clamped; `NaN` and non-numbers count as `0`. The engine rounds
+   * the result to the nearest multiple of 1/128 (so replays can store it in a byte).
    * Prefer {@link turnToward} / {@link steerToward} over computing this by hand.
    */
   turn: number;
@@ -73,7 +74,7 @@ export interface SelfState {
   speed: number;
   /** Body radius. Collisions use it: you die when your head circle touches another body circle. */
   radius: number;
-  /** Max heading change per tick in radians, reached at `turn = ±1`. Shrinks as you grow. */
+  /** Max heading change per tick in radians, reached at `turn = ±1`. Don't hard-code it. */
   turnRate: number;
   /** Whether you boosted this tick. */
   boosting: boolean;
@@ -130,7 +131,8 @@ export interface BotState {
   food: Food[];
   /**
    * Distance from your head to the arena edge (`worldRadius - |head|`). You die when it drops
-   * to `self.radius` or below. Use {@link angleTo}`(self.head, {x: 0, y: 0})` to head inwards.
+   * below 0, i.e. when your head point crosses the edge. Use
+   * {@link angleTo}`(self.head, {x: 0, y: 0})` to head inwards.
    */
   wallDistance: number;
 }

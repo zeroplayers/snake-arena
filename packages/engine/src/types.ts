@@ -19,7 +19,10 @@ export type SnakeId = string;
 
 /** What a bot returns each tick. Mirrors `BotAction` in `@zerosnake/sdk`. */
 export interface Action {
-  /** Steering in [-1, 1]: -1 is full left (counter-clockwise), 1 is full right. Clamped; NaN is 0. */
+  /**
+   * Steering in [-1, 1]: -1 is full left (counter-clockwise), 1 is full right. Clamped; NaN is 0;
+   * rounded to a multiple of 1 / `TURN_STEPS` (see `quantizeTurn`).
+   */
   turn: number;
   /** Spend mass to move faster. Ignored below `config.boostMinMass`. */
   boost?: boolean;

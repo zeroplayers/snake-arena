@@ -1,5 +1,5 @@
-import { ArenaRenderer } from "../src";
-import { FakeWorld } from "./fakeWorld";
+import { ArenaRenderer } from "../src/index.ts";
+import { FakeWorld } from "./fakeWorld.ts";
 
 const TPS = 10;
 

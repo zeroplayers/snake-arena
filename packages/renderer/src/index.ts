@@ -1,4 +1,4 @@
-export { ArenaRenderer, type RendererOptions } from "./ArenaRenderer";
+export { ArenaRenderer, type RendererOptions } from "./ArenaRenderer.ts";
 export {
   defaultSnakeRadius,
   FrameBuffer,
@@ -6,6 +6,6 @@ export {
   interpolateSnake,
   lerpAngle,
   resamplePolyline,
-} from "./interpolate";
-export { resolveSkin, SKINS, type SkinDefinition, SNAKE_PALETTE } from "./skins";
-export type { CameraMode, RenderFood, RenderFrame, RenderSnake, SnakeSkin, Vec2 } from "./types";
+} from "./interpolate.ts";
+export { resolveSkin, SKINS, type SkinDefinition, SNAKE_PALETTE } from "./skins/index.ts";
+export type { CameraMode, RenderFood, RenderFrame, RenderSnake, SnakeSkin, Vec2 } from "./types.ts";

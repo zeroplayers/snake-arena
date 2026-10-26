@@ -1,10 +1,10 @@
 import { OrthographicCamera, Scene, WebGLRenderer } from "three";
-import { FrameBuffer, lerp } from "./interpolate";
-import { BackgroundRenderer, DEFAULT_BACKGROUND } from "./renderers/BackgroundRenderer";
-import { FoodRenderer } from "./renderers/FoodRenderer";
-import { SnakeRenderer } from "./renderers/SnakeRenderer";
-import { SkinTextures } from "./skins";
-import type { CameraMode, RenderFrame } from "./types";
+import { FrameBuffer, lerp } from "./interpolate.ts";
+import { BackgroundRenderer, DEFAULT_BACKGROUND } from "./renderers/BackgroundRenderer.ts";
+import { FoodRenderer } from "./renderers/FoodRenderer.ts";
+import { SnakeRenderer } from "./renderers/SnakeRenderer.ts";
+import { SkinTextures } from "./skins/index.ts";
+import type { CameraMode, RenderFrame } from "./types.ts";
 
 export interface RendererOptions {
   /** Simulation ticks per second of frames fed through `push`. Default 10. */

@@ -1,5 +1,5 @@
 import { CanvasTexture, SRGBColorSpace, type Texture } from "three";
-import { DEFAULT_BODY_SVG, DEFAULT_HEAD_SVG, DEFAULT_TAIL_SVG } from "./svg";
+import { DEFAULT_BODY_SVG, DEFAULT_HEAD_SVG, DEFAULT_TAIL_SVG } from "./svg.ts";
 
 /**
  * Textures cover this many times the SVG's own viewBox, centred on it. The skins' blur glow

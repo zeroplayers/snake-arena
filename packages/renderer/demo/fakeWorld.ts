@@ -1,4 +1,4 @@
-import type { RenderFood, RenderFrame, RenderSnake, Vec2 } from "../src";
+import type { RenderFood, RenderFrame, RenderSnake, Vec2 } from "../src/index.ts";
 
 /**
  * Stand-in for the engine so the renderer can be developed on its own: snakes wander,

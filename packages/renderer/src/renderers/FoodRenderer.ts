@@ -9,11 +9,11 @@ import {
   PlaneGeometry,
   type Scene,
 } from "three";
-import { lerp } from "../interpolate";
-import { type SkinTextures, SVG_PADDING } from "../skins";
-import { GLOW_SVG } from "../skins/svg";
-import type { RenderFood } from "../types";
-import { hashString } from "../util";
+import { lerp } from "../interpolate.ts";
+import { type SkinTextures, SVG_PADDING } from "../skins/index.ts";
+import { GLOW_SVG } from "../skins/svg.ts";
+import type { RenderFood } from "../types.ts";
+import { hashString } from "../util.ts";
 
 const FOOD_COLORS = ["#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#00FFFF", "#FFA500"];
 

@@ -7,10 +7,15 @@ import {
   PlaneGeometry,
   type Scene,
 } from "three";
-import { type InterpolatedSnake, interpolateSnake, resamplePolyline } from "../interpolate";
-import { resolveSkin, type SkinDefinition, type SkinTextures, SNAKE_PALETTE } from "../skins";
-import type { RenderSnake } from "../types";
-import { hashString } from "../util";
+import { type InterpolatedSnake, interpolateSnake, resamplePolyline } from "../interpolate.ts";
+import {
+  resolveSkin,
+  type SkinDefinition,
+  type SkinTextures,
+  SNAKE_PALETTE,
+} from "../skins/index.ts";
+import type { RenderSnake } from "../types.ts";
+import { hashString } from "../util.ts";
 
 export interface SnakeView {
   readonly x: number;

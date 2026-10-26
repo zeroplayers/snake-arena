@@ -16,7 +16,8 @@ export interface BotAction {
    * `1` is full right (clockwise, the angle decreases), `0` goes straight.
    * The heading changes by `-turn * self.turnRate` radians this tick (note the minus: angles
    * are counter-clockwise, but positive `turn` means right).
-   * Values outside [-1, 1] are clamped; `NaN` and non-numbers count as `0`.
+   * Values outside [-1, 1] are clamped; `NaN` and non-numbers count as `0`. The engine rounds
+   * the result to the nearest multiple of 1/128 (so replays can store it in a byte).
    * Prefer {@link turnToward} / {@link steerToward} over computing this by hand.
    */
   turn: number;

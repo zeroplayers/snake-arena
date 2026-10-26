@@ -1,4 +1,4 @@
-import { TICK_RATE } from "./config.ts";
+import { type EngineConfig, TICK_RATE } from "./config.ts";
 import { hashWorld } from "./hash.ts";
 import {
   BitModel,
@@ -31,9 +31,11 @@ import { cloneWorld, layoutSegments, type SpawnOptions, spawnSnake } from "./wor
  * minutes, each one self-contained and binary-encoded with an adaptive range coder.
  *
  * A **frame** is the world between two steps, after that tick's spawns: what the bots see and
- * what the next `step` gets. A chunk holds the frame it starts from and, for each tick after it,
- * the inputs that lead to the next frame: every living snake's action, sandbox faults, then the
- * snakes spawned after the step. The seed is part of the snapshot (as the PRNG state).
+ * what the next `step` gets. A chunk holds the world it was opened on (a snapshot: the previous
+ * chunk's last frame, or the room's starting world), the snakes spawned before its first step,
+ * and for each tick the inputs that lead to the next frame: every living snake's action, sandbox
+ * faults, then the snakes spawned after the step. The seed is part of the snapshot (as the PRNG
+ * state). Every change to the world between steps must go through the recorder.
  *
  * Playback re-runs the engine, so it is exact only on the same engine version; the recorder
  * stores a world hash every `hashEvery` ticks and the player checks it, so drift is caught
@@ -54,6 +56,15 @@ export const CHUNK_TICKS = 120 * TICK_RATE;
 /** Ticks between recorded world hashes. */
 export const HASH_EVERY = 100;
 const MAGIC = [0x5a, 0x53, 0x52, 0x01]; // "ZSR", version 1
+/**
+ * Decoding limits. The range decoder already refuses to decode more values than its input could
+ * hold (see `RangeDecoder`); these cover what a single small number can blow up into (body
+ * layout, the spatial grids `step` allocates from the config). Far above anything a real room
+ * produces.
+ */
+const MAX_SEGMENTS = 100_000;
+const MAX_GRID_CELLS_PER_SIDE = 1024;
+const MAX_LOOP_CONFIG = 100_000;
 
 /** The inputs from one frame to the next. Plain data. */
 export interface ReplayTick {
@@ -71,9 +82,11 @@ export interface ReplayTick {
 
 /** One self-contained piece of a replay. Plain data, so a recorder can persist its open chunk. */
 export interface ReplayChunk {
-  /** The frame the chunk starts from; `snapshot.tick` is its first tick. */
+  /** The world the chunk was opened on; `snapshot.tick` is its first tick. */
   snapshot: World;
   snapshotHash: number;
+  /** Snakes spawned on the snapshot before the first step; with them it is the first frame. */
+  spawns: SpawnOptions[];
   /** Inputs for ticks `snapshot.tick` → `snapshot.tick + ticks.length`. */
   ticks: ReplayTick[];
 }
@@ -202,6 +215,7 @@ export function encodeReplayChunk(chunk: ReplayChunk): Uint8Array {
   m.count.write(e, chunk.ticks.length);
   w.u32(chunk.snapshotHash);
   writeWorld(w, chunk.snapshot);
+  writeSpawns(w, chunk.spawns);
 
   let prevTurns: number[] = [];
   let prevSame: number[] = [];
@@ -231,11 +245,7 @@ export function encodeReplayChunk(chunk: ReplayChunk): Uint8Array {
       w.uint(f.index);
       m.flag.write(e, f.fault === "error", FLAG_FAULT);
     }
-    m.spawns.write(e, t.spawns.length);
-    for (const s of t.spawns) {
-      w.str(s.id);
-      w.str(s.author);
-    }
+    writeSpawns(w, t.spawns);
     m.flag.write(e, t.hash !== null, FLAG_HAS_HASH);
     if (t.hash !== null) w.u32(t.hash);
   }
@@ -255,6 +265,7 @@ export function decodeReplayChunk(bytes: Uint8Array): ReplayChunk {
   const snapshotHash = r.u32();
   const snapshot = readWorld(r, startTick);
   if (hashWorld(snapshot) !== snapshotHash) throw new Error("replay chunk: snapshot hash mismatch");
+  const firstSpawns = readSpawns(r);
 
   const ticks: ReplayTick[] = [];
   let prevTurns: number[] = [];
@@ -280,15 +291,11 @@ export function decodeReplayChunk(bytes: Uint8Array): ReplayChunk {
       const index = r.uint();
       faults.push({ index, fault: m.flag.read(d, FLAG_FAULT) ? "error" : "timeout" });
     }
-    const spawns: SpawnOptions[] = [];
-    for (let k = m.spawns.read(d); k > 0; k--) {
-      const id = r.string();
-      spawns.push({ id, author: r.string() });
-    }
+    const spawns = readSpawns(r);
     const hash = m.flag.read(d, FLAG_HAS_HASH) ? r.u32() : null;
     ticks.push({ turns, boosts, faults, spawns, hash });
   }
-  return { snapshot, snapshotHash, ticks };
+  return { snapshot, snapshotHash, spawns: firstSpawns, ticks };
 }
 
 /** First and last tick of an encoded chunk, without decoding the rest. */
@@ -296,6 +303,23 @@ export function replayChunkInfo(bytes: Uint8Array): ReplayChunkInfo {
   const r = new Reader(bytes);
   const startTick = r.m.tick.read(r.d);
   return { startTick, endTick: startTick + r.m.count.read(r.d) };
+}
+
+function writeSpawns(w: Writer, spawns: readonly SpawnOptions[]): void {
+  w.m.spawns.write(w.e, spawns.length);
+  for (const s of spawns) {
+    w.str(s.id);
+    w.str(s.author);
+  }
+}
+
+function readSpawns(r: Reader): SpawnOptions[] {
+  const spawns: SpawnOptions[] = [];
+  for (let k = r.m.spawns.read(r.d); k > 0; k--) {
+    const id = r.string();
+    spawns.push({ id, author: r.string() });
+  }
+  return spawns;
 }
 
 function writeWorld(w: Writer, world: World): void {
@@ -374,6 +398,7 @@ function readWorld(r: Reader, tick: number): World {
     const key = r.string();
     config[key] = r.f64();
   }
+  checkConfig(config);
   const rng: World["rng"] = [r.f64(), r.f64(), r.f64(), r.f64()];
   const nextFoodId = r.uint();
 
@@ -405,6 +430,7 @@ function readWorld(r: Reader, tick: number): World {
     const mass = r.f64();
     const size = r.f64();
     const segmentCount = r.uint();
+    if (segmentCount > MAX_SEGMENTS) throw new Error("replay chunk: implausible segment count");
     const trail: Vec2[] = [];
     let px = 0;
     let py = 0;
@@ -460,6 +486,19 @@ function readWorld(r: Reader, tick: number): World {
   };
 }
 
+/** Rejects configs that would make `step` allocate or loop absurdly. */
+function checkConfig(config: Record<string, number>): void {
+  const bad = (what: string) => new Error(`replay chunk: implausible config (${what})`);
+  for (const [key, v] of Object.entries(config)) if (!Number.isFinite(v)) throw bad(key);
+  const c = config as unknown as EngineConfig;
+  if (!(c.arenaRadius > 0 && c.gridCellSize > 0)) throw bad("arena or grid size");
+  if (c.arenaRadius / c.gridCellSize > MAX_GRID_CELLS_PER_SIDE / 2) throw bad("grid too fine");
+  if (!(c.minSize > 0 && c.maxSize >= c.minSize)) throw bad("snake size");
+  for (const key of ["baseSegments", "spawnAttempts", "maxFood", "foodBase"] as const) {
+    if (c[key] > MAX_LOOP_CONFIG) throw bad(key);
+  }
+}
+
 // --- Recording ---------------------------------------------------------------------------------
 
 export interface ReplayRecorderOptions {
@@ -502,11 +541,12 @@ export class ReplayRecorder {
     return this.chunk;
   }
 
-  /** `spawnSnake`, recorded. */
+  /** `spawnSnake`, recorded. Opens a chunk if none is open (the snapshot is taken first). */
   spawn(options: SpawnOptions): Snake {
+    const chunk = this.chunk ?? this.open();
     const snake = spawnSnake(this.world, options);
-    // Without an open chunk the next snapshot will include it.
-    this.chunk?.ticks[this.chunk.ticks.length - 1]?.spawns.push({ ...options });
+    const last = chunk.ticks[chunk.ticks.length - 1];
+    (last ? last.spawns : chunk.spawns).push({ ...options });
     return snake;
   }
 
@@ -517,9 +557,7 @@ export class ReplayRecorder {
       this.sealLastTick(false);
       if (this.chunk.ticks.length >= this.chunkTicks) this.flush();
     }
-    if (!this.chunk) {
-      this.chunk = { snapshot: cloneWorld(world), snapshotHash: hashWorld(world), ticks: [] };
-    }
+    const chunk = this.chunk ?? this.open();
     const n = world.snakes.length;
     const tick: ReplayTick = {
       turns: new Array(n),
@@ -536,7 +574,7 @@ export class ReplayRecorder {
       const fault = faults[id];
       if (fault) tick.faults.push({ index: j, fault });
     }
-    this.chunk.ticks.push(tick);
+    chunk.ticks.push(tick);
     return step(world, actions, faults);
   }
 
@@ -553,6 +591,17 @@ export class ReplayRecorder {
     const bytes = encodeReplayChunk(chunk);
     this.onChunk(bytes, chunk);
     return bytes;
+  }
+
+  private open(): ReplayChunk {
+    const world = this.world;
+    this.chunk = {
+      snapshot: cloneWorld(world),
+      snapshotHash: hashWorld(world),
+      spawns: [],
+      ticks: [],
+    };
+    return this.chunk;
   }
 
   /** The last tick's frame is complete (spawns done): hash it if due. */
@@ -662,7 +711,8 @@ export class ReplayPlayer {
     if (this.verify && t.hash !== null && hashWorld(world) !== t.hash) {
       throw new ReplayDesyncError(world.tick, "world hash differs");
     }
-    // At a chunk boundary, carry on from the next chunk's snapshot (the same frame).
+    // At a chunk boundary the next chunk's snapshot is this world; carry on from it (plus any
+    // snakes spawned before its first step).
     const info = this.infos[this.chunkIndex] as ReplayChunkInfo;
     if (world.tick === info.endTick && this.chunkIndex + 1 < this.chunks.length) {
       this.load(this.chunkIndex + 1);
@@ -678,7 +728,9 @@ export class ReplayPlayer {
       this.chunk = decodeReplayChunk(this.chunks[k] as Uint8Array);
       this.chunkIndex = k;
     }
-    this.current = cloneWorld((this.chunk as ReplayChunk).snapshot);
+    const chunk = this.chunk as ReplayChunk;
+    this.current = cloneWorld(chunk.snapshot);
+    for (const s of chunk.spawns) spawnSnake(this.current, s);
   }
 }
 

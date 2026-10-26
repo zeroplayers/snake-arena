@@ -107,6 +107,11 @@ export class RangeDecoder {
     return bit;
   }
 
+  /**
+   * Reading past the end is an error. That also bounds the work: a probability never gets above
+   * 1 − 31/2048, so a decoded bit consumes at least 0.022 bits of input, and n bytes yield at most
+   * ~364·n bits. Hostile input that claims huge counts fails here instead of decoding forever.
+   */
   private byte(): number {
     if (this.pos > this.bytes.length + 4) throw new Error("range decoder: truncated input");
     return this.bytes[this.pos++] ?? 0;

@@ -23,6 +23,7 @@ import {
 import { createRng } from "./rng.ts";
 import { quantizeTurn, TURN_STEPS } from "./step.ts";
 import { actionsFor, farm, type Policy, wander } from "./testing/policies.ts";
+import { place } from "./testing/setup.ts";
 import type { Fault, World } from "./types.ts";
 import { cloneWorld, createWorld } from "./world.ts";
 
@@ -245,7 +246,117 @@ describe("replay", () => {
 
   it("snapshots exactly, including a world mid-run", () => {
     const world = cloneWorld(long.final);
-    const bytes = encodeReplayChunk({ snapshot: world, snapshotHash: hashWorld(world), ticks: [] });
+    const bytes = encodeReplayChunk({
+      snapshot: world,
+      snapshotHash: hashWorld(world),
+      spawns: [],
+      ticks: [],
+    });
     expect(decodeReplayChunk(bytes).snapshot).toEqual(world);
+  });
+
+  it("records snakes spawned between a flush and the next step", () => {
+    const world = createWorld({ seed: 1 });
+    const chunks: Uint8Array[] = [];
+    const recorder = new ReplayRecorder(world, { onChunk: (b) => chunks.push(b) });
+    const hashes: number[] = [];
+    const steps = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        recorder.step({ a: { turn: 0.25 }, b: { turn: -0.5, boost: true } });
+        hashes[world.tick] = hashWorld(world);
+      }
+    };
+    recorder.spawn({ id: "a", author: "alice" });
+    hashes[0] = hashWorld(world);
+    steps(5);
+    recorder.flush();
+    recorder.spawn({ id: "b", author: "bob" });
+    hashes[5] = hashWorld(world);
+    steps(5);
+    recorder.flush();
+    recorder.flush(); // nothing new: no empty chunk
+    expect(chunks.map(replayChunkInfo)).toEqual([
+      { startTick: 0, endTick: 5 },
+      { startTick: 5, endTick: 10 },
+    ]);
+
+    const player = new ReplayPlayer(chunks);
+    expect(hashWorld(player.world)).toBe(hashes[0]);
+    while (player.tick < player.endTick) expect(hashWorld(player.next())).toBe(hashes[player.tick]);
+    for (const t of [5, 3, 10, 0, 5]) expect(hashWorld(player.seek(t))).toBe(hashes[t]);
+  });
+
+  it("stays in sync with flushes and spawns at random points", () => {
+    for (let seed = 1; seed <= 4; seed++) {
+      const rng = createRng(seed);
+      const world = createWorld({ seed });
+      const chunks: Uint8Array[] = [];
+      const recorder = new ReplayRecorder(world, {
+        onChunk: (b) => chunks.push(b),
+        chunkTicks: 1 + rng.int(40),
+        hashEvery: 1 + rng.int(10),
+      });
+      const hashes: number[] = [];
+      let lives = 0;
+      for (let t = 0; t < 150; t++) {
+        if (rng.next() < 0.05) recorder.flush();
+        while (world.snakes.length < 4 || rng.next() < 0.02) {
+          recorder.spawn({ id: `s${lives++}`, author: "x" });
+        }
+        hashes[world.tick] = hashWorld(world);
+        const actions = Object.fromEntries(
+          world.snakes.map((s) => [s.id, { turn: rng.range(-1.2, 1.2), boost: rng.next() < 0.1 }]),
+        );
+        recorder.step(actions);
+      }
+      recorder.flush();
+      hashes[world.tick] = hashWorld(world);
+
+      const player = new ReplayPlayer(chunks);
+      while (player.tick < player.endTick) {
+        expect(hashWorld(player.next())).toBe(hashes[player.tick]);
+      }
+      for (let k = 0; k < 20; k++) {
+        const t = rng.int(151);
+        expect(hashWorld(player.seek(t))).toBe(hashes[t]);
+      }
+    }
+  });
+});
+
+describe("hostile input", () => {
+  const world = createWorld({ seed: 1 });
+  const chunk = (snapshot: World): Uint8Array =>
+    encodeReplayChunk({ snapshot, snapshotHash: 0, spawns: [], ticks: [] });
+
+  it("refuses to decode more values than the input can hold", () => {
+    const d = new RangeDecoder(new Uint8Array(100));
+    const bit = new BitModel();
+    expect(() => {
+      for (let i = 0; i < 1_000_000; i++) bit.read(d);
+    }).toThrow(/truncated/);
+  });
+
+  it("rejects an absurd segment count before laying it out", () => {
+    const w = cloneWorld(world);
+    const s = place(w, { id: "a", x: 0, y: 0, angle: 0 });
+    s.segments = { length: 20_000_000 } as unknown as typeof s.segments;
+    const t0 = Date.now();
+    expect(() => decodeReplayChunk(chunk(w))).toThrow(/segment count/);
+    expect(Date.now() - t0).toBeLessThan(100);
+  });
+
+  it("rejects configs that would allocate or loop absurdly", () => {
+    for (const config of [
+      { gridCellSize: 1e-6 },
+      { arenaRadius: Number.POSITIVE_INFINITY },
+      { minSize: 0 },
+      { baseSegments: 1e9 },
+      { spawnAttempts: 1e12 },
+    ]) {
+      const w = cloneWorld(world);
+      Object.assign(w.config, config);
+      expect(() => decodeReplayChunk(chunk(w))).toThrow(/implausible config/);
+    }
   });
 });

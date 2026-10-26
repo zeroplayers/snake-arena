@@ -53,4 +53,18 @@ export interface RenderFrame {
 
 export type CameraMode =
   | { readonly mode: "overview" }
-  | { readonly mode: "follow"; readonly snakeId: string };
+  | {
+      readonly mode: "follow";
+      readonly snakeId: string;
+      /** Keep at least this many world units around the snake in view (e.g. its vision). */
+      readonly minViewRadius?: number;
+    };
+
+/** A disc drawn around one snake's head, e.g. its vision radius. */
+export interface Highlight {
+  readonly snakeId: string;
+  /** World units. */
+  readonly radius: number;
+  /** `#rrggbb`. Default white. */
+  readonly color?: string;
+}

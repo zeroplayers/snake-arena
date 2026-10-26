@@ -34,10 +34,14 @@ renderer.start();
 // Replays / scrubbing: drive it yourself.
 renderer.draw(prevFrame, nextFrame, alpha);
 
-renderer.setCamera({ mode: "follow", snakeId });
+renderer.setCamera({ mode: "follow", snakeId, minViewRadius: 30 }); // keep 30 units in view
+renderer.setHighlight({ snakeId, radius: 30, color: "#ff0000" }); // e.g. its vision radius
 renderer.setZoom(1.5);
+renderer.screenToWorld(event.clientX, event.clientY); // for picking
 renderer.destroy();
 ```
+
+The match viewer (timeline, snake list, logs) is built on top of this in `@zerosnake/viewer`.
 
 Snake bodies are blended point by point between ticks and resampled at a fixed spacing, so
 the look doesn't depend on how densely the engine samples segments. Sizes are tuned for the

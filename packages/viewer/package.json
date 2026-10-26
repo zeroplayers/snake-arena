@@ -1,0 +1,21 @@
+{
+  "name": "@zerosnake/viewer",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Match viewer: live engine matches now, replays later",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "dev": "vite demo",
+    "build:demo": "vite build demo --outDir ../dist/demo --emptyOutDir",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@zerosnake/engine": "workspace:*",
+    "@zerosnake/renderer": "workspace:*",
+    "@zerosnake/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "^8.3.5"
+  }
+}

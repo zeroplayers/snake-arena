@@ -1,0 +1,291 @@
+/*
+ * Dark theme carried over from the original ZeroSnake frontend (src/index.css, App.css).
+ * The Silom font files aren't redistributed here; it's used when installed (macOS ships it).
+ */
+
+:root {
+  color-scheme: dark;
+
+  --blue: #00b2ff;
+  --green: #04ff00;
+  --green-primary: #00ff1a;
+  --green-secondary: #63ffa4;
+  --light-blue: #00fff2;
+  --violet: #7b00ff;
+  --pink: #ff0080;
+  --red: #ff0004;
+  --gray: #aaaaaa;
+  --gray-secondary: #9d9d9d;
+  --white: #fff;
+
+  --bg: #000;
+  --surface: #080808;
+  --border: var(--violet);
+  --text: var(--white);
+  --text-muted: var(--gray);
+  --accent: var(--green-primary);
+  --link: #00ffdd;
+
+  --font: Silom, ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --radius: 10px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+code {
+  font-family: var(--font-mono);
+}
+
+/* Layout */
+
+.shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+/* The two blurred glow blobs from ZeroSnake's `.wrapper`. */
+.shell::before,
+.shell::after {
+  content: "";
+  position: fixed;
+  width: 416px;
+  height: 615px;
+  border-radius: 615px;
+  filter: blur(129px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.shell::before {
+  bottom: 0;
+  left: 0;
+  background: rgba(112, 255, 3, 0.13);
+  transform: translate(-200px, 200px);
+}
+
+.shell::after {
+  top: 0;
+  right: 0;
+  background: #03d9ff2e;
+  transform: translate(200px, -200px);
+}
+
+.shell > * {
+  position: relative;
+  z-index: 1;
+}
+
+.site-header,
+.site-footer,
+.site-main {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding-inline: 16px;
+}
+
+.site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-block: 20px;
+}
+
+.logo {
+  font-family: SilomBol, var(--font);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--white);
+}
+
+.logo:hover {
+  text-decoration: none;
+}
+
+.logo-tag {
+  color: var(--text-muted);
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+}
+
+.site-nav {
+  display: flex;
+  gap: 20px;
+}
+
+.site-nav a {
+  color: var(--text-muted);
+}
+
+.site-nav a[data-status="active"] {
+  color: var(--accent);
+}
+
+.site-main {
+  flex: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding-block: 20px 40px;
+}
+
+.site-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding-block: 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* Content */
+
+.accent {
+  color: var(--accent);
+}
+
+.red {
+  color: #c90d10;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.title {
+  margin: 0 0 16px;
+  font-size: clamp(28px, 5vw, 38px);
+  line-height: 1.15;
+}
+
+.subtitle {
+  margin: 0 0 12px;
+  font-size: 20px;
+}
+
+.hero {
+  padding-block: 40px 8px;
+}
+
+.lead {
+  max-width: 640px;
+  margin: 0 0 24px;
+  color: var(--gray-secondary);
+  font-size: 17px;
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 20px;
+  border-radius: 47px;
+  background: #00ff1acc;
+  color: #000;
+  font-weight: 700;
+}
+
+.button:hover {
+  background: var(--green-primary);
+  text-decoration: none;
+}
+
+.panel {
+  padding: 20px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(10px);
+}
+
+.arena-placeholder {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 7;
+  background:
+    radial-gradient(circle at 30% 40%, rgba(4, 255, 0, 0.08), transparent 40%),
+    radial-gradient(circle at 70% 60%, rgba(0, 255, 242, 0.08), transparent 40%);
+}
+
+.steps {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.steps li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.steps code {
+  color: var(--green-secondary);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.table th,
+.table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid #222;
+  text-align: left;
+}
+
+.table th {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.table .num {
+  text-align: right;
+}
+
+.table .empty {
+  padding-block: 32px;
+  color: var(--text-muted);
+  text-align: center;
+}

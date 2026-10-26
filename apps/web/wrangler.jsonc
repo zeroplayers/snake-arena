@@ -1,0 +1,75 @@
+/**
+ * Site worker. Top level is local dev (`pnpm dev`, everything simulated by Miniflare);
+ * `env.staging` is what CI deploys to arena.surninsynergy.dev.
+ *
+ * Bindings are not inherited by environments, so every binding is declared twice.
+ * Values marked PLACEHOLDER must be replaced with real IDs before the first staging deploy
+ * (the deploy workflow refuses to run while any remain).
+ */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "zerosnake-web",
+  "main": "@tanstack/react-start/server-entry",
+  "compatibility_date": "2026-10-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  "vars": { "ENVIRONMENT": "development" },
+  "d1_databases": [
+    // Same database as apps/arena. Local ID is arbitrary but must match apps/arena.
+    { "binding": "DB", "database_name": "zerosnake-dev", "database_id": "zerosnake-dev" }
+  ],
+  "r2_buckets": [
+    { "binding": "BUNDLES", "bucket_name": "zerosnake-dev-bundles" },
+    { "binding": "SOURCES", "bucket_name": "zerosnake-dev-sources" },
+    { "binding": "REPLAYS", "bucket_name": "zerosnake-dev-replays" },
+    { "binding": "TRACES", "bucket_name": "zerosnake-dev-traces" }
+  ],
+  "queues": {
+    // Deploy API enqueues version checks; apps/arena consumes them.
+    "producers": [{ "binding": "CHECKS_QUEUE", "queue": "zerosnake-dev-checks" }]
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "MATCHMAKER", "class_name": "MatchmakerDO", "script_name": "zerosnake-arena" },
+      { "name": "ROOMS", "class_name": "RoomDO", "script_name": "zerosnake-arena" }
+    ]
+  },
+  "services": [{ "binding": "ARENA", "service": "zerosnake-arena" }],
+
+  "env": {
+    "staging": {
+      // Deployed as `zerosnake-web-staging`.
+      "routes": [{ "pattern": "arena.surninsynergy.dev", "custom_domain": true }],
+      "vars": { "ENVIRONMENT": "staging" },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "zerosnake-staging",
+          // PLACEHOLDER: `wrangler d1 create zerosnake-staging` → database_id
+          "database_id": "00000000-0000-0000-0000-000000000000"
+        }
+      ],
+      "r2_buckets": [
+        { "binding": "BUNDLES", "bucket_name": "zerosnake-staging-bundles" },
+        { "binding": "SOURCES", "bucket_name": "zerosnake-staging-sources" },
+        { "binding": "REPLAYS", "bucket_name": "zerosnake-staging-replays" },
+        { "binding": "TRACES", "bucket_name": "zerosnake-staging-traces" }
+      ],
+      "queues": {
+        "producers": [{ "binding": "CHECKS_QUEUE", "queue": "zerosnake-staging-checks" }]
+      },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "MATCHMAKER",
+            "class_name": "MatchmakerDO",
+            "script_name": "zerosnake-arena-staging"
+          },
+          { "name": "ROOMS", "class_name": "RoomDO", "script_name": "zerosnake-arena-staging" }
+        ]
+      },
+      "services": [{ "binding": "ARENA", "service": "zerosnake-arena-staging" }]
+    }
+  }
+}

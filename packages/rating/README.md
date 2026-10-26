@@ -4,7 +4,14 @@ Version rating and leaderboard (SPEC §4 "Rating", issue #26). Pure TypeScript, 
 dependencies; the arena calls it when a life is recorded, the web app when it lists the leaderboard.
 
 ```ts
-import { addLife, fromRatingsRow, EMPTY_RATING_STATE, leaderboard, rate, toRatingsRow } from "@zerosnake/rating";
+import {
+  addLife,
+  fromRatingsRow,
+  EMPTY_RATING_STATE,
+  leaderboard,
+  rate,
+  toRatingsRow,
+} from "@zerosnake/rating";
 
 let state = row ? fromRatingsRow(row) : EMPTY_RATING_STATE; // D1 `ratings` row of the version
 state = addLife(state, life.score); // O(window), the oldest score drops out
@@ -16,11 +23,11 @@ leaderboard(rows); // rows with lives >= 30, best first, each with a `rank`
 
 All numbers live in `RatingConfig` (`createRatingConfig({ window, minLives, z })`):
 
-| setting    | default | meaning                                               |
-| ---------- | ------: | ----------------------------------------------------- |
-| `window`   |     200 | the rating is the mean over the last `window` lives   |
-| `minLives` |      30 | a version is ranked from this many lives (all-time)   |
-| `z`        |    1.96 | normal quantile of the interval (95%)                 |
+| setting    | default | meaning                                             |
+| ---------- | ------: | --------------------------------------------------- |
+| `window`   |     200 | the rating is the mean over the last `window` lives |
+| `minLives` |      30 | a version is ranked from this many lives (all-time) |
+| `z`        |    1.96 | normal quantile of the interval (95%)               |
 
 ## Rating
 
@@ -31,10 +38,14 @@ window in two passes on every update (compensated sum, corrected sum of squares)
 however many lives a version plays, and a small spread on large scores isn't lost.
 
 Life scores are heavy-tailed (most lives are short, a few run to the life cap), so the interval is
-optimistic for small windows: in the simulation below a 30-life interval holds the long-run mean
-about 75–80% of the time instead of 95%, a 200-life one about 90%. It is a display aid; ordering
-uses the mean. A bootstrap wouldn't fix this at n = 30 (percentile intervals under-cover skewed data
-the same way) and costs ~1000× more per update.
+optimistic: in the simulation below a nominal 95% interval holds the long-run mean 70–77% of the
+time at 30 lives and 83–89% at 200. It is a display aid; ordering uses the mean. A bootstrap
+wouldn't fix this (percentile intervals under-cover skewed samples the same way) and costs ~1000×
+more per update.
+
+The scores are also very noisy: a single life's standard deviation is ~3.5× its mean, so a 200-life
+rating has a coefficient of variation of ~25%. Two versions are reliably ordered only when their true
+means differ by well over half. See "Findings" below.
 
 ## Storage (D1 `ratings`)
 
@@ -94,3 +105,66 @@ ties share a rank ("1, 2, 2, 4"). Rows keep their other fields, so it takes the 
 clamped to `[1 / maxFactor, maxFactor]`, where `strength` is `roomStrength(others, unrated)`: the
 (time-weighted) mean rating of the other snakes in the room. It is off by default
 (`DEFAULT_NORMALIZATION.enabled = false`); see the measurements below.
+
+## Simulation: how much does the room matter?
+
+`pnpm --filter @zerosnake/rating sim` (`sim/room-skew.ts`) plays 12-snake rooms of house bots
+(`@zerosnake/engine` + `@zerosnake/house-bots`, dev dependencies only) in five fixed compositions,
+from weak (chaos or easy filler) to strong. Every room has at least one easy, medium and hard bot, so
+each kind is measured everywhere. Bots respawn on death, so a composition holds for the whole match;
+every life that starts after a 1000-tick warm-up and before the end is played out and recorded.
+A kind's rating is the mean of its per-room means (uniformly random room assignment), and the
+strength a life sees is the mean rating of the other 11 snakes. Env vars (`MATCHES`, `TICKS`,
+`SAVE`, `LOAD`, …) are documented at the top of the script.
+
+Run of 40 matches × 30 000 ticks per composition (406 368 lives, ~7 min on 9 threads):
+
+| room (E/M/H/C counts) | easy       | medium       | hard         |
+| --------------------- | ---------- | ------------ | ------------ |
+| chaos (1/1/1/9)       | 25 (s 343) | 854 (s 264)  | 802 (s 267)  |
+| easy (10/1/1)         | 52 (s 180) | 2222 (s 101) | 2540 (s 104) |
+| balanced (4/4/4)      | 20 (s 646) | 527 (s 567)  | 422 (s 569)  |
+| medium (1/10/1)       | 16 (s 889) | 432 (s 811)  | 368 (s 813)  |
+| hard (1/1/10)         | 13 (s 867) | 425 (s 788)  | 190 (s 791)  |
+
+Mean life score per kind and room, `s` = strength seen. Long-run ratings: easy 25, medium 892,
+hard 864 (chaos 224).
+
+Normalization, with `alpha` fitted on the _other_ two kinds (leave-one-out) and `maxFactor` 2:
+
+| kind   | raw max/min over rooms | normalized max/min | 200-life rating, stuck in worst vs best room: gap / sd (raw → normalized) |
+| ------ | ---------------------: | -----------------: | ------------------------------------------------------------------------: |
+| easy   |                    3.9 |                1.7 |                                                                 4.2 → 1.3 |
+| medium |                    5.2 |                2.6 |                                                                 7.9 → 3.8 |
+| hard   |                   13.4 |                5.4 |                                                                 8.8 → 6.8 |
+
+Pooled elasticity `alpha` ≈ 0.89 (per kind 0.76–1.08). With random rooms, 200-life windows rank the
+three kinds in their long-run order 56% of the time raw and 65% normalized; the misses are almost all
+medium vs hard, whose long-run ratings are 3% apart.
+
+### Findings
+
+1. **Composition skews raw scores a lot.** The same bot scores 4–13× more in a room of weak bots
+   than in a room of strong ones; a version that systematically lands in weak or strong rooms is
+   off by 4–9 standard deviations of its own rating.
+2. **Normalization helps but doesn't fix it.** It halves the spread for every kind, but a single
+   "room strength" number can't capture who preys on whom: hard (a hunter) gains 13× from a room of
+   easy prey, more than any power of the average rating explains, and loses most among other
+   hunters.
+3. **Recommendation: leave it off at launch.** With random room assignment and many authors, each
+   version sees the same mix of rooms over 200 lives, and the skew averages out; normalization then
+   only trims noise a little (sd/mean of a 200-life rating 25–31% → 23–27%) while adding circularity (ratings feed the room
+   strength that adjusts ratings) and making the score scale harder to explain. What _does_ create
+   systematic skew is non-random assignment, mainly house-bot fill that varies with how many real
+   bots are online. So: (a) fill rooms with a fixed mix of house bots, (b) record each life's room
+   strength (`roomStrength`, time-weighted) in `lives` from day one, and (c) rerun this analysis on
+   arena data; turn `normalizeScore` on, with a refitted `alpha`, if room strength varies between
+   versions by more than ~20%.
+4. **The window is noisy.** Life scores are heavy-tailed (sd ≈ 3.5× mean), so a 200-life mean has
+   ~25% relative error and the CI under-covers (above). Options if the leaderboard churns: a
+   longer window, or a robust statistic (trimmed mean or mean of `log(1 + score)`) — both config or
+   one-function changes here.
+5. **House bots don't rank as expected in 12-snake rooms.** Medium (892) and hard (864) tie in the
+   long run, and hard is _below_ medium in the balanced, medium and hard rooms; it wins only where
+   there is weak prey. The 6-snake lineup in `@zerosnake/house-bots` (easy < medium < hard) doesn't
+   carry over to full rooms; hard's hunting gets it killed when rooms are crowded with hunters.

@@ -20,10 +20,14 @@ export interface NormalizationConfig {
   maxFactor: number;
 }
 
+/**
+ * `reference` and `alpha` are what `sim/room-skew.ts` measured on house-bot rooms (mean rating of
+ * easy/medium/hard ≈ 600, pooled elasticity ≈ 0.9). Refit both on arena data before enabling.
+ */
 export const DEFAULT_NORMALIZATION: Readonly<NormalizationConfig> = Object.freeze({
   enabled: false,
-  reference: 500,
-  alpha: 0.5,
+  reference: 600,
+  alpha: 0.9,
   maxFactor: 2,
 });
 

@@ -73,7 +73,7 @@ export interface SelfState {
   speed: number;
   /** Body radius. Collisions use it: you die when your head circle touches another body circle. */
   radius: number;
-  /** Max heading change per tick in radians, reached at `turn = ±1`. Shrinks as you grow. */
+  /** Max heading change per tick in radians, reached at `turn = ±1`. Don't hard-code it. */
   turnRate: number;
   /** Whether you boosted this tick. */
   boosting: boolean;
@@ -130,7 +130,8 @@ export interface BotState {
   food: Food[];
   /**
    * Distance from your head to the arena edge (`worldRadius - |head|`). You die when it drops
-   * to `self.radius` or below. Use {@link angleTo}`(self.head, {x: 0, y: 0})` to head inwards.
+   * below 0, i.e. when your head point crosses the edge. Use
+   * {@link angleTo}`(self.head, {x: 0, y: 0})` to head inwards.
    */
   wallDistance: number;
 }

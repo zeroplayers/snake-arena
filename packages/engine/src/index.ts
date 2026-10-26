@@ -6,6 +6,9 @@
  *   step(world, { a: { turn: 0.3, boost: false } });
  *   world.deaths; // lives that ended this tick
  *
+ * `buildBotState(world, id)` is what that snake's bot sees this tick (`BotState` of
+ * `@zerosnake/sdk`); `buildBotInfo` is what its `init()` gets.
+ *
  * `step` mutates in place; `cloneWorld` snapshots. A world is plain data, so it also survives
  * JSON round-trips and storage.
  */
@@ -32,6 +35,7 @@ export type {
   Vec2,
   World,
 } from "./types.ts";
+export { type BotLimits, buildBotInfo, buildBotState } from "./vision.ts";
 export {
   type CreateWorldOptions,
   cloneWorld,

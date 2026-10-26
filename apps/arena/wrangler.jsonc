@@ -14,6 +14,8 @@
   "compatibility_date": "2026-10-15",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // Bundles the house bots into src/house-bundles.gen.ts (git-ignored) before dev and deploy.
+  "build": { "command": "node scripts/house-bundles.ts", "watch_dir": "../../bots/house/src" },
 
   // Shared by all environments.
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MatchmakerDO", "RoomDO"] }],

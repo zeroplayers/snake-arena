@@ -8,11 +8,22 @@
     "dev": "wrangler dev --persist-to ../../.wrangler/state",
     "deploy:staging": "wrangler deploy --env staging",
     "cf-typegen": "wrangler types",
-    "typecheck": "wrangler types >/dev/null && tsc -p ."
+    "typecheck": "node scripts/house-bundles.ts && wrangler types >/dev/null && tsc -p .",
+    "build:house": "node scripts/house-bundles.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "esbuild": "^0.28.2",
+    "miniflare": "5.20261023.0-beta",
     "typescript": "^7.0.2",
+    "vitest": "^5.0.5",
     "wrangler": "^4.152.0"
+  },
+  "dependencies": {
+    "@jitl/quickjs-wasmfile-release-sync": "^0.32.0",
+    "@zerosnake/engine": "workspace:*",
+    "@zerosnake/house-bots": "workspace:*",
+    "@zerosnake/sandbox": "workspace:*",
+    "@zerosnake/sdk": "workspace:*"
   }
 }

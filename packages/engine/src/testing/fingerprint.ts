@@ -1,40 +1,6 @@
-/**
- * FNV-1a over every value in a structure, numbers by their IEEE-754 bits, so "equal" means
- * bit-identical (0 vs -0 and NaN payloads included).
- */
+import { stateHash } from "../hash.ts";
+
+/** Hex {@link stateHash}: bit-identical structures (0 vs -0 included) give equal strings. */
 export function fingerprint(value: unknown): string {
-  const f64 = new Float64Array(1);
-  const u32 = new Uint32Array(f64.buffer);
-  let h = 0x811c9dc5;
-  const mix = (x: number) => {
-    h ^= x;
-    h = Math.imul(h, 0x01000193) >>> 0;
-  };
-  const walk = (v: unknown): void => {
-    if (typeof v === "number") {
-      f64[0] = v;
-      mix(1);
-      mix(u32[0] as number);
-      mix(u32[1] as number);
-    } else if (typeof v === "string") {
-      mix(2);
-      for (let i = 0; i < v.length; i++) mix(v.charCodeAt(i));
-    } else if (typeof v === "boolean") {
-      mix(v ? 3 : 4);
-    } else if (v === null || v === undefined) {
-      mix(5);
-    } else if (Array.isArray(v)) {
-      mix(6);
-      mix(v.length);
-      for (const x of v) walk(x);
-    } else if (typeof v === "object") {
-      mix(7);
-      for (const k of Object.keys(v).sort()) {
-        walk(k);
-        walk((v as Record<string, unknown>)[k]);
-      }
-    }
-  };
-  walk(value);
-  return h.toString(16);
+  return stateHash(value).toString(16);
 }

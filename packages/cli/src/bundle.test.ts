@@ -85,14 +85,27 @@ describe("bundleBot", () => {
     expect(error.message).toContain("export default defineBot(");
   });
 
-  it("points at the source file that uses syntax the sandbox refuses", async () => {
+  it("points at the source line that uses syntax the sandbox refuses", async () => {
     const dir = makeProject({
       "src/bot.ts":
         'import { plan } from "./plan.ts";\nexport default { tick: () => ({ turn: plan() }) };\n',
-      "src/plan.ts": "export function plan() {\n  return 0;\n}\nexport async function later() {}\n",
+      "src/plan.ts":
+        "const big = 1;\nexport function plan() {\n  return big;\n}\nexport const later = async () => 1;\nlater();\n",
     });
     const error = (await bundleBot("src/bot.ts", { cwd: dir }).catch((e: unknown) => e)) as Error;
-    expect(error.message).toMatch(/^src\/plan\.ts: async functions are not available/);
-    expect(error.message).toContain("line 4");
+    expect(error).toBeInstanceOf(CliError);
+    expect(error.message).toMatch(/^src\/plan\.ts:5: async functions are not available to bots/);
+    expect(error.message).toContain('(found "async")');
+  });
+
+  it("checks the bundle like the server does: comments and dead code don't count", async () => {
+    const dir = makeProject({
+      "src/bot.ts":
+        "// async code never runs in the sandbox, and 10n is a BigInt.\n" +
+        "/* async */ async function unused() {}\n" +
+        "export default { tick: () => ({ turn: 0 }) };\n",
+    });
+    const bot = await bundleBot("src/bot.ts", { cwd: dir });
+    expect(bot.code).not.toContain("async");
   });
 });

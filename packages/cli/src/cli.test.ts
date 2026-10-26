@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { main } from "./cli.ts";
 import { simCommand } from "./commands/sim.ts";
@@ -67,6 +68,20 @@ describe("zerosnake sim --headless", () => {
     expect(io.stdout()).toMatch(/slow\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+ timeout/);
   });
 
+  it("exits with 1 when the sandbox kills your bot", async () => {
+    const io = captureIo(botProject({ "src/bot.ts": SLOW_BOT }));
+    expect(await main(["sim", "--headless", "--ticks", "30", "--vs", "easy"], io)).toBe(1);
+    expect(io.stdout()).toContain("too slow: 3 ticks in a row over budget");
+    expect(io.stderr()).toContain("The sandbox killed your bot (2 lives)");
+  });
+
+  it("runs house bots natively on request", async () => {
+    const io = captureIo(botProject());
+    const args = ["sim", "--headless", "--ticks", "100", "--vs", "hard", "--seed", "1"];
+    expect(await main([...args, "--native-house"], io)).toBe(0);
+    expect(io.stdout()).toContain("hard ");
+  });
+
   it("fails with exit code 1 and file:line when the bot doesn't build", async () => {
     const io = captureIo(botProject({ "src/tuning.ts": "export const MARGIN = ;\n" }));
     expect(await main(["sim", "--headless"], io)).toBe(1);
@@ -79,6 +94,17 @@ describe("zerosnake sim --headless", () => {
     );
     expect(await main(["sim", "--headless"], io)).toBe(1);
     expect(io.stderr()).toContain("my-snake failed to load: Error: missing config");
+  });
+
+  it("finds a bot folder without a package.json inside another project", async () => {
+    const dir = makeProject({
+      "package.json": JSON.stringify({ name: "outer" }),
+      "inner/src/bot.ts": GOOD_BOT,
+      "inner/src/tuning.ts": TUNING,
+    });
+    const io = captureIo(join(dir, "inner"));
+    expect(await main(["sim", "--headless", "--ticks", "20", "--vs", "easy"], io)).toBe(0);
+    expect(io.stdout()).toContain("inner vs easy");
   });
 
   it("explains a project without a bot", async () => {

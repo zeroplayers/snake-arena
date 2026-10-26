@@ -7,7 +7,7 @@ import { readJson } from "./paths.ts";
 export const ENTRY_CANDIDATES = ["src/bot.ts", "src/bot.js", "src/index.ts", "src/index.js"];
 
 export interface Project {
-  /** The folder with the nearest package.json (or `cwd` without one). */
+  /** The nearest folder with a package.json or a bot entry (or `cwd` without either). */
   root: string;
   /** Its package name, else the folder name. */
   name: string;
@@ -20,6 +20,9 @@ export function findProject(cwd: string): Project {
     if (existsSync(manifest)) {
       const name = readJson(manifest).name;
       return { root: dir, name: typeof name === "string" && name ? name : basename(dir) };
+    }
+    if (ENTRY_CANDIDATES.some((c) => existsSync(join(dir, c)))) {
+      return { root: dir, name: basename(dir) };
     }
     const parent = dirname(dir);
     if (parent === dir) return { root: resolve(cwd), name: basename(resolve(cwd)) };

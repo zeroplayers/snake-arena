@@ -30,9 +30,10 @@ import type { MatchInfo } from "@zerosnake/viewer";
 import type { SimChunk, SimLife, SnakeCall, TickCalls } from "./protocol.ts";
 
 /**
- * A bot in the lineup: a `bundle` the sandbox runs, like every bot in the arena, or a trusted
- * `bot` object run directly (house bots: deterministic, and the deploy checks run them the same
- * way; it keeps a local match several times faster).
+ * A bot in the lineup: a `bundle` the sandbox runs, as the arena runs every bot (house bots
+ * included), or a trusted `bot` object run directly in Node. `sim` uses the latter only for
+ * house bots and only with `--native-house`: about 4× faster, but not exactly the arena, since
+ * QuickJS and V8 may round `Math.sin`/`atan2` differently and native bots report no op counts.
  */
 export type Contestant = ContestantBase & ({ bundle: string } | { bot: Bot<object> });
 
@@ -123,9 +124,10 @@ interface Running {
 }
 
 /**
- * Runs a local match the way a room does: every bot (house bots included) in one shared QuickJS
- * sandbox with the production op budget, memory limit and strike rules, one sandbox life per
- * snake life, and sandbox verdicts passed to the engine as faults. Dead bots respawn as new lives.
+ * Runs a local match the way a room does: every `bundle` bot in one shared QuickJS sandbox with
+ * the production op budget, memory limit and strike rules, one sandbox life per snake life, and
+ * sandbox verdicts passed to the engine as faults (`bot` contestants run in Node with the same
+ * error rule). Dead bots respawn as new lives.
  * The match is recorded as engine replay chunks plus each bot call's ops and logs.
  */
 export async function runMatch(options: MatchOptions): Promise<MatchResult> {

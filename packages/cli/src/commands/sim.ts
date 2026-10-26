@@ -5,14 +5,14 @@ import { houseBots } from "@zerosnake/house-bots";
 import { createSandbox } from "@zerosnake/sandbox";
 import { bundleBot } from "../bundle.ts";
 import { EXIT, UsageError } from "../errors.ts";
-import { HOUSE_BOTS, isHouseBot } from "../house.ts";
+import { HOUSE_BOTS, houseBotBundle, isHouseBot } from "../house.ts";
 import { type Io, intOption, parse } from "../io.ts";
 import { assertLoads } from "../preflight.ts";
 import { findEntry, findProject } from "../project.ts";
 import { type Contestant, defaultTitle, matchInfo, runMatch } from "../sim/match.ts";
 import { DEFAULT_PORT, openBrowser, startSimServer } from "../sim/server.ts";
 import { formatSummary } from "../sim/summary.ts";
-import { bold, cyan, dim, stderrHasColor } from "../term.ts";
+import { bold, cyan, dim, red, stderrHasColor } from "../term.ts";
 
 export const DEFAULT_TICKS = 3000;
 export const DEFAULT_VS = ["easy", "medium", "hard", "chaos"];
@@ -29,7 +29,10 @@ Options:
   --seed <n>       World seed (default: random; printed so you can replay a match)
   --ticks <n>      Ticks to simulate, 10 per second of game time (default: ${DEFAULT_TICKS})
   --bot <file>     Your bot's entry file (default: src/bot.ts)
-  --headless       Print a summary instead of opening the viewer
+  --headless       Print a summary instead of opening the viewer. Exits with 1 if the
+                   sandbox killed your bot (too slow, crashing, out of memory)
+  --native-house   Run house bots in Node instead of the sandbox: ~4× faster, but not
+                   bit-identical to the arena
   --port <n>       Viewer port (default: ${DEFAULT_PORT}, or the next free one)
   --no-open        Serve the viewer without opening a browser
   -h, --help       Show this help
@@ -45,6 +48,7 @@ const OPTIONS = {
   ticks: { type: "string" },
   bot: { type: "string" },
   headless: { type: "boolean" },
+  "native-house": { type: "boolean" },
   port: { type: "string" },
   open: { type: "boolean", default: true },
   help: { type: "boolean", short: "h" },
@@ -79,7 +83,7 @@ export async function simCommand(
   const lineup: Contestant[] = [{ name: project.name, bundle: you.code, you: true }];
   for (const spec of (values.vs ?? DEFAULT_VS.join(",")).split(",")) {
     const item = spec.trim();
-    if (item) lineup.push(await opponent(item, io.cwd, color));
+    if (item) lineup.push(await opponent(item, io.cwd, color, values["native-house"] === true));
   }
   uniqueNames(lineup);
 
@@ -108,7 +112,15 @@ export async function simCommand(
     if (values.vs) again.push(`--vs ${values.vs}`);
     if (values.ticks) again.push(`--ticks ${ticks}`);
     if (values.bot) again.push(`--bot ${values.bot}`);
+    if (values["native-house"]) again.push("--native-house");
     io.out(dim(`\nWatch this match: zerosnake sim ${again.join(" ")}`));
+    // A bot the sandbox kills would be killed in the arena too: fail scripts and CI.
+    const killed = result.lives.filter((l) => l.you && l.death?.sandbox).length;
+    if (killed > 0) {
+      const lives = killed === 1 ? "1 life" : `${killed} lives`;
+      io.err(`\n${red("✗")} The sandbox killed your bot (${lives}); see above.`);
+      return EXIT.failure;
+    }
     return EXIT.ok;
   }
 
@@ -148,8 +160,17 @@ export async function simCommand(
 }
 
 /** An opponent from `--vs`: a house bot name, or a path to another bot. */
-async function opponent(spec: string, cwd: string, color: boolean): Promise<Contestant> {
-  if (isHouseBot(spec)) return { name: spec, bot: houseBots[spec] };
+async function opponent(
+  spec: string,
+  cwd: string,
+  color: boolean,
+  nativeHouse: boolean,
+): Promise<Contestant> {
+  if (isHouseBot(spec)) {
+    return nativeHouse
+      ? { name: spec, bot: houseBots[spec] }
+      : { name: spec, bundle: await houseBotBundle(spec) };
+  }
   const path = resolve(cwd, spec);
   if (!existsSync(path)) {
     throw new UsageError(

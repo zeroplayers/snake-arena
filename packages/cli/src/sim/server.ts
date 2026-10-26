@@ -2,7 +2,8 @@ import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { join } from "node:path";
 import type { MatchInfo } from "@zerosnake/viewer";
-import { build } from "esbuild";
+import { type BuildOptions, build } from "esbuild";
+import { BUNDLED, distFile } from "../assets.ts";
 import { packageRoot } from "../paths.ts";
 import type { MatchUpdate, SimChunk, SimLife } from "./protocol.ts";
 
@@ -47,20 +48,28 @@ const PAGE = `<!doctype html>
 </html>
 `;
 
-let client: Promise<string> | undefined;
-
-/** Bundles the viewer page (viewer, renderer, three.js, engine) for the browser, once. */
-export function bundleClient(): Promise<string> {
-  client ??= build({
+/** esbuild options for the viewer page (viewer, renderer, three.js, engine), for the browser. */
+export function clientBuildOptions(): BuildOptions {
+  return {
     entryPoints: [join(packageRoot(), "src", "sim", "client.ts")],
     bundle: true,
-    write: false,
     format: "esm",
     platform: "browser",
     target: "es2022",
     minify: true,
     logLevel: "silent",
-  }).then((out) => out.outputFiles[0]?.text ?? "");
+  };
+}
+
+let client: Promise<string> | undefined;
+
+/** The viewer page's script: prebuilt in `dist/client.js`, or bundled from source once. */
+export function bundleClient(): Promise<string> {
+  client ??= BUNDLED
+    ? Promise.resolve(distFile("client.js"))
+    : build({ ...clientBuildOptions(), write: false }).then(
+        (out) => out.outputFiles[0]?.text ?? "",
+      );
   return client;
 }
 
@@ -72,6 +81,14 @@ export async function startSimServer(options: SimServerOptions): Promise<SimServ
   let error: string | undefined;
 
   const server = createServer((req, res) => {
+    // Only pages on this machine may read the match (bot logs): a DNS-rebinding page arrives
+    // with its own host name.
+    if (!isLocalHost(req.headers.host)) {
+      res
+        .writeHead(403, { "content-type": "text/plain" })
+        .end("zerosnake sim only answers localhost");
+      return;
+    }
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -116,6 +133,15 @@ export async function startSimServer(options: SimServerOptions): Promise<SimServ
       });
     },
   };
+}
+
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** Whether a `Host` header names this machine (any port). */
+export function isLocalHost(host: string | undefined): boolean {
+  if (!host) return false;
+  const name = host.replace(/:\d+$/, "").toLowerCase();
+  return LOCAL_HOSTS.has(name);
 }
 
 async function listen(server: Server, first: number): Promise<number> {

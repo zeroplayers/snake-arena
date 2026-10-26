@@ -1,10 +1,11 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 // Node built-ins only: scripts/build.ts imports this file before anything is bundled.
 
-/** Never copied out of a template: installs, build output, caches, OS junk. */
+/** Never copied out of a template: installs, build output, caches, OS junk, maintainer docs. */
 const SKIP = new Set([
+  "MAINTAINING.md",
   "node_modules",
   "dist",
   "coverage",
@@ -43,21 +44,26 @@ export function copyTemplate(from: string, to: string): string[] {
 }
 
 /**
- * The bot template: the copy bundled into the CLI (`dist/template`, made by `pnpm build`) or,
- * in a checkout of the monorepo, `template/` itself.
+ * Copies the SDK's TypeScript sources (`src/*.ts`, no tests) and a minimal `package.json` that
+ * exports them. Used for `dist/sdk` and for the copy `init` puts in a new project.
  */
-export function findTemplateDir(packageRoot: string): string {
-  const candidates = [
-    join(packageRoot, "dist", "template"),
-    join(packageRoot, "..", "..", "template"),
-  ];
-  const found = candidates.find((dir) => existsSync(join(dir, "package.json")) || hasFiles(dir));
-  if (!found) {
-    throw new Error(`zerosnake: the bot template is missing (looked in ${candidates.join(", ")})`);
+export function copySdk(from: string, to: string, description: string): string[] {
+  const pkg = JSON.parse(readFileSync(join(from, "package.json"), "utf8")) as { version: string };
+  mkdirSync(join(to, "src"), { recursive: true });
+  const files = ["package.json"];
+  for (const name of readdirSync(join(from, "src")).sort()) {
+    if (!name.endsWith(".ts") || name.endsWith(".test.ts")) continue;
+    copyFileSync(join(from, "src", name), join(to, "src", name));
+    files.push(`src/${name}`);
   }
-  return found;
-}
-
-function hasFiles(dir: string): boolean {
-  return existsSync(dir) && readdirSync(dir).some((name) => !skipped(name));
+  const manifest = {
+    name: "@zerosnake/sdk",
+    version: pkg.version,
+    private: true,
+    description,
+    type: "module",
+    exports: "./src/index.ts",
+  };
+  writeFileSync(join(to, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  return files;
 }

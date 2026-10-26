@@ -1,8 +1,13 @@
 import { existsSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { sdkDir, templateDir } from "./assets.ts";
 import { CliError } from "./errors.ts";
 import { ownPackageDir, packageRoot, readJson } from "./paths.ts";
-import { copyTemplate, findTemplateDir } from "./template.ts";
+import { copySdk, copyTemplate } from "./template.ts";
+
+const SDK_NOTE =
+  "The ZeroSnake SDK, copied here by `zerosnake init` until @zerosnake/sdk is on npm. " +
+  "Replace it with the npm package then.";
 
 export interface InitOptions {
   /** Template folder. Default: the one bundled with the CLI. */
@@ -17,15 +22,30 @@ export interface InitResult {
   name: string;
   /** Files created, relative to `dir`. */
   files: string[];
+  /** Template dependencies left out of package.json because they aren't on npm yet. */
+  omitted: string[];
 }
+
+/**
+ * Workspace packages that are on npm, which `init` refers to as `^version`. Empty until the
+ * launch (zeroplayers/snake-arena#31); add each one as it is published.
+ */
+export const PUBLISHED: ReadonlySet<string> = new Set<string>();
+
+/** Where `init` puts its copy of the SDK while the SDK isn't on npm. */
+export const VENDORED_SDK = "vendor/zerosnake-sdk";
 
 /** Ignorable leftovers that don't make a folder "not empty". */
 const HARMLESS = new Set([".git", ".DS_Store", "Thumbs.db"]);
 
 /**
  * `zerosnake init <dir>`: copies the bot template into a new (or empty) folder. Works offline:
- * the template ships inside the CLI. Dependencies the template takes from the monorepo
- * (`workspace:*`) become ordinary version ranges.
+ * the template ships inside the CLI. Its monorepo dependencies (`workspace:*`) become:
+ * - `^version` for packages on npm ({@link PUBLISHED});
+ * - for `@zerosnake/sdk` until then, a copy of the SDK in {@link VENDORED_SDK} referenced as a
+ *   `file:` dependency, so `npm install` works and editors see the types;
+ * - nothing for the rest (engine, sandbox, house bots: only the template's own tests use them),
+ *   listed in `omitted` so the caller can say so.
  */
 export function initProject(target: string, options: InitOptions = {}): InitResult {
   const dir = resolve(options.cwd ?? process.cwd(), target);
@@ -37,7 +57,10 @@ export function initProject(target: string, options: InitOptions = {}): InitResu
       );
     }
   }
-  const files = copyTemplate(options.templateDir ?? findTemplateDir(packageRoot()), dir);
+  const from = options.templateDir ?? templateDir();
+  if (!existsSync(from)) throw new Error(`zerosnake: the bot template is missing (${from})`);
+  const files = copyTemplate(from, dir);
+  const omitted: string[] = [];
 
   // npm drops .gitignore files from published packages, so templates often ship it renamed.
   for (const alias of ["gitignore", "_gitignore"]) {
@@ -60,12 +83,22 @@ export function initProject(target: string, options: InitOptions = {}): InitResu
       const deps = pkg[field] as Record<string, string> | undefined;
       if (!deps) continue;
       for (const [dep, range] of Object.entries(deps)) {
-        if (range.startsWith("workspace:")) deps[dep] = publishedRange(dep);
+        if (!range.startsWith("workspace:")) continue;
+        if (PUBLISHED.has(dep)) {
+          deps[dep] = publishedRange(dep);
+        } else if (dep === "@zerosnake/sdk") {
+          const vendored = copySdk(sdkDir(), join(dir, VENDORED_SDK), SDK_NOTE);
+          files.push(...vendored.map((f) => `${VENDORED_SDK}/${f}`));
+          deps[dep] = `file:${VENDORED_SDK}`;
+        } else {
+          delete deps[dep];
+          omitted.push(dep);
+        }
       }
     }
     writeFileSync(manifest, `${JSON.stringify(pkg, null, 2)}\n`);
   }
-  return { dir, name, files: files.sort() };
+  return { dir, name, files: files.sort(), omitted: omitted.sort() };
 }
 
 /** A valid npm package name from a folder name. */

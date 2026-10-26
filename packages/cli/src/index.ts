@@ -8,7 +8,14 @@ export { type BundledBot, type BundleOptions, bundleBot } from "./bundle.ts";
 export { HELP, main } from "./cli.ts";
 export { CliError, EXIT, UsageError } from "./errors.ts";
 export { HOUSE_BOTS, type HouseBotName, houseBotBundle } from "./house.ts";
-export { type InitOptions, type InitResult, initProject, packageName } from "./init.ts";
+export {
+  type InitOptions,
+  type InitResult,
+  initProject,
+  PUBLISHED,
+  packageName,
+  VENDORED_SDK,
+} from "./init.ts";
 export type { Io } from "./io.ts";
 export { assertLoads } from "./preflight.ts";
 export {
@@ -30,4 +37,4 @@ export {
 export type { MatchUpdate, SimChunk, SimLife, SnakeCall, TickCalls } from "./sim/protocol.ts";
 export { RecordedMatchSource } from "./sim/source.ts";
 export { describeDeath, formatSummary } from "./sim/summary.ts";
-export { copyTemplate, findTemplateDir } from "./template.ts";
+export { copySdk, copyTemplate } from "./template.ts";

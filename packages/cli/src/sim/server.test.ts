@@ -1,3 +1,4 @@
+import { request } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import type { MatchUpdate, SimLife } from "./protocol.ts";
 import { type SimServer, startSimServer } from "./server.ts";
@@ -42,6 +43,25 @@ describe("startSimServer", () => {
     expect(update.done).toBe(true);
     expect(update.lives[0]?.death?.cause).toBe("wall");
     expect((await get("/nope")).status).toBe(404);
+  }, 20_000);
+
+  it("answers only requests addressed to this machine (no DNS rebinding)", async () => {
+    server = await startSimServer({ info, bots: [], port: 0 });
+    const { port } = new URL(server.url);
+    const status = (host: string) =>
+      new Promise<number>((resolve, reject) => {
+        request({ host: "127.0.0.1", port, path: "/api/match", headers: { host } }, (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        })
+          .on("error", reject)
+          .end();
+      });
+    expect(await status(`localhost:${port}`)).toBe(200);
+    expect(await status(`127.0.0.1:${port}`)).toBe(200);
+    expect(await status(`[::1]:${port}`)).toBe(200);
+    expect(await status(`evil.example:${port}`)).toBe(403);
+    expect(await status("localhost.evil.example")).toBe(403);
   }, 20_000);
 
   it("takes the next port when the first is busy", async () => {

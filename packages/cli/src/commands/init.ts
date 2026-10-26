@@ -2,7 +2,7 @@ import { relative } from "node:path";
 import { EXIT, UsageError } from "../errors.ts";
 import { initProject } from "../init.ts";
 import { type Io, parse } from "../io.ts";
-import { bold, cyan, green } from "../term.ts";
+import { bold, cyan, dim, green } from "../term.ts";
 
 export const INIT_HELP = `Usage: zerosnake init <dir>
 
@@ -31,6 +31,14 @@ export function initCommand(argv: string[], io: Io): number {
   const result = initProject(target, { cwd: io.cwd });
   const shown = relative(io.cwd, result.dir) || ".";
   io.out(`${green("✓")} Created ${bold(result.name)} in ${shown} (${result.files.length} files)`);
+  if (result.omitted.length > 0) {
+    io.out(
+      dim(
+        `Not on npm yet, so left out of package.json: ${result.omitted.join(", ")}.\n` +
+          "The template's own tests need them; `npx zerosnake sim` and `test` don't.",
+      ),
+    );
+  }
   io.out("");
   io.out("Next:");
   if (shown !== ".") io.out(cyan(`  cd ${shown}`));

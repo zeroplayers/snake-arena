@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
 
-// In a checkout of the monorepo, bundle the TypeScript sources first (fast), so this always
-// runs the current code. A published package ships dist/ and no scripts/.
-if (existsSync(new URL("../scripts/build.ts", import.meta.url))) {
-  const { buildCli } = await import("../scripts/build.ts");
-  await buildCli();
+// dist/ is built before packing (`prepack`); in a checkout, build it with
+// `pnpm --filter zerosnake build`. This file never builds anything itself.
+const cli = new URL("../dist/cli.js", import.meta.url);
+if (!existsSync(cli)) {
+  console.error("zerosnake isn't built: run `pnpm --filter zerosnake build` in the monorepo.");
+  process.exit(1);
 }
-const { main } = await import("../dist/cli.js");
+const { main } = await import(cli.href);
 process.exitCode = await main(process.argv.slice(2));

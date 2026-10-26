@@ -1,12 +1,20 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { templateDir } from "./assets.ts";
+import { bundleBot } from "./bundle.ts";
 import { main } from "./cli.ts";
 import { CliError } from "./errors.ts";
-import { initProject, packageName } from "./init.ts";
+import { initProject, PUBLISHED, packageName, VENDORED_SDK } from "./init.ts";
 import { packageRoot } from "./paths.ts";
-import { findTemplateDir } from "./template.ts";
-import { captureIo, cleanUp, makeProject } from "./testing/project.ts";
+import { captureIo, cleanUp, GOOD_BOT, makeProject, TUNING } from "./testing/project.ts";
 
 afterAll(cleanUp);
 
@@ -23,6 +31,7 @@ const TEMPLATE = {
   }),
   "src/bot.ts": "export default {};\n",
   "CLAUDE.md": "# Rules\n",
+  "MAINTAINING.md": "# For the monorepo only\n",
   gitignore: "node_modules/\n",
   "node_modules/junk/index.js": "",
   "dist/bot.js": "",
@@ -36,22 +45,70 @@ describe("initProject", () => {
     const result = initProject("my-snake", { cwd, templateDir: template });
 
     expect(result.dir).toBe(join(cwd, "my-snake"));
-    expect(result.files).toEqual([".gitignore", "CLAUDE.md", "package.json", "src/bot.ts"]);
+    expect(result.files.filter((f) => !f.startsWith("vendor/"))).toEqual([
+      ".gitignore",
+      "CLAUDE.md",
+      "package.json",
+      "src/bot.ts",
+    ]);
     expect(existsSync(join(cwd, "my-snake/node_modules"))).toBe(false);
     expect(readFileSync(join(cwd, "my-snake/.gitignore"), "utf8")).toBe("node_modules/\n");
   });
 
-  it("names the package after the folder and drops workspace: ranges", () => {
+  it("names the package after the folder and makes every dependency installable", () => {
     const template = makeProject(TEMPLATE);
     const cwd = makeProject({});
-    initProject("My Snake!", { cwd, templateDir: template });
-    const pkg = JSON.parse(readFileSync(join(cwd, "My Snake!/package.json"), "utf8"));
+    const result = initProject("My Snake!", { cwd, templateDir: template });
+    const dir = join(cwd, "My Snake!");
+    const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
 
     expect(pkg.name).toBe("my-snake");
-    expect(pkg.dependencies["@zerosnake/sdk"]).toBe("^0.0.0");
-    expect(pkg.devDependencies.zerosnake).toBe("^0.0.0");
-    expect(pkg.devDependencies["@zerosnake/unknown"]).toBe("*");
-    expect(pkg.devDependencies.vitest).toBe("^5.0.5");
+    // Nothing is on npm yet: the SDK is vendored, the rest left out (and reported).
+    expect(pkg.dependencies).toEqual({ "@zerosnake/sdk": `file:${VENDORED_SDK}` });
+    expect(pkg.devDependencies).toEqual({ vitest: "^5.0.5" });
+    expect(result.omitted).toEqual(["@zerosnake/unknown", "zerosnake"]);
+
+    const sdk = join(dir, VENDORED_SDK);
+    const sdkPkg = JSON.parse(readFileSync(join(sdk, "package.json"), "utf8"));
+    expect(sdkPkg).toMatchObject({ name: "@zerosnake/sdk", exports: "./src/index.ts" });
+    expect(readdirSync(join(sdk, "src")).sort()).toEqual([
+      "bot.ts",
+      "geometry.ts",
+      "index.ts",
+      "log.ts",
+      "types.ts",
+    ]);
+    expect(result.files).toContain(`${VENDORED_SDK}/src/index.ts`);
+  });
+
+  it("bundles a bot against the vendored SDK", async () => {
+    const template = makeProject(TEMPLATE);
+    const cwd = makeProject({});
+    initProject("bot", { cwd, templateDir: template });
+    // As after `npm install`: the file: dependency is linked into node_modules.
+    const dir = join(cwd, "bot");
+    mkdirSync(join(dir, "node_modules/@zerosnake"), { recursive: true });
+    symlinkSync(join(dir, VENDORED_SDK), join(dir, "node_modules/@zerosnake/sdk"));
+    writeFileSync(join(dir, "src/bot.ts"), GOOD_BOT);
+    writeFileSync(join(dir, "src/tuning.ts"), TUNING);
+    const bot = await bundleBot("src/bot.ts", { cwd: dir });
+    expect(bot.code).toContain("steerToward");
+  });
+
+  it("writes ^version for packages on npm", () => {
+    const template = makeProject({
+      "package.json": JSON.stringify({ dependencies: { "@zerosnake/sdk": "workspace:*" } }),
+    });
+    const published = PUBLISHED as Set<string>;
+    published.add("@zerosnake/sdk");
+    try {
+      const cwd = makeProject({});
+      initProject("bot", { cwd, templateDir: template });
+      const pkg = JSON.parse(readFileSync(join(cwd, "bot/package.json"), "utf8"));
+      expect(pkg.dependencies["@zerosnake/sdk"]).toBe("^0.0.0");
+    } finally {
+      published.delete("@zerosnake/sdk");
+    }
   });
 
   it("adds a .gitignore when the template has none", () => {
@@ -75,11 +132,7 @@ describe("initProject", () => {
   });
 
   it("finds the repo's template/ from a source checkout", () => {
-    // dist/template once `pnpm build` ran, else the repo's template/ itself.
-    const root = packageRoot();
-    expect([join(root, "dist", "template"), join(root, "..", "..", "template")]).toContain(
-      findTemplateDir(root),
-    );
+    expect(templateDir()).toBe(join(packageRoot(), "..", "..", "template"));
   });
 });
 

@@ -1,4 +1,4 @@
-import type { BotState, Food, SelfState, SnakeView, Vec } from "./types";
+import type { BotState, Food, SelfState, SnakeView, Vec } from "./types.ts";
 
 /** A full turn in radians (2π). */
 export const TAU = Math.PI * 2;

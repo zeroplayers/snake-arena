@@ -1,5 +1,5 @@
-import type { LogFn } from "./log";
-import type { BotAction, BotInfo, BotState } from "./types";
+import type { LogFn } from "./log.ts";
+import type { BotAction, BotInfo, BotState } from "./types.ts";
 
 /**
  * A bot: optional `init` at the start of each life, then `tick` once per simulation tick.

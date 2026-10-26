@@ -10,7 +10,7 @@ import {
   nearestFood,
   steerAway,
   steerToward,
-} from "./index";
+} from "./index.ts";
 
 // An example bot written only against the public API, the way a bot author would.
 const bot = defineBot({

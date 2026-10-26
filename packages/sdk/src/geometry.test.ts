@@ -15,8 +15,8 @@ import {
   steerToward,
   TAU,
   turnToward,
-} from "./geometry";
-import type { SelfState, SnakeView } from "./types";
+} from "./geometry.ts";
+import type { SelfState, SnakeView } from "./types.ts";
 
 const PI = Math.PI;
 

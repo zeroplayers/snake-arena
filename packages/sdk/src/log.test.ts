@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createTickLog, LOG_LIMIT_BYTES, utf8Length } from "./log";
+import { createTickLog, LOG_LIMIT_BYTES, utf8Length } from "./log.ts";
 
 describe("utf8Length", () => {
   it("counts UTF-8 bytes (lone surrogates encode as U+FFFD, 3 bytes)", () => {

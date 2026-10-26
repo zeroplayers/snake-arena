@@ -26,7 +26,7 @@
  * @packageDocumentation
  */
 
-export { type Bot, defineBot } from "./bot";
+export { type Bot, defineBot } from "./bot.ts";
 export {
   angleDiff,
   angleTo,
@@ -45,8 +45,8 @@ export {
   steerToward,
   TAU,
   turnToward,
-} from "./geometry";
-export { createTickLog, LOG_LIMIT_BYTES, type LogFn, type TickLog, utf8Length } from "./log";
+} from "./geometry.ts";
+export { createTickLog, LOG_LIMIT_BYTES, type LogFn, type TickLog, utf8Length } from "./log.ts";
 export type {
   BotAction,
   BotInfo,
@@ -55,4 +55,4 @@ export type {
   SelfState,
   SnakeView,
   Vec,
-} from "./types";
+} from "./types.ts";

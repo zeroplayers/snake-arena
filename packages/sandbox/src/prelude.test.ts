@@ -181,6 +181,33 @@ describe("native work budget", () => {
     "string indexOf in array":
       "const s = 'x'.repeat(1e6); const a = new Array(100).fill(s + 'y'); for (;;) a.indexOf(s + 'z');",
     bind: "const args = new Array(6e4).fill(0); for (;;) Math.max.bind(null, ...args);",
+    // Follow-up review of #49: built-ins that copy, convert or quote a whole string.
+    "JSON.stringify string": "const s = 'x'.repeat(1e5); for (;;) JSON.stringify(s);",
+    "JSON.stringify key": "const o = { ['k'.repeat(1e5)]: 1 }; for (;;) JSON.stringify(o);",
+    "JSON.stringify escapes":
+      "const s = String.fromCharCode(1).repeat(1e4); for (;;) JSON.stringify(s);",
+    "JSON.stringify String object":
+      "const s = new String('x'.repeat(1e5)); for (;;) JSON.stringify(s);",
+    normalize: "const s = String.fromCharCode(101, 769).repeat(5e3); for (;;) s.normalize('NFC');",
+    toUpperCase: "const s = 'x'.repeat(1e5); for (;;) s.toUpperCase();",
+    toLowerCase: "const s = 'X'.repeat(1e5); for (;;) s.toLowerCase();",
+    localeCompare: "const s = 'x'.repeat(1e5); for (;;) s.localeCompare(s);",
+    encodeURIComponent:
+      "const s = String.fromCharCode(233).repeat(1e4); for (;;) encodeURIComponent(s);",
+    escape: "const s = String.fromCharCode(233).repeat(1e4); for (;;) escape(s);",
+    decodeURIComponent: "const s = '%C3%A9'.repeat(1e4); for (;;) decodeURIComponent(s);",
+    "split into chars": "const s = 'x'.repeat(1e4); for (;;) s.split('');",
+    "string spread": "const s = 'x'.repeat(1e4); for (;;) [...s];",
+    "Array.from string": "const s = 'x'.repeat(1e4); for (;;) Array.from(s);",
+    "global match": "const s = 'x'.repeat(1e4); for (;;) s.match(/x/g);",
+    "matchAll spread": "const s = 'x'.repeat(1e4); for (;;) [...s.matchAll(/x/g)];",
+    "regex split": "const s = 'x,'.repeat(1e4); for (;;) s.split(/,/);",
+    "long replacement": "const r = 'y'.repeat(1e5); for (;;) 'xxxxxxxxxx'.replaceAll('x', r);",
+    "replacement prefix": "const s = 'x'.repeat(1000); for (;;) s.replaceAll('x', '$`');",
+    "replacer function": "const r = 'y'.repeat(1e5); for (;;) 'xxxxxxxxxx'.replace(/x/g, () => r);",
+    "Symbol.replace": "const r = 'y'.repeat(1e5); for (;;) /x/g[Symbol.replace]('xxxxxxxxxx', r);",
+    "fake global":
+      "const s = 'x'.repeat(1e4); const rx = /x/; Object.defineProperty(rx, 'global', { value: true }); for (;;) s.match(rx);",
   };
   // Stopped by the work budget rather than by interrupt checks.
   const byWork = new Set([
@@ -205,6 +232,21 @@ describe("native work budget", () => {
     "join separator",
     "string indexOf in array",
     "bind",
+    "JSON.stringify escapes",
+    "normalize",
+    "toUpperCase",
+    "toLowerCase",
+    "localeCompare",
+    "encodeURIComponent",
+    "escape",
+    "decodeURIComponent",
+    "split into chars",
+    "string spread",
+    "Array.from string",
+    "long replacement",
+    "replacement prefix",
+    "replacer function",
+    "Symbol.replace",
   ]);
   for (const [name, body] of Object.entries(loops)) {
     it(`stops ${name} within one tick`, () => {
@@ -223,6 +265,33 @@ describe("native work budget", () => {
     expect(report.ms).toBeLessThan(FAST_MS);
     expect(report.error).toMatch(/native built-ins/);
   });
+
+  it("stops the review repro: JSON.stringify of a 4 MB string 50 times", () => {
+    const report = tickOnce(
+      "for (let j = 0; j < 50; j++) JSON.stringify(s); return { turn: 0.5 };",
+      "const s = 'x'.repeat(4e6);",
+    );
+    expect(report.ms).toBeLessThan(FAST_MS);
+    expect(report.outcome).toBe("timeout");
+    expect(report.error).toMatch(/native built-ins/);
+    expect(report.action.turn).not.toBe(0.5);
+  });
+
+  const collections =
+    "const set = new Set(), map = new Map(); for (let i = 0; i < 5e4; i++) { set.add(i); map.set(i, i); }";
+  for (const [name, body] of [
+    ["Set spread", "[...set]"],
+    ["Map spread", "[...map]"],
+    ["Array.from Set", "Array.from(set)"],
+    ["new Set(set)", "new Set(set)"],
+    ["Map keys", "[...map.keys()]"],
+  ]) {
+    it(`stops ${name} within one tick`, () => {
+      const report = tickOnce(`for (;;) ${body}; return { turn: 0 };`, collections);
+      expect(report.ms).toBeLessThan(FAST_MS);
+      expect(report.error).toMatch(/native built-ins/);
+    });
+  }
 
   it("leaves room for normal bot work", () => {
     const report = tickOnce(`
@@ -288,6 +357,32 @@ describe("wrapped built-ins still behave", () => {
     ["new (class P extends Promise {})(() => {}) instanceof Promise", "true"],
     ["Promise.resolve(1).constructor === Promise", "true"],
     ["typeof Promise.try", "undefined"],
+    ["JSON.stringify(new String('a\\u0001'))", '"a\\u0001"'],
+    ["JSON.stringify({ ['k' + String.fromCharCode(10)]: 'x'.repeat(100) }).length", "110"],
+    ["JSON.stringify(String.fromCharCode(0xd800))", '"\\ud800"'],
+    ["'abc'.replace('b', '[$`|$&|$\\']')", "a[a|b|c]c"],
+    ["'a-b-c'.replace(/(\\w)-/g, '$1+')", "a+b+c"],
+    ["'abc'.replace(/b/, (m, i) => m.toUpperCase() + i)", "aB1c"],
+    ["'abab'.replaceAll('b', () => 1)", "a1a1"],
+    [
+      "'1.5'.replace(1.5, 'x') + 'n'.replace(null, 'y') + 'undefined'.replace(undefined, 'z')",
+      "xnz",
+    ],
+    [
+      "'a,b,c'.split(',', 2).join() + 'ab'.split().length + 'ab'.split(undefined, 0).length",
+      "a,b10",
+    ],
+    ["'aXbX'.split(/x/i).join('|')", "a|b|"],
+    ["String('ab'.match(undefined)[0].length) + 'a.b'.search('.')", "00"],
+    ["[...'a1b2'.matchAll(/\\d/g)].map((m) => m[0]).join()", "1,2"],
+    ["/b/g[Symbol.replace]('abcb', '-')", "a-c-"],
+    ["new (class R extends RegExp {})('b', 'g')[Symbol.split]('abc').join()", "a,c"],
+    ["'ÄB'.toLowerCase() + 'ß'.toUpperCase() + 'e\\u0301'.normalize('NFC').length", "äbSS1"],
+    ["'a'.localeCompare('b') + 'b'.localeCompare('a')", "0"],
+    ["[...'héllo'].length + Array.from('ab').join('')", "5ab"],
+    ["[...new Map([[1, 2]])].join() + [...new Set([3]).entries()].join()", "1,23,3"],
+    ["(() => { let n = 0; new Map([[1, 2]]).forEach((v) => { n += v; }); return n; })()", "2"],
+    ["escape('é') + unescape('%E9') + decodeURIComponent('%C3%A9')", "%E9éé"],
     [
       "(() => { let e; new Promise(() => { throw 7; }).catch((x) => { e = x; }); return typeof e; })()",
       "undefined",

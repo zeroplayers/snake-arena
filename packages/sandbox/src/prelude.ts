@@ -50,6 +50,11 @@ export const PRELUDE = String.raw`
   const log2 = Math.log2;
   const imul = Math.imul;
   const sliceString = String.prototype.slice;
+  const indexOfString = String.prototype.indexOf;
+  const stringValueOf = String.prototype.valueOf;
+  const regexpExec = RegExp.prototype.exec;
+  const regexpGlobal = getOwnPropertyDescriptor(RegExp.prototype, "global").get;
+  const regexpFlags = getOwnPropertyDescriptor(RegExp.prototype, "flags").get;
   const TypedArray = getPrototypeOf(Uint8Array);
   const TypedArrayProto = TypedArray.prototype;
   const taTag = getOwnPropertyDescriptor(TypedArrayProto, Symbol.toStringTag).get;
@@ -65,6 +70,24 @@ export const PRELUDE = String.raw`
   const CHAR = 1;
   // Building a fresh object or array per key (descriptors, entries).
   const OBJECT = 500;
+  // String built-ins that do more than copy, per char of input (measured worst case in ns:
+  // case mapping 18, normalize 108, URI encoding and escape 43, number parsing 12, URI decoding
+  // 5, JSON.parse 7, JSON.stringify 8 plus 18 to scan a long string for chars it writes as
+  // \uXXXX, which take 158).
+  const CASE = 30;
+  const NORMALIZE = 150;
+  const ENCODE = 50;
+  const NUMBER = 15;
+  const DECODE = 8;
+  const PARSE = 10;
+  const QUOTE = 40;
+  const QUOTE_U = 200;
+  // One new string per char (split, spread of a string: 62 ns) and per char a regex method may
+  // match at (spreading a global matchAll builds a match per char: 320 ns).
+  const PIECE = 80;
+  const MATCH = 400;
+  // Per entry of a Set or Map walked by an iterator (spreading a Map: 192 ns).
+  const ENTRY = 250;
 
   // ---- native work accounting ----
 
@@ -257,7 +280,7 @@ export const PRELUDE = String.raw`
     if (typeof src === "object" && src !== null) {
       noIteratorGetter(src);
       checked(name, arrayLength(src), weight);
-    } else if (typeof src === "string") charge(src.length * CHAR);
+    } else if (typeof src === "string") charge(src.length * CHAR); // + the string iterator
   }
   const arrayLikeArg = (weight) => (_self, args, name) => arrayLikeCost(name, args[0], weight);
   guard(Array, "from", arrayLikeArg(ARRAY));
@@ -339,9 +362,13 @@ export const PRELUDE = String.raw`
   // charged (charging would turn that error into a timeout).
   const MAX_STRING = 1073741823;
   const STRING_CHEAP = new SetCtor(["constructor", "at", "charAt", "charCodeAt", "codePointAt",
-    "toString", "valueOf", iteratorKey]);
+    "toString", "valueOf"]);
   const SEARCH = new SetCtor(["indexOf", "lastIndexOf", "includes", "startsWith", "endsWith",
-    "split", "replace", "replaceAll", "match", "matchAll", "search", "localeCompare"]);
+    "split", "replace", "replaceAll", "match", "matchAll", "search"]);
+  // These treat an undefined argument differently from the string "undefined".
+  const UNDEFINED_OK = new SetCtor(["split", "match", "matchAll", "search"]);
+  const PER_CHAR = { toLowerCase: CASE, toUpperCase: CASE, toLocaleLowerCase: CASE,
+    toLocaleUpperCase: CASE, normalize: NORMALIZE };
   function guardString(name, cost) {
     replaceMethod(StringProto, name, (native) => ({
       m(...args) {
@@ -359,12 +386,34 @@ export const PRELUDE = String.raw`
       guardString(name, (s, args) => {
         // Naive search is O(haystack × needle).
         let needle = args[0];
-        if (typeof needle === "object" && needle !== null && !isRegExp(needle)) {
+        if (typeof needle === "object" && needle !== null) {
+          if (!isRegExp(needle)) needle = args[0] = StringCtor(needle);
+        } else if (typeof needle !== "symbol" && !(needle === undefined && UNDEFINED_OK.has(name))) {
           needle = args[0] = StringCtor(needle);
         }
         const m = typeof needle === "string" && needle.length > 1 ? needle.length : 1;
         charge(s.length * m * CHAR);
+        // With a regex the native calls its Symbol.split / Symbol.replace (charged below).
+        if (typeof needle !== "string") return;
+        const most = floor(s.length / (needle.length || 1)) + 1;
+        if (name === "split") {
+          const limit = args[1] === undefined ? most : (args[1] = +args[1]) >>> 0;
+          charge((limit < most ? limit : most) * PIECE);
+        } else if (name === "replace" || name === "replaceAll") {
+          chargeReplacement(s, args, name === "replace" ? 1 : most);
+        }
       });
+    } else if (name === "localeCompare") {
+      guardString(name, (s, args) => {
+        args[0] = StringCtor(args[0]);
+        charge((s.length + args[0].length) * NORMALIZE);
+      });
+    } else if (name === iteratorKey) {
+      // Spreading a string ([...s], Array.from(s)) builds one string per char in a native loop.
+      guardString(name, (s) => charge(s.length * PIECE));
+    } else if (hasOwn(PER_CHAR, name)) {
+      const weight = PER_CHAR[name];
+      guardString(name, (s) => charge(s.length * weight));
     } else if (name === "repeat") {
       guardString(name, (s, args) => {
         const n = s.length * (args[0] = +args[0]);
@@ -389,6 +438,68 @@ export const PRELUDE = String.raw`
     }
   }
 
+  // The output of a replace is the replacement once per match. "$" patterns expand to the
+  // matched text or a capture (together at most the string, assuming captures don't overlap)
+  // or to the text before or after the match (up to the whole string, per match). A replacer
+  // function runs as bytecode, but the native copies whatever it returns.
+  function chargeReplacement(s, args, matches) {
+    const r = args[1];
+    if (typeof r === "function") {
+      args[1] = function (...a) {
+        const out = StringCtor(apply(r, this, a));
+        charge(out.length * CHAR);
+        return out;
+      };
+      return;
+    }
+    const repl = args[1] = StringCtor(r);
+    let around = 0;
+    let other = 0;
+    for (let i = apply(indexOfString, repl, ["$"]); i >= 0;
+      i = apply(indexOfString, repl, ["$", i + 2])) {
+      const next = repl[i + 1];
+      if (next === "\u0060" || next === "'") around++;
+      else other++;
+    }
+    charge((matches * (repl.length + around * s.length) + other * s.length) * CHAR);
+  }
+
+  // Regex methods with many matches build a match or piece per char. The regex engine polls
+  // interrupts while it matches, but not while it builds results.
+  // Match and replace find one match unless the regex is global; the native reads that from
+  // the "global" and "flags" properties, so a getter there counts as global.
+  const RegExpProto = RegExp.prototype;
+  function isGlobal(rx) {
+    try {
+      if (apply(regexpGlobal, rx, [])) return true;
+    } catch {
+      return true;
+    }
+    for (let p = rx; p !== null; p = getPrototypeOf(p)) {
+      const d = getOwnPropertyDescriptor(p, "global");
+      const f = getOwnPropertyDescriptor(p, "flags");
+      if (p !== RegExpProto) {
+        if (d !== undefined || f !== undefined) return true;
+      } else {
+        return d === undefined || d.get !== regexpGlobal || f === undefined || f.get !== regexpFlags;
+      }
+    }
+    return true;
+  }
+  for (const key of [Symbol.match, Symbol.matchAll, Symbol.split, Symbol.replace]) {
+    const once = key === Symbol.match || key === Symbol.replace;
+    replaceMethod(RegExpProto, key, (native) => ({
+      m(...args) {
+        const s = args[0] = StringCtor(args[0]);
+        const many = !once || isGlobal(this);
+        if (many) charge(s.length * MATCH);
+        if (key === Symbol.replace) chargeReplacement(s, args, many ? s.length + 1 : 1);
+        return apply(native, this, args);
+      },
+    }).m);
+  }
+
+
   // ---- calls, JSON, object enumeration ----
 
   const argsLength = (i) => (_self, args, name) => {
@@ -398,11 +509,30 @@ export const PRELUDE = String.raw`
   guard(Function.prototype, "apply", argsLength(1));
   guard(Reflect, "apply", argsLength(2));
   guard(Reflect, "construct", argsLength(1));
-  guard(JSON, "parse", (_self, args) => charge((args[0] = StringCtor(args[0])).length * CHAR));
+  guard(JSON, "parse", (_self, args) => charge((args[0] = StringCtor(args[0])).length * PARSE));
+
+  // Control chars and lone surrogates are written as \uXXXX, which is ~20 times slower to quote.
+  // Short strings are charged as if they had them; scanning costs about as much as the quoting.
+  const SLOW_QUOTE = /[\u0000-\u001f\ud800-\udfff]/;
+  function quoteCost(str) {
+    if (str.length <= 64) return charge(str.length * QUOTE_U);
+    charge(str.length * QUOTE);
+    if (apply(regexpExec, SLOW_QUOTE, [str]) !== null) charge(str.length * (QUOTE_U - QUOTE));
+  }
+  function isStringObject(v) {
+    try {
+      apply(stringValueOf, v, []);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   // The replacer runs in bytecode for every value, so stringify is interrupt-checked; it also
-  // checks each array right before stringify walks it. An array replacer (a key allow-list) is
-  // turned into a function: same output, except keys come out in object order, not list order.
+  // checks each array right before stringify walks it, and charges each key and string before
+  // stringify quotes it (in one native call, however long the string). An array replacer (a key
+  // allow-list) is turned into a function: same output, except keys come out in object order,
+  // not list order.
   function stringify(value, replacer, space) {
     let keep;
     if (isArray(replacer)) {
@@ -418,7 +548,11 @@ export const PRELUDE = String.raw`
     return nativeStringify(value, function (key, v) {
       if (keep !== undefined && key !== "" && !isArray(this) && !keep.has(key)) return undefined;
       if (user !== undefined) v = apply(user, this, [key, v]);
-      if (isArray(v)) checked("JSON.stringify", v.length, ARRAY);
+      quoteCost(key);
+      // Stringify turns a String object into its string itself; do it here so it is charged.
+      if (typeof v === "object" && v !== null && isStringObject(v)) v = StringCtor(v);
+      if (typeof v === "string") quoteCost(v);
+      else if (isArray(v)) checked("JSON.stringify", v.length, ARRAY);
       else if (isTypedArray(v)) checked("JSON.stringify", typedLength(v), TYPED);
       return v;
     }, space);
@@ -478,12 +612,15 @@ export const PRELUDE = String.raw`
   guard(Function.prototype, "bind", (_self, args) => charge(args.length * ARRAY));
 
   // Global string functions walk their whole input.
-  for (const name of ["parseInt", "parseFloat", "isNaN", "isFinite", "escape", "unescape",
-    "encodeURI", "encodeURIComponent", "decodeURI", "decodeURIComponent"]) {
+  const GLOBAL_PER_CHAR = { parseInt: NUMBER, parseFloat: NUMBER, isNaN: NUMBER, isFinite: NUMBER,
+    escape: ENCODE, encodeURI: ENCODE, encodeURIComponent: ENCODE, unescape: DECODE,
+    decodeURI: DECODE, decodeURIComponent: DECODE };
+  for (const name of ObjectCtor.keys(GLOBAL_PER_CHAR)) {
+    const weight = GLOBAL_PER_CHAR[name];
     guard(g, name, (_self, args) => {
       if (args.length > 0 && typeof args[0] !== "number") {
         args[0] = typeof args[0] === "symbol" ? args[0] : StringCtor(args[0]);
-        if (typeof args[0] === "string") charge(args[0].length * CHAR);
+        if (typeof args[0] === "string") charge(args[0].length * weight);
       }
     });
   }
@@ -507,6 +644,21 @@ export const PRELUDE = String.raw`
   for (const name of ["union", "intersection", "difference", "symmetricDifference", "isSubsetOf",
     "isSupersetOf", "isDisjointFrom"]) {
     guard(Set.prototype, name, (self, args) => charge((sizeOf(self) + sizeOf(args[0])) * ARRAY));
+  }
+
+  // Set and Map iterators are walked in a native loop by spread, Array.from, new Set(…) and
+  // friends, without interrupt checks.
+  const mapSize = getOwnPropertyDescriptor(Map.prototype, "size").get;
+  for (const [proto, size] of [[Set.prototype, setSize], [Map.prototype, mapSize]]) {
+    for (const name of ["values", "keys", "entries", "forEach", iteratorKey]) {
+      guard(proto, name, (self) => {
+        let n = 0;
+        try {
+          n = apply(size, self, []);
+        } catch {}
+        charge(n * ENTRY);
+      });
+    }
   }
 
   // An exception inside a Promise executor or an async function becomes a rejection, and that

@@ -75,6 +75,17 @@ grows with its input:
   `String.raw`/`fromCharCode`, `bind`, `Array.of`, Set algebra (`union`, …), `parseInt`/`parseFloat`/
   `encodeURI`/…, `RegExp` compilation, and string arguments to array methods (`join` separators,
   `indexOf` of a long string).
+- Strings are charged per char at the measured cost of each built-in: copying and searching 1,
+  case mapping 30, `normalize`/`localeCompare` 150, URI encoding 50, `JSON.parse` 10.
+  `JSON.stringify` charges each key and string before it quotes it (40 per char, or 200 if the
+  string has chars it writes as `\uXXXX`).
+- Built-ins that make one value per char are charged for each one: `split`, spreading a string
+  (`[...s]`, `Array.from(s)`), and regex `match`/`matchAll`/`split`/global `replace` (also called
+  through `RegExp.prototype[Symbol.*]`). A replace is charged for its output: the replacement
+  once per possible match, each ``$` `` or `$'` in it as the whole string, and whatever a
+  replacer function returns.
+- Iterating a `Set` or `Map` (spread, `Array.from`, `new Set(set)`, `forEach`) is charged per
+  entry up front.
 
 Memory: emscripten builds of QuickJS don't count allocation sizes, so `setMemoryLimit` only stops a
 single allocation above the limit. The real guards:
@@ -90,15 +101,18 @@ The cap should cover bots × `memoryLimitBytes`, or honest bots can run the heap
 
 ## Known gaps
 
-- **Operators on huge strings** (`===`, `<`, `+`, `Number(s)`, using one as a property key or a
-  Map/Set key) and object spread over huge objects run in C uncharged, and nothing in JS can
-  intercept them. A bot can build
-  strings of tens of MB within one tick (`a = a + a`; the memory check only runs between ticks), and
+- **Operators and conversions on huge strings** run in C uncharged, and nothing in JS can
+  intercept them: `===`, `<`, `+` and template literals, `Number(s)`/`+s`, `String(x)`, using a
+  string as a property key or a Map/Set key. So does object spread over huge objects. Every
+  built-in function that walks a string is wrapped; these are syntax. A bot can build strings of
+  tens of MB within one tick (`a = a + a`; the memory check only runs between ticks), and
   `for (;;) a === b` on two 16 MB strings runs for over a minute inside one tick (verified). Only
   the DO's CPU limit stops that, so the room backstop (replay the batch with bots isolated, ban
   the version) is required. Closing it needs a QuickJS build with real allocation accounting (so
   `setMemoryLimit` bounds strings) or a more frequent interrupt counter.
+- Work weights are worst cases measured on an M1 (≈ 1 unit per ns). Regex methods also poll
+  interrupts inside the regex engine, but a single poll can cover a few ms of match building.
 - Which bot hits the shared heap cap first depends on the other bots in the sandbox, so OOM deaths
   are not reproducible across rooms (everything else is).
 - `JSON.stringify` with an array replacer emits keys in object order, not list order.
-- Starting a life costs ~3 ms (prelude setup), versus ~0.3 ms for a bare context.
+- Starting a life costs ~3.7 ms (prelude setup), versus ~0.3 ms for a bare context.

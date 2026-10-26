@@ -17,20 +17,27 @@ import { getBotPageData, getVersionSources } from "../../server/pages";
 interface BotSearch {
   /** Version number whose lives and sources are shown. */
   v?: number;
+  /** Page of the versions table. */
+  page?: number;
 }
 
 export const Route = createFileRoute("/@{$username}/$bot")({
   validateSearch: (search: Record<string, unknown>): BotSearch => {
     const v = Number(search.v);
-    return Number.isInteger(v) && v >= 1 ? { v } : {};
+    const page = Number(search.page);
+    return {
+      ...(Number.isInteger(v) && v >= 1 && { v }),
+      ...(Number.isInteger(page) && page > 1 && page <= 1000 && { page }),
+    };
   },
-  loaderDeps: ({ search }) => ({ v: search.v }),
+  loaderDeps: ({ search }) => ({ v: search.v, page: search.page }),
   loader: async ({ params, deps }) => {
     const page = await getBotPageData({
       data: {
         username: params.username,
         bot: params.bot,
         ...(deps.v !== undefined && { version: deps.v }),
+        ...(deps.page !== undefined && { page: deps.page }),
       },
     });
     if (!page) throw notFound();
@@ -53,8 +60,10 @@ const STATUS: Record<VersionRow["status"], string> = {
 
 function BotPage() {
   const page = Route.useLoaderData();
-  const { author, bot, versions, selected, minLives } = page;
-  const active = versions.find((v) => v.status === "ready");
+  const { author, bot, versions, selected, minLives, active, hasOlder } = page;
+  const versionsPage = page.page;
+  const paged = hasOlder || versionsPage > 1;
+  const pageSearch = versionsPage > 1 ? { page: versionsPage } : {};
 
   return (
     <>
@@ -80,7 +89,15 @@ function BotPage() {
       </section>
 
       <section className="panel">
-        <h2 className="subtitle">Rating by version</h2>
+        <h2 className="subtitle">
+          Rating by version
+          {paged && versions.length > 0 && (
+            <span className="muted small">
+              {" "}
+              v{versions.at(-1)?.n}–v{versions[0]?.n}
+            </span>
+          )}
+        </h2>
         <RatingChart versions={versions} minLives={minLives} />
       </section>
 
@@ -88,7 +105,13 @@ function BotPage() {
         <h2 className="subtitle">Versions</h2>
         {versions.length === 0 ? (
           <Empty>
-            No versions yet. <code>npx zerosnake deploy</code> uploads the first one.
+            {versionsPage > 1 ? (
+              "No versions on this page."
+            ) : (
+              <>
+                No versions yet. <code>npx zerosnake deploy</code> uploads the first one.
+              </>
+            )}
           </Empty>
         ) : (
           <div className="table-scroll">
@@ -109,7 +132,7 @@ function BotPage() {
                       <Link
                         to="/@{$username}/$bot"
                         params={{ username: author.username, bot: bot.slug }}
-                        search={{ v: v.n }}
+                        search={{ ...pageSearch, v: v.n }}
                         aria-current={v.id === selected?.id ? "true" : undefined}
                       >
                         v{v.n}
@@ -133,6 +156,33 @@ function BotPage() {
             </table>
           </div>
         )}
+        {paged && (
+          <nav className="pager" aria-label="Version pages">
+            {versionsPage > 1 ? (
+              <Link
+                to="/@{$username}/$bot"
+                params={{ username: author.username, bot: bot.slug }}
+                search={versionsPage === 2 ? {} : { page: versionsPage - 1 }}
+              >
+                ← Newer
+              </Link>
+            ) : (
+              <span />
+            )}
+            <span className="muted">Page {versionsPage}</span>
+            {hasOlder ? (
+              <Link
+                to="/@{$username}/$bot"
+                params={{ username: author.username, bot: bot.slug }}
+                search={{ page: versionsPage + 1 }}
+              >
+                Older →
+              </Link>
+            ) : (
+              <span />
+            )}
+          </nav>
+        )}
       </section>
 
       {selected && (
@@ -140,7 +190,12 @@ function BotPage() {
           <section className="panel">
             <h2 className="subtitle">Recent lives of v{selected.n}</h2>
             {selected.causes.length > 0 && (
-              <ul className="chips" aria-label="Deaths by cause">
+              <p className="muted small">
+                How the latest {selected.causes.reduce((n, c) => n + c.count, 0)} lives ended:
+              </p>
+            )}
+            {selected.causes.length > 0 && (
+              <ul className="chips" aria-label="Death causes">
                 {selected.causes.map((c) => (
                   <li key={c.cause} className="chip">
                     {DEATH_CAUSES[c.cause]} <span className="muted">{c.count}</span>

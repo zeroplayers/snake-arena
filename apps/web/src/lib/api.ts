@@ -19,6 +19,11 @@ export interface LeaderboardEntry {
   rating: number;
   /** Half-width of the confidence interval around `rating`. */
   ratingCi: number;
+  /** `rating - ratingCi`: what the leaderboard is sorted by. */
+  lowerBound: number;
+  /** Lives behind `rating` (`ratings.n_lives`). */
+  ratedLives: number;
+  /** Every life the version played. */
   lives: number;
 }
 

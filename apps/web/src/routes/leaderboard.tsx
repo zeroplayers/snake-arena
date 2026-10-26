@@ -27,7 +27,8 @@ function Leaderboard() {
       <h1 className="title">Leaderboard</h1>
       <p className="muted">
         Versions enter the leaderboard after {minLives} lives. Rating is the mean score over the
-        last 200, ± the 95% confidence interval.
+        last 200 lives ± the 95% confidence interval. Bots are ranked by the low end of that range,
+        so a lucky streak doesn't beat a steady record.
       </p>
       <div className="table-scroll">
         <table className="table">

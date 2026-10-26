@@ -196,12 +196,17 @@ export const versions = sqliteTable(
      * doesn't count against the daily quota).
      */
     enqueuedAt: integer("enqueued_at", { mode: "timestamp_ms" }),
+    /**
+     * Every life of the version (alive ones too). Kept by triggers on `lives` (migration
+     * `0002_page_counters`), so pages never count `lives` rows. Writers need do nothing.
+     */
+    livesCount: integer("lives_count").notNull().default(0),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [
     // Bot page: versions newest first. No index on `status` alone: it would steer the
-    // leaderboard query away from `ratings_mean_idx`.
+    // leaderboard query away from `ratings_rank_idx`.
     uniqueIndex("versions_bot_n_idx").on(t.botId, t.n),
     uniqueIndex("versions_bot_idempotency_idx").on(t.botId, t.idempotencyKey),
     // A bot has at most one active version.
@@ -257,10 +262,26 @@ export const ratings = sqliteTable(
     /** Half-width of the 95% confidence interval around `mean`. */
     ci: real("ci").notNull(),
     nLives: integer("n_lives").notNull(),
+    /**
+     * `mean - ci`, the leaderboard's sort key (as in `@zerosnake/rating`'s `leaderboard()`): a
+     * lucky 30-life mean doesn't outrank a better bot with a tighter interval. Generated, so
+     * nothing writes it.
+     */
+    lowerBound: real("lower_bound").generatedAlwaysAs(sql`mean - ci`, { mode: "virtual" }),
     updatedAt: updatedAt(),
   },
-  // Leaderboard: highest mean first, filtered by `n_lives >= 30`.
-  (t) => [index("ratings_mean_idx").on(t.mean)],
+  // Leaderboard: highest lower bound first (`ratings_rank_idx`), filtered by `n_lives >= 30`.
+  (t) => [
+    index("ratings_mean_idx").on(t.mean),
+    // Leaderboard order, `lower_bound DESC, ci ASC, n_lives DESC, version_id`, read backwards so
+    // rows come out sorted and `LIMIT` stops early.
+    index("ratings_rank_idx").on(
+      t.lowerBound,
+      sql`${t.ci} DESC`,
+      t.nLives,
+      sql`${t.versionId} DESC`,
+    ),
+  ],
 );
 
 export const authSchema = { users, sessions, accounts, verifications, deviceCodes };

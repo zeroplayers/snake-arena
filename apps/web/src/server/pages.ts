@@ -33,9 +33,19 @@ export const getLeaderboardPage = createServerFn({ method: "GET" })
   });
 
 export const getBotPageData = createServerFn({ method: "GET" })
-  .validator(z.object({ username: id, bot: id, version: z.number().int().min(1).optional() }))
+  .validator(
+    z.object({
+      username: id,
+      bot: id,
+      version: z.number().int().min(1).optional(),
+      page: z.number().int().min(1).max(1000).optional(),
+    }),
+  )
   .handler(async ({ data }) => {
-    const page = await getBotPage(getDb(), data.username, data.bot, data.version);
+    const page = await getBotPage(getDb(), data.username, data.bot, {
+      ...(data.version !== undefined && { version: data.version }),
+      ...(data.page !== undefined && { page: data.page }),
+    });
     return page && { ...page, minLives: RANKED_MIN_LIVES };
   });
 

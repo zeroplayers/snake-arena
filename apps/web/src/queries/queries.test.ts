@@ -3,7 +3,7 @@ import { buildPagesSeed, REPLAY_ROOM, REPLAY_TICKS } from "../../seed/pages-data
 import { createDb, type Db } from "../db";
 import { getLeaderboard, getProfile } from "../db/queries";
 import { createTestD1, type TestD1 } from "../test/d1";
-import { getBotPage, RECENT_LIVES } from "./bot";
+import { CAUSES_WINDOW, getBotPage, RECENT_LIVES, VERSIONS_PER_PAGE } from "./bot";
 import { getParticipants, getReplayKey, getReplayLife } from "./replay";
 
 let d1: TestD1;
@@ -59,8 +59,8 @@ describe("getBotPage", () => {
 
   it("selects the active version by default, another with `versionN`", async () => {
     expect((await getBotPage(db, "ada", "greedy"))?.selected?.n).toBe(2);
-    expect((await getBotPage(db, "ada", "greedy", 1))?.selected?.n).toBe(1);
-    expect(await getBotPage(db, "ada", "greedy", 9)).toBeNull();
+    expect((await getBotPage(db, "ada", "greedy", { version: 1 }))?.selected?.n).toBe(1);
+    expect(await getBotPage(db, "ada", "greedy", { version: 9 })).toBeNull();
   });
 
   it("falls back to the newest version without an active one", async () => {
@@ -109,7 +109,7 @@ describe("getBotPage", () => {
   });
 
   it("counts deaths by cause, most common first", async () => {
-    const causes = (await getBotPage(db, "ada", "greedy", 1))?.selected?.causes ?? [];
+    const causes = (await getBotPage(db, "ada", "greedy", { version: 1 }))?.selected?.causes ?? [];
     expect(causes.reduce((n, c) => n + c.count, 0)).toBe(120);
     expect(causes[0]?.cause).toBe("collision");
     const counts = causes.map((c) => c.count);
@@ -139,5 +139,125 @@ describe("replay queries", () => {
     const late = await getParticipants(db, REPLAY_ROOM, REPLAY_TICKS - 1, REPLAY_TICKS);
     expect(late.length).toBeLessThan(all.length);
     expect(await getParticipants(db, "elsewhere", 0, REPLAY_TICKS)).toEqual([]);
+  });
+});
+
+describe("bounded page cost", () => {
+  const run = (sql: string, ...params: unknown[]) =>
+    d1.db
+      .prepare(sql)
+      .bind(...params)
+      .run();
+  const livesCount = async (versionId: string) =>
+    (
+      await d1.db
+        .prepare("SELECT lives_count AS n FROM versions WHERE id = ?")
+        .bind(versionId)
+        .first<{ n: number }>()
+    )?.n;
+
+  it("keeps `versions.lives_count` equal to the lives rows", async () => {
+    const { results } = await d1.db
+      .prepare(
+        `SELECT v.id, v.lives_count AS kept, (SELECT count(*) FROM lives WHERE version_id = v.id) AS real
+         FROM versions v`,
+      )
+      .all<{ kept: number; real: number }>();
+    expect(results.length).toBeGreaterThan(5);
+    for (const r of results) expect(r.kept).toBe(r.real);
+
+    const before = (await livesCount("seed-hunter-1")) ?? 0;
+    await run(
+      "INSERT INTO lives (id, version_id, room, start_tick) VALUES ('t-life', 'seed-hunter-1', 'r', 0)",
+    );
+    expect(await livesCount("seed-hunter-1")).toBe(before + 1);
+    await run("UPDATE lives SET version_id = 'seed-wip-1' WHERE id = 't-life'");
+    expect(await livesCount("seed-hunter-1")).toBe(before);
+    expect(await livesCount("seed-wip-1")).toBe(1);
+    await run("DELETE FROM lives WHERE id = 't-life'");
+    expect(await livesCount("seed-wip-1")).toBe(0);
+  });
+
+  it("pages a bot with more versions than D1 has bound parameters", async () => {
+    const total = 120;
+    await run(
+      "INSERT INTO bots (id, owner_id, name, slug) VALUES ('t-many', 'seed-linus', 'Many', 'many')",
+    );
+    await d1.db.batch(
+      Array.from({ length: total }, (_, i) =>
+        d1.db
+          .prepare(
+            "INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key) VALUES (?, 't-many', ?, ?, 'b', 's')",
+          )
+          .bind(`t-many-${i + 1}`, i + 1, i + 1 === 7 ? "ready" : "archived"),
+      ),
+    );
+    await run(
+      "INSERT INTO lives (id, version_id, room, start_tick, end_tick, ended_at, death_cause) VALUES ('t-many-life', 't-many-120', 'r', 0, 10, 1, 'wall')",
+    );
+
+    const first = await getBotPage(db, "linus", "many");
+    expect(first?.versions).toHaveLength(VERSIONS_PER_PAGE);
+    expect(first?.versions[0]).toMatchObject({ n: 120, lives: 1 });
+    expect(first?.hasOlder).toBe(true);
+    // The active version is off the first page but still found and selected.
+    expect(first?.active?.n).toBe(7);
+    expect(first?.selected?.n).toBe(7);
+
+    const last = await getBotPage(db, "linus", "many", { page: 3 });
+    expect(last?.versions.map((v) => v.n)).toEqual(
+      Array.from(
+        { length: total - 2 * VERSIONS_PER_PAGE },
+        (_, i) => total - 2 * VERSIONS_PER_PAGE - i,
+      ),
+    );
+    expect(last?.hasOlder).toBe(false);
+    expect((await getBotPage(db, "linus", "many", { page: 9 }))?.versions).toEqual([]);
+    expect((await getBotPage(db, "linus", "many", { version: 120 }))?.selected).toMatchObject({
+      n: 120,
+      causes: [{ cause: "wall", count: 1 }],
+    });
+  });
+
+  it("counts death causes over the latest lives only", async () => {
+    // greedy v2 has more finished lives than the window (dev.sql plus the recorded match).
+    const page = await getBotPage(db, "ada", "greedy");
+    expect(page?.selected && page.versions[0]?.lives).toBeGreaterThan(CAUSES_WINDOW);
+    const causes = page?.selected?.causes ?? [];
+    expect(causes.reduce((n, c) => n + c.count, 0)).toBe(CAUSES_WINDOW);
+  });
+
+  it("counts an author's lives from the counters", async () => {
+    const profile = await getProfile(db, "ada");
+    const page = await getBotPage(db, "ada", "greedy");
+    const sum = (page?.versions ?? []).reduce((n, v) => n + v.lives, 0);
+    expect(profile?.bots.find((b) => b.slug === "greedy")?.lives).toBe(sum);
+  });
+});
+
+describe("leaderboard order", () => {
+  it("ranks by the lower bound, not the mean", async () => {
+    // A lucky 30-life version with a high mean and a wide interval, and a steady one.
+    await d1.db.batch([
+      d1.db.prepare(
+        "INSERT INTO bots (id, owner_id, name, slug) VALUES ('t-lucky', 'seed-grace', 'Lucky', 'lucky'), ('t-steady', 'seed-grace', 'Steady', 'steady')",
+      ),
+      d1.db.prepare(
+        "INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key) VALUES ('t-lucky-1', 't-lucky', 1, 'ready', 'b', 's'), ('t-steady-1', 't-steady', 1, 'ready', 'b', 's')",
+      ),
+      d1.db.prepare(
+        "INSERT INTO ratings (version_id, mean, ci, n_lives) VALUES ('t-lucky-1', 500, 450, 30), ('t-steady-1', 300, 20, 200)",
+      ),
+    ]);
+    const rows = await getLeaderboard(db);
+    const names = rows.map((r) => r.botSlug);
+    expect(names.indexOf("steady")).toBeLessThan(names.indexOf("lucky"));
+    expect(names[0]).toBe("steady");
+    const lowers = rows.map((r) => r.lowerBound);
+    expect(lowers).toEqual([...lowers].sort((a, b) => b - a));
+    expect(rows.find((r) => r.botSlug === "lucky")).toMatchObject({
+      lowerBound: 50,
+      ratedLives: 30,
+    });
   });
 });

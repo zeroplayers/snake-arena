@@ -30,7 +30,12 @@ and the empty cases `/@newbie`, `/@linus/draft`, `/@grace/wip`.
 | `/replay/{lifeId}`   | `src/queries/replay.ts` + the life's chunk from `REPLAYS`, played by `ReplaySource`                                                                                 |
 
 Ratings are read, never computed here: when `packages/rating` lands, only `leaderboardQuery` and
-the `ratings` columns it reads are involved.
+the `ratings` columns it reads are involved. `ratings.lower_bound` is a generated column for now;
+the rating work can make it a stored one with the same name.
+
+Page views never aggregate `lives`: totals come from `versions.lives_count`, which triggers on
+`lives` keep current (`migrations/0002_page_counters.sql`), and every `lives` query is an index
+range with a `LIMIT` (latest 20 lives, death causes over the latest 200).
 
 `src/replay/ReplaySource.ts` is the `MatchSource` the viewer plays replays from: it runs the chunks
 once through `ReplayPlayer` (checking hashes; on a mismatch it plays on and the page warns), keeps

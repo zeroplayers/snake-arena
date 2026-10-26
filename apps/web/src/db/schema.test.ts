@@ -208,7 +208,7 @@ describe("indexes", () => {
   it("serve the leaderboard in rating order without sorting", async () => {
     const query = leaderboardQuery(db).toSQL();
     const detail = await plan(query.sql, query.params);
-    expect(detail).toMatch(/ratings_mean_idx/);
+    expect(detail).toMatch(/ratings_rank_idx/);
     expect(detail).not.toMatch(/TEMP B-TREE/);
   });
 

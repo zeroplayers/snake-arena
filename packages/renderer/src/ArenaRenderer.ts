@@ -2,9 +2,10 @@ import { OrthographicCamera, Scene, WebGLRenderer } from "three";
 import { FrameBuffer, lerp } from "./interpolate.ts";
 import { BackgroundRenderer, DEFAULT_BACKGROUND } from "./renderers/BackgroundRenderer.ts";
 import { FoodRenderer } from "./renderers/FoodRenderer.ts";
+import { HighlightRenderer } from "./renderers/HighlightRenderer.ts";
 import { SnakeRenderer } from "./renderers/SnakeRenderer.ts";
 import { SkinTextures } from "./skins/index.ts";
-import type { CameraMode, RenderFrame } from "./types.ts";
+import type { CameraMode, Highlight, RenderFrame, Vec2 } from "./types.ts";
 
 export interface RendererOptions {
   /** Simulation ticks per second of frames fed through `push`. Default 10. */
@@ -43,10 +44,12 @@ export class ArenaRenderer {
   private readonly background: BackgroundRenderer;
   private readonly food: FoodRenderer;
   private readonly snakes: SnakeRenderer;
+  private readonly highlighter: HighlightRenderer;
   private readonly buffer: FrameBuffer;
   private readonly resizeObserver: ResizeObserver;
 
   private cameraMode: CameraMode;
+  private highlight: Highlight | undefined;
   private zoom = 1;
   private viewHeight = 0; // 0 = snap on the next draw
   private width = 1;
@@ -80,6 +83,7 @@ export class ArenaRenderer {
     });
     this.food = new FoodRenderer(this.scene, this.textures);
     this.snakes = new SnakeRenderer(this.scene, this.textures, options.segmentSpacing ?? 1.4);
+    this.highlighter = new HighlightRenderer(this.scene);
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
@@ -115,10 +119,16 @@ export class ArenaRenderer {
     this.tick = lerp(prev.tick, next.tick, alpha);
 
     const arenaRadius = next.arenaRadius;
-    const followId = this.cameraMode.mode === "follow" ? this.cameraMode.snakeId : undefined;
+    const onTop =
+      this.highlight?.snakeId ??
+      (this.cameraMode.mode === "follow" ? this.cameraMode.snakeId : undefined);
     this.background.setArenaRadius(arenaRadius);
     this.background.update(dt);
-    this.snakes.update(prev.snakes, next.snakes, alpha, followId);
+    this.snakes.update(prev.snakes, next.snakes, alpha, onTop);
+    this.highlighter.update(
+      this.highlight,
+      this.highlight && this.snakes.view(this.highlight.snakeId),
+    );
     this.food.update(prev.food, next.food, alpha, this.snakes.headPositions(), dt);
     this.updateCamera(dt, arenaRadius);
     this.webgl.render(this.scene, this.camera);
@@ -130,6 +140,22 @@ export class ArenaRenderer {
 
   getCamera(): CameraMode {
     return this.cameraMode;
+  }
+
+  /** Draws a disc around a snake's head (e.g. its vision radius); `undefined` removes it. */
+  setHighlight(highlight: Highlight | undefined): void {
+    this.highlight = highlight;
+  }
+
+  /** World position under a point in client (CSS pixel) coordinates, as of the last draw. */
+  screenToWorld(clientX: number, clientY: number): Vec2 {
+    const rect = this.domElement.getBoundingClientRect();
+    const nx = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
+    const ny = 1 - ((clientY - rect.top) / Math.max(1, rect.height)) * 2;
+    return {
+      x: this.camera.position.x + nx * this.camera.right,
+      y: this.camera.position.y + ny * this.camera.top,
+    };
   }
 
   /** Extra zoom on top of the camera mode's own; > 1 zooms in. */
@@ -150,6 +176,7 @@ export class ArenaRenderer {
     this.stop();
     this.resizeObserver.disconnect();
     this.snakes.destroy();
+    this.highlighter.destroy();
     this.food.destroy();
     this.background.destroy();
     this.textures.dispose();
@@ -171,6 +198,8 @@ export class ArenaRenderer {
         y = view.y;
         // Zoom out as the snake grows, like the original's per-player zoom.
         height = view.radius * (FOLLOW_VIEW_RADII + Math.sqrt(view.length) * 1.5);
+        const minRadius = this.cameraMode.minViewRadius ?? 0;
+        height = Math.max(height, (minRadius * 2 * OVERVIEW_MARGIN) / Math.min(1, aspect));
       } else {
         // Followed snake is gone (dead, not spawned yet): hold position.
         x = this.camera.position.x;

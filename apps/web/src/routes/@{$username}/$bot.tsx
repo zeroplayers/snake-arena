@@ -189,11 +189,7 @@ function BotPage() {
         <>
           <section className="panel">
             <h2 className="subtitle">Recent lives of v{selected.n}</h2>
-            {selected.causes.length > 0 && (
-              <p className="muted small">
-                How the latest {selected.causes.reduce((n, c) => n + c.count, 0)} lives ended:
-              </p>
-            )}
+            {selected.causes.length > 0 && <CausesCaption causes={selected.causes} />}
             {selected.causes.length > 0 && (
               <ul className="chips" aria-label="Death causes">
                 {selected.causes.map((c) => (
@@ -296,4 +292,13 @@ function VersionSources({ versionId }: { versionId: string }) {
   if (error) return <p className="error">Couldn't load the sources: {error}</p>;
   if (sources === undefined) return <p className="muted">Loading sources…</p>;
   return <SourceFiles key={versionId} sources={sources} />;
+}
+
+function CausesCaption({ causes }: { causes: { count: number }[] }) {
+  const n = causes.reduce((sum, c) => sum + c.count, 0);
+  return (
+    <p className="muted small">
+      {n === 1 ? "How the latest life ended:" : `How the latest ${n} lives ended:`}
+    </p>
+  );
 }

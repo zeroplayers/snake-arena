@@ -1,6 +1,6 @@
 /**
  * Real D1 (workerd, via wrangler's platform proxy) for tests, migrated with the same SQL files
- * `wrangler d1 migrations apply` uses. Nothing is persisted.
+ * `wrangler d1 migrations apply` uses, plus R2 and Queues for the CLI API. Nothing is persisted.
  */
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,7 +17,21 @@ export interface TestD1 {
 }
 
 export async function createTestD1({ seed = false } = {}): Promise<TestD1> {
-  // A config with nothing but the database, so the proxy doesn't look for apps/arena.
+  const { env, dispose } = await createTestPlatform({ seed });
+  return { db: env.DB, dispose };
+}
+
+/** What the CLI API needs besides D1: the R2 buckets and the checks queue producer. */
+export interface TestPlatformEnv {
+  DB: D1Database;
+  BUNDLES: R2Bucket;
+  SOURCES: R2Bucket;
+  CHECKS_QUEUE: Queue;
+}
+
+/** D1 plus local R2 buckets and a queue producer (Miniflare), nothing persisted. */
+export async function createTestPlatform({ seed = false } = {}) {
+  // A config with nothing but these bindings, so the proxy doesn't look for apps/arena.
   const dir = mkdtempSync(join(tmpdir(), "zerosnake-d1-"));
   const configPath = join(dir, "wrangler.json");
   writeFileSync(
@@ -26,19 +40,23 @@ export async function createTestD1({ seed = false } = {}): Promise<TestD1> {
       name: "zerosnake-web-test",
       compatibility_date: "2026-10-15",
       d1_databases: [{ binding: "DB", database_name: "test", database_id: "test" }],
+      r2_buckets: [
+        { binding: "BUNDLES", bucket_name: "test-bundles" },
+        { binding: "SOURCES", bucket_name: "test-sources" },
+      ],
+      queues: { producers: [{ binding: "CHECKS_QUEUE", queue: "test-checks" }] },
     }),
   );
-  const proxy = await getPlatformProxy<{ DB: D1Database }>({
+  const proxy = await getPlatformProxy<TestPlatformEnv>({
     configPath,
     persist: false,
     envFiles: [],
     remoteBindings: false,
   });
-  const db = proxy.env.DB;
-  await applyMigrations(db);
-  if (seed) await execFile(db, seedFile);
+  await applyMigrations(proxy.env.DB);
+  if (seed) await execFile(proxy.env.DB, seedFile);
   return {
-    db,
+    env: proxy.env,
     dispose: async () => {
       await proxy.dispose();
       rmSync(dir, { recursive: true, force: true });

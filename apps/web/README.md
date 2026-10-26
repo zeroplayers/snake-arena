@@ -37,3 +37,40 @@ The staging deploy applies new migrations with `wrangler d1 migrations apply DB 
 - `/settings`: list and revoke CLI tokens (`GET /api/auth/cli/tokens`, `POST /api/auth/cli/tokens/revoke`).
 
 Tests run Better Auth against a real D1 (wrangler's platform proxy) with GitHub mocked at `fetch`.
+
+## CLI API (deploy)
+
+`src/server/cli-api.ts`, behind `Authorization: Bearer zsk_…` only (browser sessions get 401).
+Shapes and error codes: `src/shared/deploy.ts`.
+
+| Endpoint                         | For                |
+| -------------------------------- | ------------------ |
+| `GET /api/me`                    | `zerosnake status` |
+| `POST /api/bots`                 | create a bot       |
+| `POST /api/bots/:bot/versions`   | `zerosnake deploy` |
+| `GET /api/bots/:bot/versions/:n` | status and report  |
+
+A deploy is JSON `{ bundle, sources: [{ path, content }], meta? }`, optionally with an
+`Idempotency-Key` header. Limits (`DEPLOY_LIMITS`): ≤ 50 source files, ≤ 1 MB of sources, bundle
+≤ 256 KB, sane relative paths, `DEPLOYS_PER_DAY` per author per UTC day and `BOTS_PER_AUTHOR`
+(wrangler vars). Then:
+
+1. one `INSERT … SELECT` creates the `validating` version, taking the next `n` and checking the
+   quota atomically;
+2. the bundle and a `SourceArchive` JSON go to R2 under `<sha256>.js` / `<sha256>.json`;
+3. a `CheckJob` goes on `CHECKS_QUEUE` and the row gets `enqueued_at`.
+
+If step 2 or 3 fails, the version becomes `rejected` with a report saying why (and doesn't count
+against the quota), and the CLI gets 503. A retry with the same `Idempotency-Key` gets the version
+once it's queued, 409 `deploy_in_progress` while the first attempt runs, and takes over an attempt
+stuck unqueued for over a minute.
+
+R2 objects are content-addressed, so identical uploads (also across authors) share one object;
+never delete one because a version goes away. Uploads happen only after their version row exists
+(lost quota races upload nothing), so objects become unreferenced only when versions are deleted,
+e.g. with their bot. Cleanup, once that exists, is a mark-and-sweep job: list each bucket and
+delete keys older than a day that no `versions.bundle_key` / `source_key` references.
+
+`@zerosnake/web/shared` (`src/shared/`) is what other workspaces may import without pulling in the
+site: `CheckJob` and `isCheckJob` for apps/arena's consumer, `CheckReport`, `SourceArchive`, and
+the CLI API types.

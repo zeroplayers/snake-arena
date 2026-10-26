@@ -17,6 +17,8 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
+import type { CheckReport } from "../shared/checks";
+import { type DeployMeta, type VersionStatus, versionStatuses } from "../shared/deploy";
 
 const now = sql`(cast(unixepoch('subsecond') * 1000 as integer))`;
 
@@ -167,16 +169,8 @@ export const bots = sqliteTable(
   (t) => [uniqueIndex("bots_owner_slug_idx").on(t.ownerId, t.slug)],
 );
 
-export const versionStatuses = ["validating", "ready", "rejected", "archived"] as const;
-export type VersionStatus = (typeof versionStatuses)[number];
-
-/** Result of the deploy checks, shown by the CLI when a version is rejected. */
-export interface CheckReport {
-  ok: boolean;
-  checks: { name: string; ok: boolean; message?: string }[];
-  /** Mean score in the qualification run, if it got that far. */
-  qualificationScore?: number;
-}
+export type { CheckReport, DeployMeta, VersionStatus };
+export { versionStatuses };
 
 export const versions = sqliteTable(
   "versions",
@@ -192,6 +186,16 @@ export const versions = sqliteTable(
     bundleKey: text("bundle_key").notNull(),
     sourceKey: text("source_key").notNull(),
     report: text("report", { mode: "json" }).$type<CheckReport>(),
+    /** What the CLI sent along (`cliVersion`, `sdkVersion`, `message`). */
+    meta: text("meta", { mode: "json" }).$type<DeployMeta>(),
+    /** `Idempotency-Key` of the deploy request, so a retried upload doesn't make a second version. */
+    idempotencyKey: text("idempotency_key"),
+    /**
+     * When the deploy API put the `CheckJob` on `CHECKS_QUEUE`. `null` on a `validating` row means
+     * the deploy is still in flight; on a `rejected` row, that it failed before being queued (it
+     * doesn't count against the daily quota).
+     */
+    enqueuedAt: integer("enqueued_at", { mode: "timestamp_ms" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -199,6 +203,7 @@ export const versions = sqliteTable(
     // Bot page: versions newest first. No index on `status` alone: it would steer the
     // leaderboard query away from `ratings_mean_idx`.
     uniqueIndex("versions_bot_n_idx").on(t.botId, t.n),
+    uniqueIndex("versions_bot_idempotency_idx").on(t.botId, t.idempotencyKey),
     // A bot has at most one active version.
     uniqueIndex("versions_bot_ready_idx").on(t.botId).where(sql`status = 'ready'`),
     check("versions_status_check", oneOf(t.status, versionStatuses)),

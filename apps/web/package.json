@@ -4,6 +4,9 @@
   "private": true,
   "description": "Site: TanStack Start on Workers",
   "type": "module",
+  "exports": {
+    "./shared": "./src/shared/index.ts"
+  },
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",

@@ -15,9 +15,13 @@ import { Route as DeviceRouteImport } from './routes/device'
 import { Route as LeaderboardRouteImport } from './routes/leaderboard'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as WelcomeRouteImport } from './routes/welcome'
+import { Route as ApiBotsRouteImport } from './routes/api/bots'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
+import { Route as ApiMeRouteImport } from './routes/api/me'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiUsersUsernameRouteImport } from './routes/api/users/$username'
+import { Route as ApiBotsBotVersionsRouteImport } from './routes/api/bots/$bot/versions'
+import { Route as ApiBotsBotVersionsNRouteImport } from './routes/api/bots/$bot/versions/$n'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -50,9 +54,19 @@ const WelcomeRoute = WelcomeRouteImport.update({
   path: '/welcome',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiBotsRoute = ApiBotsRouteImport.update({
+  id: '/api/bots',
+  path: '/api/bots',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
   id: '/api/health',
   path: '/api/health',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMeRoute = ApiMeRouteImport.update({
+  id: '/api/me',
+  path: '/api/me',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
@@ -65,6 +79,16 @@ const ApiUsersUsernameRoute = ApiUsersUsernameRouteImport.update({
   path: '/api/users/$username',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiBotsBotVersionsRoute = ApiBotsBotVersionsRouteImport.update({
+  id: '/$bot/versions',
+  path: '/$bot/versions',
+  getParentRoute: () => ApiBotsRoute,
+} as any)
+const ApiBotsBotVersionsNRoute = ApiBotsBotVersionsNRouteImport.update({
+  id: '/$n',
+  path: '/$n',
+  getParentRoute: () => ApiBotsBotVersionsRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -73,9 +97,13 @@ export interface FileRoutesByFullPath {
   '/leaderboard': typeof LeaderboardRoute
   '/settings': typeof SettingsRoute
   '/welcome': typeof WelcomeRoute
+  '/api/bots': typeof ApiBotsRouteWithChildren
   '/api/health': typeof ApiHealthRoute
+  '/api/me': typeof ApiMeRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
+  '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
+  '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -84,9 +112,13 @@ export interface FileRoutesByTo {
   '/leaderboard': typeof LeaderboardRoute
   '/settings': typeof SettingsRoute
   '/welcome': typeof WelcomeRoute
+  '/api/bots': typeof ApiBotsRouteWithChildren
   '/api/health': typeof ApiHealthRoute
+  '/api/me': typeof ApiMeRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
+  '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
+  '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -96,9 +128,13 @@ export interface FileRoutesById {
   '/leaderboard': typeof LeaderboardRoute
   '/settings': typeof SettingsRoute
   '/welcome': typeof WelcomeRoute
+  '/api/bots': typeof ApiBotsRouteWithChildren
   '/api/health': typeof ApiHealthRoute
+  '/api/me': typeof ApiMeRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
+  '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
+  '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -109,9 +145,13 @@ export interface FileRouteTypes {
     | '/leaderboard'
     | '/settings'
     | '/welcome'
+    | '/api/bots'
     | '/api/health'
+    | '/api/me'
     | '/api/auth/$'
     | '/api/users/$username'
+    | '/api/bots/$bot/versions'
+    | '/api/bots/$bot/versions/$n'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -120,9 +160,13 @@ export interface FileRouteTypes {
     | '/leaderboard'
     | '/settings'
     | '/welcome'
+    | '/api/bots'
     | '/api/health'
+    | '/api/me'
     | '/api/auth/$'
     | '/api/users/$username'
+    | '/api/bots/$bot/versions'
+    | '/api/bots/$bot/versions/$n'
   id:
     | '__root__'
     | '/'
@@ -131,9 +175,13 @@ export interface FileRouteTypes {
     | '/leaderboard'
     | '/settings'
     | '/welcome'
+    | '/api/bots'
     | '/api/health'
+    | '/api/me'
     | '/api/auth/$'
     | '/api/users/$username'
+    | '/api/bots/$bot/versions'
+    | '/api/bots/$bot/versions/$n'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -143,7 +191,9 @@ export interface RootRouteChildren {
   LeaderboardRoute: typeof LeaderboardRoute
   SettingsRoute: typeof SettingsRoute
   WelcomeRoute: typeof WelcomeRoute
+  ApiBotsRoute: typeof ApiBotsRouteWithChildren
   ApiHealthRoute: typeof ApiHealthRoute
+  ApiMeRoute: typeof ApiMeRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiUsersUsernameRoute: typeof ApiUsersUsernameRoute
 }
@@ -192,11 +242,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WelcomeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/bots': {
+      id: '/api/bots'
+      path: '/api/bots'
+      fullPath: '/api/bots'
+      preLoaderRoute: typeof ApiBotsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/health': {
       id: '/api/health'
       path: '/api/health'
       fullPath: '/api/health'
       preLoaderRoute: typeof ApiHealthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/me': {
+      id: '/api/me'
+      path: '/api/me'
+      fullPath: '/api/me'
+      preLoaderRoute: typeof ApiMeRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/auth/$': {
@@ -213,8 +277,44 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiUsersUsernameRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/bots/$bot/versions': {
+      id: '/api/bots/$bot/versions'
+      path: '/$bot/versions'
+      fullPath: '/api/bots/$bot/versions'
+      preLoaderRoute: typeof ApiBotsBotVersionsRouteImport
+      parentRoute: typeof ApiBotsRoute
+    }
+    '/api/bots/$bot/versions/$n': {
+      id: '/api/bots/$bot/versions/$n'
+      path: '/$n'
+      fullPath: '/api/bots/$bot/versions/$n'
+      preLoaderRoute: typeof ApiBotsBotVersionsNRouteImport
+      parentRoute: typeof ApiBotsBotVersionsRoute
+    }
   }
 }
+
+interface ApiBotsBotVersionsRouteChildren {
+  ApiBotsBotVersionsNRoute: typeof ApiBotsBotVersionsNRoute
+}
+
+const ApiBotsBotVersionsRouteChildren: ApiBotsBotVersionsRouteChildren = {
+  ApiBotsBotVersionsNRoute: ApiBotsBotVersionsNRoute,
+}
+
+const ApiBotsBotVersionsRouteWithChildren =
+  ApiBotsBotVersionsRoute._addFileChildren(ApiBotsBotVersionsRouteChildren)
+
+interface ApiBotsRouteChildren {
+  ApiBotsBotVersionsRoute: typeof ApiBotsBotVersionsRouteWithChildren
+}
+
+const ApiBotsRouteChildren: ApiBotsRouteChildren = {
+  ApiBotsBotVersionsRoute: ApiBotsBotVersionsRouteWithChildren,
+}
+
+const ApiBotsRouteWithChildren =
+  ApiBotsRoute._addFileChildren(ApiBotsRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
@@ -223,7 +323,9 @@ const rootRouteChildren: RootRouteChildren = {
   LeaderboardRoute: LeaderboardRoute,
   SettingsRoute: SettingsRoute,
   WelcomeRoute: WelcomeRoute,
+  ApiBotsRoute: ApiBotsRouteWithChildren,
   ApiHealthRoute: ApiHealthRoute,
+  ApiMeRoute: ApiMeRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiUsersUsernameRoute: ApiUsersUsernameRoute,
 }

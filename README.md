@@ -11,6 +11,42 @@ An arena where people vibe-code slither.io-style snake bots, deploy them with on
 | ----------- | --------------------------------------------------- |
 | staging     | `*.surninsynergy.dev` (temporary, final domain TBD) |
 
+### Staging
+
+Cloudflare account "Surnin Synergy". Config lives in the `env.staging` blocks of
+`apps/web/wrangler.jsonc` and `apps/arena/wrangler.jsonc`.
+
+| Worker                    | URL                                   | Health                                                             |
+| ------------------------- | ------------------------------------- | ------------------------------------------------------------------ |
+| `zerosnake-web-staging`   | `https://arena.surninsynergy.dev`     | [`/api/health`](https://arena.surninsynergy.dev/api/health)        |
+| `zerosnake-arena-staging` | `https://api.arena.surninsynergy.dev` | [`/health`](https://api.arena.surninsynergy.dev/health) (pings DO) |
+
+Resources: D1 `zerosnake-staging` (shared by both Workers), R2 `zerosnake-staging-{bundles,sources,replays,traces}`,
+queues `zerosnake-staging-checks` and `zerosnake-staging-checks-dlq`.
+
+**Deploys** happen automatically: `.github/workflows/deploy-staging.yml` runs after CI passes on `main`
+(or via "Run workflow"). It deploys arena first (web binds to its Durable Objects), applies D1 migrations,
+then builds and deploys web, then curls both health endpoints. It skips while the repo secrets
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are unset.
+
+Manual deploy (needs `wrangler login` with access to the account):
+
+```bash
+pnpm --filter @zerosnake/arena deploy:staging
+pnpm --filter @zerosnake/web deploy:staging
+```
+
+**Migrations**: generate with `pnpm db:generate` in `apps/web`, commit the SQL, and CI applies it.
+To apply by hand:
+
+```bash
+cd apps/web && pnpm exec wrangler d1 migrations apply DB --env staging --remote
+```
+
+**Secrets** (web): `BETTER_AUTH_SECRET`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, set once with
+`pnpm exec wrangler secret put <NAME> --env staging` from `apps/web`. The staging GitHub OAuth app uses
+homepage `https://arena.surninsynergy.dev` and callback `https://arena.surninsynergy.dev/api/auth/callback/github`.
+
 ## Development
 
 Requires Node 24+ and pnpm (`corepack enable`).

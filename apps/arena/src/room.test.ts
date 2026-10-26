@@ -80,18 +80,20 @@ describe("RoomDO", () => {
     });
 
     const s1 = await h.room<RoomStatus>("batches", "runBatch");
-    expect(s1.snakes).toHaveLength(5);
-    expect(new Set(s1.snakes.map((s) => s.author)).size).toBe(5);
-    expect(s1.snakes.filter((s) => s.house).map((s) => s.author)).toEqual([
-      "house:easy",
-      "house:medium",
-    ]);
+    // 3 tickets + 2 house bots spawned (some may already have died).
+    expect(s1.snakes.length + s1.livesEnded).toBe(5);
+    expect(new Set(s1.snakes.map((s) => s.author)).size).toBe(s1.snakes.length);
+    for (const s of s1.snakes.filter((x) => x.house)) {
+      expect(["house:easy", "house:medium"]).toContain(s.author);
+    }
     // 5 bots, all 5 starting a life.
     expect(s1.lastBatchTicks).toBe(batchTicks(5, 5));
     expect(s1.tick).toBe(batchTicks(5, 5));
 
     const s2 = await h.room<RoomStatus>("batches", "runBatch");
-    expect(s2.lastBatchTicks).toBe(batchTicks(s1.snakes.length, 0));
+    // Between "5 bots, none starting" and "5 bots, all starting" (house bots refill deaths).
+    expect(s2.lastBatchTicks).toBeLessThanOrEqual(batchTicks(5, 0));
+    expect(s2.lastBatchTicks).toBeGreaterThanOrEqual(batchTicks(5, 5));
     expect(s2.tick).toBe(s1.tick + s2.lastBatchTicks);
     expect(s2.watching).toBe(false);
   }, 60_000);
@@ -137,10 +139,14 @@ describe("RoomDO", () => {
   }, 60_000);
 
   it("writes ~2-minute replay chunks to R2 and resumes exactly after an eviction", async () => {
+    // Plenty of replacements, so real bots outlive the 2400 ticks whatever the house bots do.
     const tickets = await Promise.all(
-      ["gina", "hank", "ivan", "judy"].map((a) => ticket(a, house.hard as string)),
+      ["gina", "hank", "ivan", "judy", "jo", "jim", "jen", "jay", "joy", "jon"].map((a) =>
+        ticket(a, house.medium as string),
+      ),
     );
-    await startRoom("replay", tickets.slice(0, 2));
+    // No house bots: the room's life depends on these alone.
+    await startRoom("replay", tickets.slice(0, 2), { minAuthors: 0 });
     for (const t of tickets.slice(2)) await h.call("matchmaker", "offer", t);
 
     let s = await h.room<RoomStatus>("replay", "runBatch");

@@ -7,9 +7,10 @@
  * - `client.js`: the `sim` viewer page (viewer, renderer, three.js), prebuilt;
  * - `house/<name>.js`: the house bots as sandbox bundles;
  * - `sdk/`: the SDK's TypeScript sources, for bundling bots without an install and for `init`;
- * - `template/`: a copy of the repo's `template/`, so `init` works offline.
+ * - `template/`: a copy of the repo's `template/` (`.gitignore` as `gitignore`), so `init`
+ *   works offline.
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -47,7 +48,13 @@ export async function buildCli(): Promise<void> {
     }),
   ]);
   copySdk(ownPackageDir("@zerosnake/sdk"), join(dist, "sdk"), "The SDK bundled with the CLI.");
-  copyTemplate(join(root, "..", "..", "template"), join(dist, "template"));
+  const template = join(dist, "template");
+  copyTemplate(join(root, "..", "..", "template"), template);
+  // npm and pnpm drop .gitignore files from packages (and apply them as ignore rules); `init`
+  // renames it back.
+  if (existsSync(join(template, ".gitignore"))) {
+    renameSync(join(template, ".gitignore"), join(template, "gitignore"));
+  }
 }
 
 if (import.meta.main) await buildCli();

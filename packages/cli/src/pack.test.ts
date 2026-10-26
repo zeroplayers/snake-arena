@@ -63,6 +63,11 @@ describe("the packed CLI", () => {
     const init = run("node", [bin, "init", "my-bot"], tmp);
     expect(init.code, init.err).toBe(0);
     const project = join(tmp, "my-bot");
+    // npm and pnpm drop .gitignore from packages: the template's must still reach the project.
+    if (existsSync(join(root, "..", "..", "template", ".gitignore"))) {
+      expect(listing).toContain("package/dist/template/gitignore");
+      expect(existsSync(join(project, ".gitignore"))).toBe(true);
+    }
     // Every dependency the new project names can be installed: no workspace: or unpublished ranges.
     if (existsSync(join(project, "package.json"))) {
       const manifest = JSON.parse(readFileSync(join(project, "package.json"), "utf8"));

@@ -1,4 +1,5 @@
 import {
+  AdditiveBlending,
   CanvasTexture,
   CircleGeometry,
   Color,
@@ -9,6 +10,7 @@ import {
   RepeatWrapping,
   RingGeometry,
   type Scene,
+  ShaderMaterial,
 } from "three";
 
 export interface BackgroundOptions {
@@ -18,6 +20,7 @@ export interface BackgroundOptions {
   readonly dotRadius: number;
   /** Width of the arena wall line, world units. */
   readonly borderWidth: number;
+  /** Peak opacity of the soft glow around the wall. */
   readonly glowOpacity: number;
 }
 
@@ -25,11 +28,12 @@ export const DEFAULT_BACKGROUND: BackgroundOptions = {
   cellSize: 2.1,
   dotRadius: 0.1,
   borderWidth: 0.35,
-  glowOpacity: 0.2,
+  glowOpacity: 0.55,
 };
 
 const GRID_TEXTURE_PX = 64;
-const GLOW_WIDTH_MULTIPLIER = 4;
+/** Glow falloff (Gaussian sigma) in wall widths. */
+const GLOW_SIGMA_MULTIPLIER = 3;
 const HUE_SPEED = 0.12; // hue turns per second
 
 /**
@@ -39,7 +43,7 @@ const HUE_SPEED = 0.12; // hue turns per second
 export class BackgroundRenderer {
   private grid: Mesh<CircleGeometry, MeshBasicMaterial> | undefined;
   private border: Mesh<RingGeometry, MeshBasicMaterial> | undefined;
-  private glow: Mesh<RingGeometry, MeshBasicMaterial> | undefined;
+  private glow: Mesh<RingGeometry, ShaderMaterial> | undefined;
   private radius = 0;
   private hue = 0;
 
@@ -71,13 +75,23 @@ export class BackgroundRenderer {
     );
     this.border.renderOrder = -8;
 
-    const glowWidth = borderWidth * GLOW_WIDTH_MULTIPLIER;
+    // Soft glow: a Gaussian falloff on both sides of the wall, faded to zero well before
+    // the ring's edges so nothing looks cut off.
+    const sigma = borderWidth * GLOW_SIGMA_MULTIPLIER;
+    const centre = radius + borderWidth / 2;
     this.glow = new Mesh(
-      new RingGeometry(radius - glowWidth, radius + borderWidth + glowWidth, 256),
-      new MeshBasicMaterial({
-        color: 0xffffff,
+      new RingGeometry(Math.max(0, centre - sigma * 3.5), centre + sigma * 3.5, 256),
+      new ShaderMaterial({
+        uniforms: {
+          color: { value: new Color(0xffffff) },
+          centre: { value: centre },
+          sigma: { value: sigma },
+          opacity: { value: glowOpacity },
+        },
+        vertexShader: GLOW_VERTEX,
+        fragmentShader: GLOW_FRAGMENT,
         transparent: true,
-        opacity: glowOpacity,
+        blending: AdditiveBlending,
         depthWrite: false,
       }),
     );
@@ -90,7 +104,7 @@ export class BackgroundRenderer {
   update(dt: number): void {
     this.hue = (this.hue + dt * HUE_SPEED) % 1;
     this.border?.material.color.setHSL(this.hue, 1, 0.5);
-    this.glow?.material.color.setHSL(this.hue, 1, 0.75);
+    this.glow?.material.uniforms.color?.value.setHSL(this.hue, 1, 0.6);
   }
 
   destroy(): void {
@@ -127,9 +141,30 @@ export class BackgroundRenderer {
       if (!mesh) continue;
       this.scene.remove(mesh);
       mesh.geometry.dispose();
-      mesh.material.map?.dispose();
+      if (mesh.material instanceof MeshBasicMaterial) mesh.material.map?.dispose();
       mesh.material.dispose();
     }
     this.grid = this.border = this.glow = undefined;
   }
 }
+
+const GLOW_VERTEX = /* glsl */ `
+varying vec2 vPos;
+void main() {
+  vPos = position.xy;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const GLOW_FRAGMENT = /* glsl */ `
+uniform vec3 color;
+uniform float centre;
+uniform float sigma;
+uniform float opacity;
+varying vec2 vPos;
+void main() {
+  float x = (length(vPos) - centre) / sigma;
+  gl_FragColor = vec4(color, opacity * exp(-0.5 * x * x));
+  #include <colorspace_fragment>
+}
+`;

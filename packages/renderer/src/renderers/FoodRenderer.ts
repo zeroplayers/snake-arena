@@ -10,15 +10,15 @@ import {
   type Scene,
 } from "three";
 import { lerp } from "../interpolate";
-import type { SkinTextures } from "../skins";
+import { type SkinTextures, SVG_PADDING } from "../skins";
 import { GLOW_SVG } from "../skins/svg";
 import type { RenderFood } from "../types";
 import { hashString } from "../util";
 
 const FOOD_COLORS = ["#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#00FFFF", "#FFA500"];
 
-/** Glow square side relative to the food radius (the original's 6× base size). */
-const GLOW_SIZE_MULTIPLIER = 6;
+/** Glow square side relative to the food radius (the original's 6× base size, padded). */
+const GLOW_SIZE_MULTIPLIER = 6 * SVG_PADDING;
 const GLOW_OPACITY = 0.75;
 const PULSE_AMPLITUDE = 0.08;
 const PULSE_SPEED = 3; // rad/s

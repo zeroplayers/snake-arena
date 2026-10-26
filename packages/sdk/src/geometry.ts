@@ -37,7 +37,8 @@ export function normalizeAngle(angle: number): number {
 
 /**
  * Heading (radians, in (-π, π]) you would need to go from `from` straight to `to`.
- * Same convention as {@link SelfState.angle}: 0 = east, π/2 = south (y grows down).
+ * Same convention as {@link SelfState.angle}: counter-clockwise from +x, 0 = east, π/2 = north
+ * (y grows up).
  * Returns 0 if the points are equal.
  */
 export function angleTo(from: Vec, to: Vec): number {
@@ -46,10 +47,11 @@ export function angleTo(from: Vec, to: Vec): number {
 
 /**
  * Signed smallest rotation from angle `from` to angle `to`, in (-π, π].
- * Positive means `to` is to your RIGHT (clockwise; steer with positive `turn`),
- * negative means LEFT. Always use this instead of `to - from`, which breaks across ±π.
+ * Positive means `to` is to your LEFT (counter-clockwise), negative means RIGHT (clockwise).
+ * Careful: that is the opposite sign of `turn` (positive `turn` = right); {@link turnToward}
+ * does the conversion for you. Always use this instead of `to - from`, which breaks across ±π.
  *
- * @example angleDiff(Math.PI - 0.1, -Math.PI + 0.1) // 0.2 (a small right turn, not -6.08)
+ * @example angleDiff(Math.PI - 0.1, -Math.PI + 0.1) // 0.2 (a small left turn, not -6.08)
  */
 export function angleDiff(from: number, to: number): number {
   return normalizeAngle(to - from);
@@ -57,14 +59,17 @@ export function angleDiff(from: number, to: number): number {
 
 /**
  * The `turn` value that rotates your heading toward `targetAngle` as fast as allowed without
- * overshooting: `angleDiff / self.turnRate`, clamped to [-1, 1]. Put the result straight into
- * {@link BotAction.turn}.
+ * overshooting: `-angleDiff / self.turnRate`, clamped to [-1, 1]. Negative (left) when the
+ * target is counter-clockwise of your heading, positive (right) when clockwise. Put the result
+ * straight into {@link BotAction.turn}.
  */
 export function turnToward(
   self: Pick<SelfState, "angle" | "turnRate">,
   targetAngle: number,
 ): number {
-  const diff = angleDiff(self.angle, targetAngle);
+  // Angles are counter-clockwise, `turn` is positive to the right (clockwise), so measure the
+  // clockwise rotation: arguments swapped on purpose (also avoids returning -0).
+  const diff = angleDiff(targetAngle, self.angle);
   if (self.turnRate <= 0) return diff === 0 ? 0 : Math.sign(diff);
   return clamp(diff / self.turnRate, -1, 1);
 }

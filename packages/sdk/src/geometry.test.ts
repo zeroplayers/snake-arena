@@ -87,11 +87,11 @@ describe("normalizeAngle", () => {
 });
 
 describe("angleTo", () => {
-  it("follows the y-down convention", () => {
+  it("follows the y-up, counter-clockwise convention", () => {
     const o = { x: 0, y: 0 };
     expect(angleTo(o, { x: 1, y: 0 })).toBe(0); // east
-    expect(angleTo(o, { x: 0, y: 1 })).toBeCloseTo(PI / 2); // south (down)
-    expect(angleTo(o, { x: 0, y: -1 })).toBeCloseTo(-PI / 2); // north (up)
+    expect(angleTo(o, { x: 0, y: 1 })).toBeCloseTo(PI / 2); // north (up)
+    expect(angleTo(o, { x: 0, y: -1 })).toBeCloseTo(-PI / 2); // south (down)
     expect(angleTo(o, { x: -1, y: 0 })).toBe(PI); // west
     expect(angleTo(o, { x: -1, y: -0 })).toBe(PI); // -0 does not yield -π
     expect(angleTo(o, o)).toBe(0);
@@ -104,54 +104,68 @@ describe("angleDiff", () => {
     expect(angleDiff(-PI + 0.1, PI - 0.1)).toBeCloseTo(-0.2);
   });
 
-  it("is positive for a right (clockwise) turn", () => {
-    // Facing east, a target to the south (y down) is on the right.
+  it("is positive for a left (counter-clockwise) target", () => {
+    // Facing east, a target to the north (y up) is on the left.
     expect(angleDiff(0, PI / 2)).toBeCloseTo(PI / 2);
     expect(angleDiff(0, -PI / 2)).toBeCloseTo(-PI / 2);
   });
 });
 
 describe("turnToward", () => {
+  it("is negative (left) for a counter-clockwise target, positive (right) for clockwise", () => {
+    expect(turnToward(self({ angle: 0 }), PI / 2)).toBe(-1);
+    expect(turnToward(self({ angle: 0 }), -PI / 2)).toBe(1);
+  });
+
   it("returns a proportional turn when within one tick", () => {
-    expect(turnToward(self({ angle: 0, turnRate: 0.1 }), 0.05)).toBeCloseTo(0.5);
+    expect(turnToward(self({ angle: 0, turnRate: 0.1 }), 0.05)).toBeCloseTo(-0.5);
+    expect(turnToward(self({ angle: 0, turnRate: 0.1 }), -0.05)).toBeCloseTo(0.5);
     expect(turnToward(self({ angle: 0, turnRate: 0.1 }), 0)).toBe(0);
   });
 
   it("clamps to [-1, 1]", () => {
-    expect(turnToward(self({ angle: 0 }), 2)).toBe(1);
-    expect(turnToward(self({ angle: 0 }), -2)).toBe(-1);
+    expect(turnToward(self({ angle: 0 }), 2)).toBe(-1);
+    expect(turnToward(self({ angle: 0 }), -2)).toBe(1);
   });
 
   it("wraps across ±π", () => {
-    expect(turnToward(self({ angle: PI - 0.05, turnRate: 0.1 }), -PI + 0.05)).toBeCloseTo(1);
+    // From just below π to just above -π is a small counter-clockwise (left) step.
+    expect(turnToward(self({ angle: PI - 0.05, turnRate: 0.1 }), -PI + 0.05)).toBeCloseTo(-1);
   });
 
   it("handles a zero turn rate", () => {
-    expect(turnToward(self({ turnRate: 0 }), 1)).toBe(1);
+    expect(turnToward(self({ turnRate: 0 }), 1)).toBe(-1);
     expect(turnToward(self({ turnRate: 0 }), 0)).toBe(0);
   });
 
-  it("converges when applied the way the engine does", () => {
-    let s = self({ angle: 2.5, turnRate: 0.2 });
-    for (let i = 0; i < 40; i++) {
-      s = { ...s, angle: normalizeAngle(s.angle + turnToward(s, -1) * s.turnRate) };
+  it("converges when applied the way the engine does (angle -= turn * turnRate)", () => {
+    for (const [start, target] of [
+      [2.5, -1],
+      [-2.5, 1],
+      [3, -3],
+    ] as const) {
+      let s = self({ angle: start, turnRate: 0.2 });
+      for (let i = 0; i < 40; i++) {
+        s = { ...s, angle: normalizeAngle(s.angle - turnToward(s, target) * s.turnRate) };
+      }
+      expect(s.angle).toBeCloseTo(target);
     }
-    expect(s.angle).toBeCloseTo(-1);
   });
 });
 
 describe("steerToward / steerAway", () => {
-  it("turns right toward a point below when heading east", () => {
+  it("gives a negative turn toward a point on the left", () => {
     const me = self({ head: { x: 0, y: 0 }, angle: 0 });
-    expect(steerToward(me, { x: 1, y: 10 })).toBe(1);
-    expect(steerToward(me, { x: 1, y: -10 })).toBe(-1);
+    // Heading east, y up: (1, 10) is up-left of us, (1, -10) is down-right.
+    expect(steerToward(me, { x: 1, y: 10 })).toBe(-1);
+    expect(steerToward(me, { x: 1, y: -10 })).toBe(1);
     expect(steerToward(me, { x: 10, y: 0 })).toBe(0);
   });
 
   it("turns away from a point", () => {
     const me = self({ head: { x: 0, y: 0 }, angle: PI / 2 });
-    // Heading south, threat to the north-east: flee south-west, i.e. turn right.
-    expect(steerAway(me, { x: 1, y: -1 })).toBe(1);
+    // Heading north, threat to the south-east: flee north-west, i.e. turn left.
+    expect(steerAway(me, { x: 1, y: -1 })).toBe(-1);
     expect(steerAway(me, { x: 0, y: -5 })).toBe(0);
   });
 });

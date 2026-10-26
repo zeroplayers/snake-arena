@@ -7,12 +7,14 @@
  * World conventions (the engine must produce state that honours all of these):
  * - Units: positions, lengths, radii and distances are world units; speed is world units per
  *   tick; angles and `turnRate` are radians; time is ticks (`info.tickRate` per second).
- * - Coordinates: origin (0, 0) is the arena centre; `x` grows east (right), `y` grows south
- *   (DOWN, as on a screen). The arena is a circle of `info.worldRadius` around the origin.
- * - Angles: 0 points to +x, π/2 to +y; angles in state are normalised to (-π, π].
- *   Increasing angle is clockwise on screen.
- * - Turning: `turn` > 0 turns right (angle increases), `turn` < 0 turns left. Each tick the
- *   engine applies `angle += clamp(turn, -1, 1) * self.turnRate` (NaN turn = 0).
+ * - Coordinates: origin (0, 0) is the arena centre; `x` grows east (right), `y` grows north
+ *   (UP, as in maths). The arena is a circle of `info.worldRadius` around the origin.
+ * - Angles: radians, counter-clockwise from +x: 0 points to +x, π/2 to +y; angles in state are
+ *   normalised to (-π, π]. `Math.atan2(dy, dx)` is the heading to a point.
+ * - Turning: `turn` > 0 turns right (clockwise, angle DEcreases), `turn` < 0 turns left
+ *   (counter-clockwise, angle increases). Each tick the engine applies
+ *   `angle -= clamp(turn, -1, 1) * self.turnRate` (NaN turn = 0). {@link turnToward} handles
+ *   the sign flip; prefer it over computing `turn` by hand.
  * - Vision: an object appears in state only if its distance from your head is at most
  *   `info.visionRadius`; for other snakes only the visible body points are listed.
  * - Segments are ordered head first; `self.segments[0]` equals `self.head`.

@@ -1,8 +1,8 @@
 /**
  * A point or vector in world units.
  *
- * Coordinates are screen-style: the origin is the centre of the arena, `x` grows to the
- * right (east) and `y` grows DOWN (south).
+ * Coordinates are maths-style: the origin is the centre of the arena, `x` grows to the
+ * right (east) and `y` grows UP (north).
  */
 export interface Vec {
   x: number;
@@ -12,9 +12,10 @@ export interface Vec {
 /** What a bot returns each tick. */
 export interface BotAction {
   /**
-   * Steering in [-1, 1]. `-1` is full left (counter-clockwise on screen, the heading angle
-   * decreases), `1` is full right (clockwise, the angle increases), `0` goes straight.
-   * The heading changes by `turn * self.turnRate` radians this tick.
+   * Steering in [-1, 1]. `-1` is full left (counter-clockwise, the heading angle increases),
+   * `1` is full right (clockwise, the angle decreases), `0` goes straight.
+   * The heading changes by `-turn * self.turnRate` radians this tick (note the minus: angles
+   * are counter-clockwise, but positive `turn` means right).
    * Values outside [-1, 1] are clamped; `NaN` and non-numbers count as `0`.
    * Prefer {@link turnToward} / {@link steerToward} over computing this by hand.
    */
@@ -61,8 +62,9 @@ export interface SelfState {
   /** Head position (same as `segments[0]`). */
   head: Vec;
   /**
-   * Heading in radians, normalised to (-π, π]. `0` points to +x (east), `π/2` to +y (south,
-   * down on screen), `-π/2` to north. Compare angles with {@link angleDiff}, never with `-`.
+   * Heading in radians, counter-clockwise from +x, normalised to (-π, π]. `0` points east (+x),
+   * `π/2` north (+y, up), `-π/2` south, `π` west. `Math.atan2(dy, dx)` gives the heading to a
+   * point directly. Compare angles with {@link angleDiff}, never with `-`.
    */
   angle: number;
   /** Current length. This is your score driver: it grows by eating food and decays with hunger. */

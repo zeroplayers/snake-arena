@@ -101,8 +101,8 @@ describe("example bot", () => {
     if (!mem) throw new Error("init missing");
     const t = createTickLog();
 
-    // Food below-right while heading east: turn right.
-    expect(bot.tick(state({ food: [{ x: 1, y: 50, value: 1 }] }), mem, t.log).turn).toBe(1);
+    // Heading east with y up, food at (1, 50) is up-left: turn left.
+    expect(bot.tick(state({ food: [{ x: 1, y: 50, value: 1 }] }), mem, t.log).turn).toBe(-1);
 
     // A snake right ahead: flee, boost and log.
     const threat = {
@@ -117,7 +117,7 @@ describe("example bot", () => {
     };
     const action = bot.tick(state({ snakes: [threat] }), mem, t.log);
     expect(action.boost).toBe(true);
-    expect(action.turn).toBe(1); // threat slightly to the left, so turn right
+    expect(action.turn).toBe(-1); // threat slightly to the right (y = -1 is below), so turn left
     expect(mem).toMatchObject({ mode: "flee", fled: 1 });
     expect(t.flush().lines).toEqual(["fleeing enemy 4.1"]);
 

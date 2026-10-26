@@ -1,0 +1,96 @@
+import { betterAuth } from "better-auth";
+import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
+import { deviceAuthorization } from "better-auth/plugins";
+import { createDb } from "../db";
+import { authSchema } from "../db/schema";
+import { CLI_CLIENT_ID, cliAuth } from "./cli-auth";
+import { usernameClaim } from "./username";
+
+export { CLI_CLIENT_ID } from "./cli-auth";
+export { isValidUsername } from "./username";
+
+export interface AuthEnv {
+  DB: D1Database;
+  /** Public origin, e.g. `https://arena.surninsynergy.dev`. */
+  BETTER_AUTH_URL: string;
+  BETTER_AUTH_SECRET: string;
+  GITHUB_CLIENT_ID: string;
+  GITHUB_CLIENT_SECRET: string;
+}
+
+const DAY = 60 * 60 * 24;
+
+/**
+ * Endpoints Better Auth adds that we don't want reachable over HTTP:
+ * - `/update-user` would let people rewrite `image`/`name` (rendered on profiles) and the
+ *   username; usernames go through `/username/claim`, the rest comes from GitHub.
+ * - `/list-sessions` returns the raw token of every session.
+ * - `/device/token` mints a full session; the CLI uses `/cli/token` instead (see cli-auth.ts).
+ */
+const DISABLED_PATHS = ["/update-user", "/list-sessions", "/device/token"];
+
+/** The CLI can't be signed in before the user has a username. */
+const requireUsernameToApproveDevice = createAuthMiddleware(async (ctx) => {
+  if (ctx.path !== "/device/approve") return;
+  const user = (await getSessionFromCtx(ctx))?.user as { username?: string | null } | undefined;
+  if (user && !user.username) {
+    throw new APIError("FORBIDDEN", { message: "Choose a username before signing in the CLI" });
+  }
+});
+
+export function createAuth(env: AuthEnv) {
+  for (const key of ["BETTER_AUTH_SECRET", "GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"] as const) {
+    if (!env[key]) throw new Error(`${key} is not set (see apps/web/.dev.vars.example)`);
+  }
+  const db = createDb(env.DB);
+
+  return betterAuth({
+    appName: "ZeroSnake Arena",
+    baseURL: env.BETTER_AUTH_URL,
+    secret: env.BETTER_AUTH_SECRET,
+    database: drizzleAdapter(db, { provider: "sqlite", schema: authSchema, usePlural: true }),
+    disabledPaths: DISABLED_PATHS,
+    // Better Auth skips the origin/CSRF check when it detects a test runner; keep it on so tests
+    // exercise what production does.
+    advanced: { disableOriginCheck: false },
+    socialProviders: {
+      github: {
+        clientId: env.GITHUB_CLIENT_ID,
+        clientSecret: env.GITHUB_CLIENT_SECRET,
+        mapProfileToUser: (profile) => ({ githubLogin: profile.login }),
+      },
+    },
+    user: {
+      additionalFields: {
+        // Set by `/username/claim` only.
+        username: { type: "string", required: false, input: false },
+        displayUsername: { type: "string", required: false, input: false },
+        // From the GitHub profile; suggests a username. `input: true` because Better Auth drops
+        // non-input fields from provider profiles; `/update-user` is disabled anyway.
+        githubLogin: { type: "string", required: false },
+      },
+    },
+    account: {
+      // GitHub access tokens at rest, since apps/arena shares this database.
+      encryptOAuthTokens: true,
+    },
+    session: {
+      expiresIn: 30 * DAY,
+      updateAge: DAY,
+    },
+    hooks: { before: requireUsernameToApproveDevice },
+    plugins: [
+      deviceAuthorization({
+        verificationUri: "/device",
+        expiresIn: "10m",
+        validateClient: (clientId) => clientId === CLI_CLIENT_ID,
+      }),
+      usernameClaim(db),
+      cliAuth(db),
+    ],
+  });
+}
+
+export type Auth = ReturnType<typeof createAuth>;
+export type AuthSession = NonNullable<Awaited<ReturnType<Auth["api"]["getSession"]>>>;

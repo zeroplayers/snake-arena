@@ -1,0 +1,11 @@
+{
+  "name": "zerosnake",
+  "version": "0.0.0",
+  "private": true,
+  "description": "npx zerosnake: init, sim, test, login, deploy",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p ."
+  }
+}

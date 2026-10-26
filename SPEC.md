@@ -6,19 +6,19 @@ An arena where people vibe-code slither.io-style snake bots, deploy them with on
 
 ## 1. Decisions
 
-| Topic | Decision |
-|---|---|
-| Mechanics | slither.io: continuous field, rate-limited turning, boost costs length |
-| Arena format | persistent rooms (fixed-length rounds are the fallback if ratings turn out too noisy) |
-| Vision | only a radius around the head |
-| Bot memory | kept between ticks, reset between lives |
-| Languages | JS / TS |
-| Code delivery | CLI `npx zerosnake deploy` (no git server) |
-| Hosting | Cloudflare, Workers Paid |
-| Stack | TanStack Start, Better Auth, D1, R2, Durable Objects, Queues |
-| Openness | everything open source: engine, SDK, CLI, site, template, house bots |
-| Graphics | reused from the original ZeroSnake game (our own project) |
-| Domain | `*.surninsynergy.dev` subdomains for staging for now; final domain TBD (candidate: zerosnake.io, appears to be unregistered) |
+| Topic         | Decision                                                                                                                     |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Mechanics     | slither.io: continuous field, rate-limited turning, boost costs length                                                       |
+| Arena format  | persistent rooms (fixed-length rounds are the fallback if ratings turn out too noisy)                                        |
+| Vision        | only a radius around the head                                                                                                |
+| Bot memory    | kept between ticks, reset between lives                                                                                      |
+| Languages     | JS / TS                                                                                                                      |
+| Code delivery | CLI `npx zerosnake deploy` (no git server)                                                                                   |
+| Hosting       | Cloudflare, Workers Paid                                                                                                     |
+| Stack         | TanStack Start, Better Auth, D1, R2, Durable Objects, Queues                                                                 |
+| Openness      | everything open source: engine, SDK, CLI, site, template, house bots                                                         |
+| Graphics      | reused from the original ZeroSnake game (our own project)                                                                    |
+| Domain        | `*.surninsynergy.dev` subdomains for staging for now; final domain TBD (candidate: zerosnake.io, appears to be unregistered) |
 
 ---
 
@@ -79,12 +79,12 @@ Based on the original ZeroSnake (growth formulas from `frontend/docs/snake_growt
 
 ### Quotas (starting values, all configurable)
 
-| | Free |
-|---|---|
-| Bots per author | 3 |
-| Active versions per bot | 1 |
-| Lives per bot per day | 100 |
-| Deploys per day | 20 |
+|                         | Free |
+| ----------------------- | ---- |
+| Bots per author         | 3    |
+| Active versions per bot | 1    |
+| Lives per bot per day   | 100  |
+| Deploys per day         | 20   |
 
 ### Rating
 
@@ -169,7 +169,8 @@ template/          bot template: src/bot.ts, CLAUDE.md, .claude/skills, tests
 import { defineBot } from "@zerosnake/sdk";
 
 export default defineBot({
-  init(info) {               // start of a life: world size, vision radius, budget
+  init(info) {
+    // start of a life: world size, vision radius, budget
     return { mode: "farm" }; // memory between ticks
   },
   tick(state, mem, log) {

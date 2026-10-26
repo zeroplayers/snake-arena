@@ -1,9 +1,26 @@
 /// <reference types="vite/client" />
-import { createRootRoute, HeadContent, Link, Outlet, Scripts } from "@tanstack/react-router";
+import {
+  createRootRoute,
+  HeadContent,
+  Link,
+  Outlet,
+  redirect,
+  Scripts,
+} from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { signInWithGithub } from "../lib/auth-client";
+import { getViewer } from "../server/functions";
 import appCss from "../styles/app.css?url";
 
 export const Route = createRootRoute({
+  beforeLoad: async ({ location }) => {
+    const viewer = await getViewer();
+    // A username is chosen once, right after the first GitHub sign-in.
+    if (viewer && !viewer.username && location.pathname !== "/welcome") {
+      throw redirect({ to: "/welcome", search: { next: location.href } });
+    }
+    return { viewer };
+  },
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -26,6 +43,7 @@ export const Route = createRootRoute({
 });
 
 function RootLayout() {
+  const { viewer } = Route.useRouteContext();
   return (
     <RootDocument>
       <div className="shell">
@@ -38,6 +56,18 @@ function RootLayout() {
               Arena
             </Link>
             <Link to="/leaderboard">Leaderboard</Link>
+            {viewer?.username ? (
+              <>
+                <Link to="/@{$username}" params={{ username: viewer.username }}>
+                  @{viewer.username}
+                </Link>
+                <Link to="/settings">Settings</Link>
+              </>
+            ) : viewer ? null : (
+              <button type="button" className="button small" onClick={() => signInWithGithub()}>
+                Sign in with GitHub
+              </button>
+            )}
           </nav>
         </header>
         <main className="site-main">

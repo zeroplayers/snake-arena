@@ -45,7 +45,7 @@ export const users = sqliteTable("users", {
   email: text("email").notNull().unique(),
   emailVerified: integer("email_verified", { mode: "boolean" }).notNull().default(false),
   image: text("image"),
-  /** Chosen on first sign-in (username plugin), lowercase. `null` until then. */
+  /** Claimed once after the first sign-in (`/username/claim`), lowercase. `null` until then. */
   username: text("username").unique(),
   displayUsername: text("display_username"),
   /** GitHub login at sign-in, used to suggest a username. */
@@ -53,9 +53,6 @@ export const users = sqliteTable("users", {
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
-
-export const sessionKinds = ["web", "cli"] as const;
-export type SessionKind = (typeof sessionKinds)[number];
 
 export const sessions = sqliteTable(
   "sessions",
@@ -68,15 +65,10 @@ export const sessions = sqliteTable(
     userId: text("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    /** `cli` for tokens issued by the device flow (`zerosnake login`), listed in settings. */
-    kind: text("kind", { enum: sessionKinds }).notNull().default("web"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [
-    index("sessions_user_id_idx").on(t.userId, t.kind),
-    check("sessions_kind_check", oneOf(t.kind, sessionKinds)),
-  ],
+  (t) => [index("sessions_user_id_idx").on(t.userId)],
 );
 
 export const accounts = sqliteTable(
@@ -131,6 +123,30 @@ export const deviceCodes = sqliteTable("device_codes", {
   clientId: text("client_id"),
   scope: text("scope"),
 });
+
+/**
+ * Tokens `zerosnake login` gets from the device flow. Not Better Auth sessions: they can't call
+ * any auth endpoint, and only a SHA-256 of the token is stored, since this database is also bound
+ * to apps/arena. See `src/server/cli-auth.ts`.
+ */
+export const cliTokens = sqliteTable(
+  "cli_tokens",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** Hex SHA-256 of the bearer token. */
+    tokenHash: text("token_hash").notNull().unique(),
+    userAgent: text("user_agent"),
+    ipAddress: text("ip_address"),
+    createdAt: createdAt(),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }).notNull().default(now),
+    /** Slides forward when the token is used. */
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [index("cli_tokens_user_id_idx").on(t.userId)],
+);
 
 // ─── Arena ──────────────────────────────────────────────────────────────────────────────────────
 

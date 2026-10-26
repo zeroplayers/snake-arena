@@ -27,9 +27,13 @@ The staging deploy applies new migrations with `wrangler d1 migrations apply DB 
 ## Auth
 
 - `/api/auth/*`: Better Auth. GitHub is the only sign-in method.
-- `/welcome`: pick a username after the first sign-in (fixed afterwards).
+- `/welcome`: claim a username after the first sign-in (`POST /api/auth/username/claim`, once).
+  `/update-user` is disabled: name and avatar come from GitHub.
 - `/device`: where `zerosnake login` sends people to approve the CLI (client id `zerosnake-cli`).
-  The CLI then calls the API with `Authorization: Bearer <token>`.
-- `/settings`: list and revoke CLI tokens (`/api/auth/cli-tokens/list`, `/api/auth/cli-tokens/revoke`).
+  The CLI polls `POST /api/auth/cli/token` (RFC 8628) and gets an opaque `zsk_…` token, then sends
+  `Authorization: Bearer <token>`. CLI tokens are not Better Auth sessions and are stored only as
+  SHA-256 hashes in `cli_tokens`; routes acting for the CLI call `authenticateCli()`
+  (`src/server/cli-auth.ts`). `GET /cli/me` and `POST /cli/logout` serve `whoami`/`logout`.
+- `/settings`: list and revoke CLI tokens (`GET /api/auth/cli/tokens`, `POST /api/auth/cli/tokens/revoke`).
 
 Tests run Better Auth against a real D1 (wrangler's platform proxy) with GitHub mocked at `fetch`.

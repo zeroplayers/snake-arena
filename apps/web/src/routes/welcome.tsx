@@ -49,7 +49,7 @@ function Welcome() {
     event.preventDefault();
     setPending(true);
     setError(null);
-    const { error } = await authClient.updateUser({ username });
+    const { error } = await authClient.username.claim({ username });
     setPending(false);
     if (error) {
       setError(error.message ?? "Couldn't save that username");

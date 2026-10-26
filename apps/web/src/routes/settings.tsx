@@ -33,7 +33,7 @@ function Settings() {
 
   async function revoke(id: string) {
     setRevoking(id);
-    await authClient.cliTokens.revoke({ id });
+    await authClient.cli.tokens.revoke({ id });
     setRevoking(null);
     await router.invalidate();
   }
@@ -87,7 +87,7 @@ function Settings() {
                     {token.ipAddress ? <span className="muted"> · {token.ipAddress}</span> : null}
                   </td>
                   <td>{formatDate(token.createdAt)}</td>
-                  <td>{formatDate(token.updatedAt)}</td>
+                  <td>{formatDate(token.lastUsedAt)}</td>
                   <td>{formatDate(token.expiresAt)}</td>
                   <td className="num">
                     <button

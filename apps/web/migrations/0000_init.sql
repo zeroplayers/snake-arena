@@ -28,6 +28,20 @@ CREATE TABLE `bots` (
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `bots_owner_slug_idx` ON `bots` (`owner_id`,`slug`);--> statement-breakpoint
+CREATE TABLE `cli_tokens` (
+	`id` text PRIMARY KEY NOT NULL,
+	`user_id` text NOT NULL,
+	`token_hash` text NOT NULL,
+	`user_agent` text,
+	`ip_address` text,
+	`created_at` integer DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)) NOT NULL,
+	`last_used_at` integer DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)) NOT NULL,
+	`expires_at` integer NOT NULL,
+	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `cli_tokens_token_hash_unique` ON `cli_tokens` (`token_hash`);--> statement-breakpoint
+CREATE INDEX `cli_tokens_user_id_idx` ON `cli_tokens` (`user_id`);--> statement-breakpoint
 CREATE TABLE `device_codes` (
 	`id` text PRIMARY KEY NOT NULL,
 	`device_code` text NOT NULL,
@@ -82,15 +96,13 @@ CREATE TABLE `sessions` (
 	`ip_address` text,
 	`user_agent` text,
 	`user_id` text NOT NULL,
-	`kind` text DEFAULT 'web' NOT NULL,
 	`created_at` integer DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)) NOT NULL,
 	`updated_at` integer DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)) NOT NULL,
-	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade,
-	CONSTRAINT "sessions_kind_check" CHECK("sessions"."kind" IN ('web', 'cli'))
+	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `sessions_token_unique` ON `sessions` (`token`);--> statement-breakpoint
-CREATE INDEX `sessions_user_id_idx` ON `sessions` (`user_id`,`kind`);--> statement-breakpoint
+CREATE INDEX `sessions_user_id_idx` ON `sessions` (`user_id`);--> statement-breakpoint
 CREATE TABLE `users` (
 	`id` text PRIMARY KEY NOT NULL,
 	`name` text NOT NULL,

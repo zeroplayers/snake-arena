@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestD1, type TestD1 } from "../test/d1";
 import { CookieJar, type FakeGithubUser, mockGithub } from "../test/github";
 import { type Auth, CLI_CLIENT_ID, createAuth, isValidUsername } from "./auth";
-import type { CliToken } from "./cli-tokens";
+import { type CliIdentity, type CliToken, hashToken } from "./cli-auth";
 
 const BASE = "http://localhost:3000";
 
@@ -33,10 +33,16 @@ interface CallOptions {
   body?: unknown;
   jar?: CookieJar;
   bearer?: string;
+  /** `Origin` header; the site's own by default, `null` to omit it (like the CLI). */
+  origin?: string | null;
 }
 
-async function call(path: string, { method = "GET", body, jar, bearer }: CallOptions = {}) {
-  const headers = new Headers({ origin: BASE, "user-agent": "vitest" });
+async function call(
+  path: string,
+  { method = "GET", body, jar, bearer, origin = BASE }: CallOptions = {},
+) {
+  const headers = new Headers({ "user-agent": "vitest" });
+  if (origin) headers.set("origin", origin);
   if (body !== undefined) headers.set("content-type", "application/json");
   if (jar) headers.set("cookie", jar.header());
   if (bearer) headers.set("authorization", `Bearer ${bearer}`);
@@ -51,6 +57,9 @@ async function call(path: string, { method = "GET", body, jar, bearer }: CallOpt
   return res;
 }
 
+const post = (path: string, body: unknown, options: CallOptions = {}) =>
+  call(path, { ...options, method: "POST", body });
+
 async function json<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
@@ -59,11 +68,13 @@ async function json<T>(res: Response): Promise<T> {
 async function signInWithGithub(user: FakeGithubUser) {
   mockGithub(user);
   const jar = new CookieJar();
-  const start = await call("/sign-in/social", {
-    method: "POST",
-    body: { provider: "github", callbackURL: "/welcome" },
-    jar,
-  });
+  const start = await post(
+    "/sign-in/social",
+    { provider: "github", callbackURL: "/welcome" },
+    {
+      jar,
+    },
+  );
   expect(start.status).toBe(200);
   const { url } = await json<{ url: string }>(start);
   const authorize = new URL(url);
@@ -77,25 +88,80 @@ async function signInWithGithub(user: FakeGithubUser) {
   return jar;
 }
 
-/** Signs in and picks the GitHub login as username, like most people will. */
+const claim = (jar: CookieJar, username: string) => post("/username/claim", { username }, { jar });
+
+/** Signs in and claims the GitHub login as username, like most people will. */
 async function signUp(user: FakeGithubUser) {
   const jar = await signInWithGithub(user);
-  const res = await call("/update-user", {
-    method: "POST",
-    body: { username: user.login },
-    jar,
-  });
-  expect(res.status).toBe(200);
+  expect((await claim(jar, user.login)).status).toBe(200);
   return jar;
 }
 
 type SessionResponse = {
   user: { id: string; username?: string | null; githubLogin?: string | null; email: string };
-  session: { id: string; kind: string };
+  session: { id: string };
 } | null;
 
-const getSession = async (auth: CallOptions) =>
-  json<SessionResponse>(await call("/get-session", auth));
+const getSession = async (options: CallOptions) =>
+  json<SessionResponse>(await call("/get-session", options));
+
+// ─── Device flow helpers ─────────────────────────────────────────────────────────────────────────
+
+type DeviceCode = { device_code: string; user_code: string; verification_uri: string };
+type TokenResponse = {
+  access_token?: string;
+  token_type?: string;
+  expires_in?: number;
+  error?: string;
+};
+
+async function startDeviceFlow() {
+  const res = await post("/device/code", { client_id: CLI_CLIENT_ID }, { origin: null });
+  expect(res.status).toBe(200);
+  return json<DeviceCode>(res);
+}
+
+const pollToken = async (deviceCode: string, path = "/cli/token") =>
+  json<TokenResponse>(
+    await post(
+      path,
+      {
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        device_code: deviceCode,
+        client_id: CLI_CLIENT_ID,
+      },
+      { origin: null },
+    ),
+  );
+
+/** Skips the polling interval instead of waiting 5 s. */
+const rewindPoll = (deviceCode: string) =>
+  d1.db
+    .prepare("UPDATE device_codes SET last_polled_at = 0 WHERE device_code = ?")
+    .bind(deviceCode)
+    .run();
+
+/** What the /device page does: look the code up (ties it to the user), then approve. */
+async function approve(jar: CookieJar, userCode: string) {
+  const verify = await call(`/device?user_code=${userCode}`, { jar });
+  expect(await json(verify)).toMatchObject({ status: "pending" });
+  return post("/device/approve", { userCode }, { jar });
+}
+
+/** Full `zerosnake login`; returns the CLI's bearer token. */
+async function loginCli(jar: CookieJar) {
+  const code = await startDeviceFlow();
+  expect(await pollToken(code.device_code)).toMatchObject({ error: "authorization_pending" });
+  expect((await approve(jar, code.user_code)).status).toBe(200);
+  await rewindPoll(code.device_code);
+  const token = await pollToken(code.device_code);
+  expect(token).toMatchObject({ token_type: "Bearer" });
+  return token.access_token ?? "";
+}
+
+const whoami = (token: string) => call("/cli/me", { bearer: token, origin: null });
+
+// ─── Tests ───────────────────────────────────────────────────────────────────────────────────────
 
 describe("GitHub sign-in", () => {
   it("creates the user and a web session; username is chosen later", async () => {
@@ -106,13 +172,14 @@ describe("GitHub sign-in", () => {
       githubLogin: "Ada",
       username: null,
     });
-    expect(session?.session.kind).toBe("web");
 
     const account = await d1.db
-      .prepare("SELECT provider_id, account_id FROM accounts WHERE user_id = ?")
+      .prepare("SELECT provider_id, account_id, access_token FROM accounts WHERE user_id = ?")
       .bind(session?.user.id)
-      .first();
-    expect(account).toEqual({ provider_id: "github", account_id: "1" });
+      .first<{ provider_id: string; account_id: string; access_token: string }>();
+    expect(account).toMatchObject({ provider_id: "github", account_id: "1" });
+    // Encrypted at rest.
+    expect(account?.access_token).not.toContain("gho_");
   });
 
   it("signs the same GitHub account back into the same user", async () => {
@@ -122,54 +189,62 @@ describe("GitHub sign-in", () => {
   });
 });
 
-describe("username", () => {
-  it("is set once on first sign-in, normalised to lowercase", async () => {
+describe("origin checks (on in tests too)", () => {
+  it("rejects cookie-authenticated POSTs from another origin", async () => {
     const jar = await signInWithGithub(ada);
-    const res = await call("/update-user", {
-      method: "POST",
-      body: { username: "Ada_Lovelace" },
-      jar,
+    const res = await post(
+      "/username/claim",
+      { username: "ada" },
+      {
+        jar,
+        origin: "https://evil.example",
+      },
+    );
+    expect(res.status).toBe(403);
+    expect((await getSession({ jar }))?.user.username).toBeNull();
+  });
+
+  it("rejects a callbackURL on another origin", async () => {
+    const res = await post("/sign-in/social", {
+      provider: "github",
+      callbackURL: "https://evil.example/steal",
     });
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("username", () => {
+  it("is claimed once, normalised to lowercase", async () => {
+    const jar = await signInWithGithub(ada);
+    const res = await claim(jar, "Ada_Lovelace");
     expect(res.status).toBe(200);
+    expect(await json(res)).toEqual({ username: "ada_lovelace" });
     expect((await getSession({ jar }))?.user.username).toBe("ada_lovelace");
   });
 
   it("can't be changed once chosen", async () => {
     const jar = await signUp(ada);
-    const res = await call("/update-user", { method: "POST", body: { username: "ada2" }, jar });
+    const res = await claim(jar, "ada2");
     expect(res.status).toBe(400);
+    expect(await json(res)).toMatchObject({ code: "USERNAME_ALREADY_SET" });
     expect((await getSession({ jar }))?.user.username).toBe("ada");
   });
 
-  it("keeps githubLogin read-only", async () => {
+  it("lets only one of two racing claims win", async () => {
     const jar = await signInWithGithub(ada);
-    const res = await call("/update-user", {
-      method: "POST",
-      body: { githubLogin: "torvalds" },
-      jar,
-    });
-    expect(res.status).toBe(400);
-    expect((await getSession({ jar }))?.user.githubLogin).toBe("Ada");
+    const results = await Promise.all([claim(jar, "first"), claim(jar, "second")]);
+    const statuses = results.map((r) => r.status).sort();
+    expect(statuses).toEqual([200, 400]);
+    const winner = results.findIndex((r) => r.status === 200) === 0 ? "first" : "second";
+    expect((await getSession({ jar }))?.user.username).toBe(winner);
   });
 
   it("is unique", async () => {
-    const adaJar = await signInWithGithub(ada);
-    await call("/update-user", { method: "POST", body: { username: "snek" }, jar: adaJar });
-
+    await signUp({ ...ada, login: "snek" });
     const bobJar = await signInWithGithub(bob);
-    const available = await call("/is-username-available", {
-      method: "POST",
-      body: { username: "SNEK" },
-      jar: bobJar,
-    });
-    expect(await json(available)).toEqual({ available: false });
-
-    const taken = await call("/update-user", {
-      method: "POST",
-      body: { username: "Snek" },
-      jar: bobJar,
-    });
+    const taken = await claim(bobJar, "Snek");
     expect(taken.status).toBe(400);
+    expect(await json(taken)).toMatchObject({ code: "USERNAME_IS_ALREADY_TAKEN" });
     expect((await getSession({ jar: bobJar }))?.user.username).toBeNull();
   });
 
@@ -177,8 +252,9 @@ describe("username", () => {
     "rejects %j",
     async (name) => {
       const jar = await signInWithGithub(bob);
-      const res = await call("/update-user", { method: "POST", body: { username: name }, jar });
+      const res = await claim(jar, name);
       expect(res.status).toBe(400);
+      expect(await json(res)).toMatchObject({ code: "INVALID_USERNAME" });
     },
   );
 
@@ -189,57 +265,30 @@ describe("username", () => {
   });
 });
 
-describe("device flow (zerosnake login)", () => {
-  type DeviceCode = { device_code: string; user_code: string; verification_uri: string };
-  type TokenResponse = { access_token?: string; token_type?: string; error?: string };
-
-  async function startDeviceFlow() {
-    const res = await call("/device/code", { method: "POST", body: { client_id: CLI_CLIENT_ID } });
-    expect(res.status).toBe(200);
-    return json<DeviceCode>(res);
-  }
-
-  const pollToken = async (deviceCode: string) =>
-    json<TokenResponse>(
-      await call("/device/token", {
-        method: "POST",
-        body: {
-          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-          device_code: deviceCode,
-          client_id: CLI_CLIENT_ID,
-        },
-      }),
-    );
-
-  /** Skips the polling interval instead of waiting 5 s. */
-  const rewindPoll = (deviceCode: string) =>
-    d1.db
-      .prepare("UPDATE device_codes SET last_polled_at = 0 WHERE device_code = ?")
-      .bind(deviceCode)
-      .run();
-
-  /** Web user approves the code; returns the CLI's bearer token. */
-  async function login(jar: CookieJar) {
-    const code = await startDeviceFlow();
-    expect(await pollToken(code.device_code)).toMatchObject({ error: "authorization_pending" });
-
-    // The /device page looks the code up first, which ties it to the signed-in user.
-    const verify = await call(`/device?user_code=${code.user_code}`, { jar });
-    expect(await json(verify)).toMatchObject({ status: "pending" });
-
-    const approve = await call("/device/approve", {
-      method: "POST",
-      body: { userCode: code.user_code },
-      jar,
+describe("profile fields", () => {
+  it("can't be edited: /update-user is disabled", async () => {
+    const jar = await signUp(ada);
+    for (const body of [
+      { image: "https://evil.example/pixel.gif" },
+      { name: "Someone else" },
+      { username: "other" },
+      { githubLogin: "torvalds" },
+    ]) {
+      expect((await post("/update-user", body, { jar })).status).toBe(404);
+    }
+    expect((await getSession({ jar }))?.user).toMatchObject({
+      username: "ada",
+      githubLogin: "Ada",
     });
-    expect(approve.status).toBe(200);
+  });
 
-    await rewindPoll(code.device_code);
-    const token = await pollToken(code.device_code);
-    expect(token.token_type).toBe("Bearer");
-    return token.access_token ?? "";
-  }
+  it("raw session tokens are not listable", async () => {
+    const jar = await signUp(ada);
+    expect((await call("/list-sessions", { jar })).status).toBe(404);
+  });
+});
 
+describe("device flow (zerosnake login)", () => {
   it("issues a verification URL on the site", async () => {
     const code = await startDeviceFlow();
     expect(code.verification_uri).toBe(`${BASE}/device`);
@@ -247,119 +296,154 @@ describe("device flow (zerosnake login)", () => {
   });
 
   it("only serves the zerosnake CLI client", async () => {
-    const res = await call("/device/code", { method: "POST", body: { client_id: "other" } });
+    const res = await post("/device/code", { client_id: "other" }, { origin: null });
     expect(res.status).toBe(400);
-  });
-
-  it("gives the CLI a bearer token marked as a CLI session", async () => {
-    const jar = await signUp(ada);
-    const token = await login(jar);
-
-    const session = await getSession({ bearer: token });
-    expect(session?.user.email).toBe("ada@example.com");
-    expect(session?.session.kind).toBe("cli");
   });
 
   it("needs a username before the CLI can be approved", async () => {
     const jar = await signInWithGithub(ada);
     const code = await startDeviceFlow();
-    await call(`/device?user_code=${code.user_code}`, { jar });
-    const res = await call("/device/approve", {
-      method: "POST",
-      body: { userCode: code.user_code },
-      jar,
-    });
-    expect(res.status).toBe(403);
+    expect((await approve(jar, code.user_code)).status).toBe(403);
+  });
+
+  it("gives the CLI an opaque token, stored only as a hash", async () => {
+    const jar = await signUp(ada);
+    const token = await loginCli(jar);
+    expect(token).toMatch(/^zsk_[A-Za-z0-9_-]{43}$/);
+
+    const me = await json<CliIdentity>(await whoami(token));
+    expect(me.user).toMatchObject({ username: "ada" });
+
+    const rows = await d1.db.prepare("SELECT * FROM cli_tokens").all<Record<string, unknown>>();
+    expect(rows.results).toHaveLength(1);
+    expect(rows.results[0]?.token_hash).toBe(await hashToken(token));
+    expect(JSON.stringify(rows.results)).not.toContain(token);
+    // No Better Auth session was created for the CLI.
+    const sessions = await d1.db.prepare("SELECT count(*) AS n FROM sessions").first("n");
+    expect(sessions).toBe(1);
+  });
+
+  it("redeems a device code only once", async () => {
+    const jar = await signUp(ada);
+    const code = await startDeviceFlow();
+    await approve(jar, code.user_code);
+    expect(await pollToken(code.device_code)).toMatchObject({ token_type: "Bearer" });
+    await rewindPoll(code.device_code);
+    expect(await pollToken(code.device_code)).toMatchObject({ error: "invalid_grant" });
   });
 
   it("returns access_denied when the user denies", async () => {
     const jar = await signUp(ada);
     const code = await startDeviceFlow();
     await call(`/device?user_code=${code.user_code}`, { jar });
-    await call("/device/deny", { method: "POST", body: { userCode: code.user_code }, jar });
+    await post("/device/deny", { userCode: code.user_code }, { jar });
     expect(await pollToken(code.device_code)).toMatchObject({ error: "access_denied" });
   });
-});
 
-describe("CLI tokens", () => {
-  async function loginCli(jar: CookieJar) {
-    const code = await json<{ device_code: string; user_code: string }>(
-      await call("/device/code", { method: "POST", body: { client_id: CLI_CLIENT_ID } }),
-    );
-    await call(`/device?user_code=${code.user_code}`, { jar });
-    await call("/device/approve", { method: "POST", body: { userCode: code.user_code }, jar });
-    const res = await call("/device/token", {
-      method: "POST",
-      body: {
+  it("doesn't offer Better Auth's session-minting token endpoint", async () => {
+    const jar = await signUp(ada);
+    const code = await startDeviceFlow();
+    await approve(jar, code.user_code);
+    const res = await post(
+      "/device/token",
+      {
         grant_type: "urn:ietf:params:oauth:grant-type:device_code",
         device_code: code.device_code,
         client_id: CLI_CLIENT_ID,
       },
-    });
-    return (await json<{ access_token: string }>(res)).access_token;
-  }
+      { origin: null },
+    );
+    expect(res.status).toBe(404);
+  });
+});
 
-  const list = async (auth: CallOptions) => {
-    const res = await call("/cli-tokens/list", auth);
+describe("CLI token scope", () => {
+  it("is not a Better Auth session", async () => {
+    const jar = await signUp(ada);
+    const token = await loginCli(jar);
+    const asCli = { bearer: token, origin: null } as const;
+
+    expect(await getSession(asCli)).toBeNull();
+    expect((await call("/cli/tokens", asCli)).status).toBe(401);
+    expect((await post("/revoke-sessions", {}, asCli)).status).toBe(401);
+    expect((await post("/username/claim", { username: "x2" }, asCli)).status).toBe(401);
+
+    // Can't approve more devices for the account.
+    const other = await startDeviceFlow();
+    await call(`/device?user_code=${other.user_code}`, asCli);
+    expect((await post("/device/approve", { userCode: other.user_code }, asCli)).status).toBe(401);
+
+    // The web session is untouched.
+    expect((await getSession({ jar }))?.user.username).toBe("ada");
+  });
+
+  it("rejects unknown and expired tokens", async () => {
+    const jar = await signUp(ada);
+    const token = await loginCli(jar);
+    expect((await whoami(`${token}x`)).status).toBe(401);
+    expect((await whoami("not-a-token")).status).toBe(401);
+
+    await d1.db.prepare("UPDATE cli_tokens SET expires_at = 0").run();
+    expect((await whoami(token)).status).toBe(401);
+  });
+});
+
+describe("CLI tokens in settings", () => {
+  const list = async (jar: CookieJar) => {
+    const res = await call("/cli/tokens", { jar });
     expect(res.status).toBe(200);
     return json<CliToken[]>(res);
   };
 
-  it("lists only CLI sessions, without the secret token", async () => {
+  it("lists the user's tokens without any secret", async () => {
     const jar = await signUp(ada);
     await loginCli(jar);
     await loginCli(jar);
 
-    const tokens = await list({ jar });
+    const tokens = await list(jar);
     expect(tokens).toHaveLength(2);
-    expect(tokens[0]).toMatchObject({ userAgent: "vitest", current: false });
-    expect(tokens[0]).not.toHaveProperty("token");
+    expect(tokens[0]).toMatchObject({ userAgent: "vitest" });
+    expect(Object.keys(tokens[0] ?? {}).sort()).toEqual([
+      "createdAt",
+      "expiresAt",
+      "id",
+      "ipAddress",
+      "lastUsedAt",
+      "userAgent",
+    ]);
   });
 
   it("revokes a token so the CLI is signed out", async () => {
     const jar = await signUp(ada);
     const token = await loginCli(jar);
-    const [listed] = await list({ jar });
+    const [listed] = await list(jar);
 
-    const res = await call("/cli-tokens/revoke", { method: "POST", body: { id: listed?.id }, jar });
+    const res = await post("/cli/tokens/revoke", { id: listed?.id }, { jar });
     expect(res.status).toBe(200);
-    expect(await getSession({ bearer: token })).toBeNull();
-    expect(await list({ jar })).toEqual([]);
+    expect((await whoami(token)).status).toBe(401);
+    expect(await list(jar)).toEqual([]);
   });
 
-  it("lets the CLI see and revoke its own token", async () => {
+  it("lets the CLI sign itself out", async () => {
     const jar = await signUp(ada);
     const token = await loginCli(jar);
-    const [self] = await list({ bearer: token });
-    expect(self?.current).toBe(true);
-
-    await call("/cli-tokens/revoke", { method: "POST", body: { id: self?.id }, bearer: token });
-    expect(await getSession({ bearer: token })).toBeNull();
+    const res = await post("/cli/logout", {}, { bearer: token, origin: null });
+    expect(res.status).toBe(200);
+    expect((await whoami(token)).status).toBe(401);
   });
 
-  it("does not revoke web sessions or other users' tokens", async () => {
+  it("can't revoke other users' tokens", async () => {
     const adaJar = await signUp(ada);
     const adaToken = await loginCli(adaJar);
-    const [adaCli] = await list({ jar: adaJar });
-    const adaWeb = (await getSession({ jar: adaJar }))?.session.id;
+    const [adaCli] = await list(adaJar);
 
     const bobJar = await signUp(bob);
-    for (const id of [adaCli?.id, adaWeb]) {
-      const res = await call("/cli-tokens/revoke", { method: "POST", body: { id }, jar: bobJar });
-      expect(res.status).toBe(404);
-    }
-    const own = await call("/cli-tokens/revoke", {
-      method: "POST",
-      body: { id: adaWeb },
-      jar: adaJar,
-    });
-    expect(own.status).toBe(404);
-
-    expect((await getSession({ bearer: adaToken }))?.user.email).toBe("ada@example.com");
-    expect((await getSession({ jar: adaJar }))?.user.email).toBe("ada@example.com");
+    const res = await post("/cli/tokens/revoke", { id: adaCli?.id }, { jar: bobJar });
+    expect(res.status).toBe(404);
+    expect((await whoami(adaToken)).status).toBe(200);
   });
 
-  it("requires a session", async () => {
-    expect((await call("/cli-tokens/list")).status).toBe(401);
+  it("requires a web session", async () => {
+    expect((await call("/cli/tokens")).status).toBe(401);
   });
 });

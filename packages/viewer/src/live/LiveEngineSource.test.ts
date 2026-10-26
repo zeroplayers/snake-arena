@@ -1,11 +1,6 @@
-import type { EngineConfig } from "@zerosnake/engine";
+import { DEFAULT_CONFIG, type EngineConfig } from "@zerosnake/engine";
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_VISION_RADIUS,
-  KEYFRAME_INTERVAL,
-  type LiveBot,
-  LiveEngineSource,
-} from "./LiveEngineSource.ts";
+import { KEYFRAME_INTERVAL, type LiveBot, LiveEngineSource } from "./LiveEngineSource.ts";
 
 /** Spawns facing the centre and never turns, so it crosses the arena and hits the wall. */
 const straight: LiveBot = {
@@ -55,9 +50,9 @@ describe("LiveEngineSource", () => {
   });
 
   it("takes the vision radius from the engine config when it has one", () => {
-    expect(new LiveEngineSource({ bots: [] }).info.visionRadius).toBe(DEFAULT_VISION_RADIUS);
-    const config = { visionRadius: 40 } as Partial<EngineConfig>;
-    expect(new LiveEngineSource({ bots: [], config }).info.visionRadius).toBe(40);
+    expect(new LiveEngineSource({ bots: [] }).info.visionRadius).toBe(DEFAULT_CONFIG.visionRadius);
+    const config = { visionRadius: 35 } as Partial<EngineConfig>;
+    expect(new LiveEngineSource({ bots: [], config }).info.visionRadius).toBe(35);
     expect(new LiveEngineSource({ bots: [], config, visionRadius: 25 }).info.visionRadius).toBe(25);
   });
 

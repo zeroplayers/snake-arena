@@ -6,9 +6,13 @@
   "type": "module",
   "exports": "./src/index.ts",
   "scripts": {
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "bench": "node --experimental-transform-types --no-warnings scripts/bench.ts"
   },
   "dependencies": {
     "@zerosnake/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@zerosnake/engine": "workspace:*"
   }
 }

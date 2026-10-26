@@ -119,6 +119,16 @@ describe("steer", () => {
     expect(Math.abs(s.turn)).toBe(1);
     expect(s.clearance).toBeGreaterThanOrEqual(opts.safe);
   });
+
+  it("keeps turning the same way when both ways are as good", () => {
+    // A circle dead ahead: left and right cost the same, and the tie goes left.
+    const block = [{ x: 5, y: 0, r: 2 }];
+    expect(steer(state(), block, 0, opts, 1).turn).toBe(-1);
+    const holding = { ...opts, reversalCost: 0.5 };
+    expect(steer(state(), block, 0, holding).turn).toBe(-1);
+    expect(steer(state(), block, 0, holding, 1).turn).toBe(1);
+    expect(steer(state(), block, 0, holding, -1).turn).toBe(-1);
+  });
 });
 
 describe("createRandom", () => {

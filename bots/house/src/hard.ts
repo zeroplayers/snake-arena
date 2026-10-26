@@ -26,7 +26,7 @@ const BOOST_RANGE = 15;
 const WALL_MARGIN = 10;
 
 const OBSTACLES = { range: 20, margin: 1, headLead: 3 };
-const STEER = { rays: 16, lookahead: 20, safe: 10, dangerWeight: 10 };
+const STEER = { rays: 16, lookahead: 20, safe: 10, dangerWeight: 10, reversalCost: 0.5 };
 
 type Visible = SnakeView & { head: Vec; angle: number };
 
@@ -60,13 +60,15 @@ function cutOff(state: BotState): Vec | undefined {
  * best-value food.
  */
 export const hard = defineBot({
-  tick(state) {
+  init: () => ({ turn: 0 }),
+  tick(state, mem) {
     const { self } = state;
     const obstacles = collectObstacles(state, OBSTACLES);
     const aim = cutOff(state);
     const target = aim ?? bestFood(state);
     const desired = target ? angleTo(self.head, target) : self.angle;
-    const s = steer(state, obstacles, desired, STEER);
+    const s = steer(state, obstacles, desired, STEER, mem.turn);
+    mem.turn = s.turn;
     const boost =
       aim !== undefined &&
       self.length >= MIN_BOOST_LENGTH &&

@@ -163,16 +163,30 @@ export const BOTS = {
       if (state.lifeTick === ${at}) {${BURN}}
       return { turn: 1 };
     } };`,
-  /** Like `hostile`, but only if it has seen every tick since its life began. */
-  hostileWithMemory: (at: number) => `
+  /**
+   * Burns forever once its sandbox life has seen more than `after` ticks: a restart (which resets
+   * memory) puts it off, so only running forward under watch catches it.
+   */
+  burnAfter: (after: number) => `
     export default {
       init() { return { seen: 0 }; },
       tick(state, mem) {
-        mem.seen++;
-        if (state.lifeTick === ${at} && mem.seen === ${at + 1}) {${BURN}}
+        if (++mem.seen > ${after}) {${BURN}}
         return { turn: 1 };
       },
     };`,
+  /**
+   * Honest about its result but slow every tick: `reps` comparisons of two 1 MiB strings
+   * (uncharged by the sandbox, like straight-line code in #60).
+   */
+  slow: (reps: number) => `
+    let a = "x", b = "x";
+    for (let i = 0; i < 20; i++) { a = a + a; b = b + b; }
+    export default { tick(state) {
+      let n = 0;
+      for (let i = 0; i < ${reps}; i++) if (a === b) n++;
+      return { turn: n > 0 ? 1 : -1 };
+    } };`,
 };
 
 const BURN = `

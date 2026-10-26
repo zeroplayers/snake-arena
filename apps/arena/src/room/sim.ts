@@ -27,14 +27,21 @@ export interface EndedLife {
   death: Death;
   /** The killer's entry, when the killer was a snake of this room. */
   killer: RosterEntry | null;
+  /** Start tick of the replay chunk that recorded the death. */
+  chunkTick: number;
 }
 
+/** Watch mode's hooks (see `backstop.ts`). Normal batches pass none and never await. */
 export interface BatchHooks {
   /**
-   * Called before any bot code of `lifeId` runs (its start or its tick at `tick`), and with null
-   * before the engine step. The backstop uses it to leave a durable trace of who was running.
+   * Awaited before any bot code of `lifeId` runs (its start, or its tick at `tick`), and with
+   * null before each engine step. `abort` abandons the tick in progress and ends the batch.
    */
-  beforeBot?: (lifeId: string | null, tick: number) => Promise<void>;
+  beforeBot?: (lifeId: string | null, tick: number) => Promise<"go" | "abort">;
+  /** Asked between ticks; false ends the batch early. */
+  continueBatch?: () => boolean;
+  /** Lives to kill at the next step without running their code (filled during the batch). */
+  kills?: Map<string, Fault>;
 }
 
 export interface BatchPlan {
@@ -49,7 +56,11 @@ export interface BatchResult {
   spawned: RosterEntry[];
   ended: EndedLife[];
   /** Replay chunks completed during the batch. */
-  chunks: { key: string; bytes: Uint8Array }[];
+  chunks: { key: string; tick: number; bytes: Uint8Array }[];
+  /** Ticks actually stepped (fewer than planned when watch mode ended the batch early). */
+  ticks: number;
+  /** A tick was abandoned halfway: some bots ran it, the world didn't step. */
+  aborted: boolean;
   botTicks: number;
 }
 
@@ -61,7 +72,7 @@ interface Running {
 export class RoomSim {
   readonly recorder: ReplayRecorder;
   private readonly running = new Map<string, Running>();
-  private chunks: { key: string; bytes: Uint8Array }[] = [];
+  private chunks: { key: string; tick: number; bytes: Uint8Array }[] = [];
 
   /**
    * Resumes a room: `world` and `pending` as saved, `roster` the lives in it. Every bot starts a
@@ -73,12 +84,15 @@ export class RoomSim {
     pending: ReplayChunk | null,
     private readonly sandbox: Sandbox,
     roster: RosterEntry[],
+    chunkTicks?: number,
   ) {
     this.recorder = new ReplayRecorder(world, {
       onChunk: (bytes, chunk) => {
-        this.chunks.push({ key: chunkKey(roomId, chunk.snapshot.tick), bytes });
+        const tick = chunk.snapshot.tick;
+        this.chunks.push({ key: chunkKey(roomId, tick), tick, bytes });
       },
       ...(pending ? { pending } : {}),
+      ...(chunkTicks ? { chunkTicks } : {}),
     });
     for (const entry of roster) this.running.set(entry.lifeId, { entry, life: null });
   }
@@ -95,16 +109,33 @@ export class RoomSim {
     return n;
   }
 
+  /** Start tick of the open replay chunk, or null. */
+  get openChunkTick(): number | null {
+    return this.recorder.pending?.snapshot.tick ?? null;
+  }
+
   markLeaving(lifeId: string): void {
     const r = this.running.get(lifeId);
     if (r) r.entry.leaving = true;
   }
 
-  /** Runs one batch: spawns, then `plan.ticks` engine steps with every bot's tick before each. */
+  /** Runs one batch: spawns, then up to `plan.ticks` engine steps, every bot's tick before each. */
   async run(plan: BatchPlan, hooks: BatchHooks = {}, now = Date.now()): Promise<BatchResult> {
     const world = this.world;
-    const beforeBot = hooks.beforeBot;
-    const result: BatchResult = { spawned: [], ended: [], chunks: [], botTicks: 0 };
+    const { beforeBot, continueBatch, kills } = hooks;
+    const result: BatchResult = {
+      spawned: [],
+      ended: [],
+      chunks: [],
+      ticks: 0,
+      aborted: false,
+      botTicks: 0,
+    };
+    const finish = () => {
+      result.chunks = this.chunks;
+      this.chunks = [];
+      return result;
+    };
 
     // Bots that lost their sandbox life (a resumed room) start again.
     for (const r of this.running.values()) {
@@ -114,12 +145,10 @@ export class RoomSim {
     }
     for (const entry of plan.spawns) {
       this.recorder.spawn({ id: entry.lifeId, author: entry.author });
-      const pendingChunk = this.recorder.pending as ReplayChunk;
       const spawned: RosterEntry = {
         ...entry,
         startTick: world.tick,
         startedAt: now,
-        replayKey: chunkKey(this.roomId, pendingChunk.snapshot.tick),
         leaving: false,
       };
       const r: Running = { entry: spawned, life: null };
@@ -131,27 +160,33 @@ export class RoomSim {
 
     const ended = new Map<string, Running>();
     for (let k = 0; k < plan.ticks; k++) {
+      if (k > 0 && continueBatch && !continueBatch()) break;
       const actions: Record<string, Action> = {};
       const faults: Record<string, Fault> = {};
       for (const snake of world.snakes) {
         const id = snake.id;
-        const forced = k === 0 ? plan.faults.get(id) : undefined;
+        const forced = (k === 0 ? plan.faults.get(id) : undefined) ?? kills?.get(id);
         const r = this.running.get(id);
         if (forced || !r?.life) {
           faults[id] = forced ?? "error";
           continue;
         }
-        const state = buildBotState(world, snake);
-        if (beforeBot) await beforeBot(id, world.tick);
-        const report = r.life.tick(state);
+        if (beforeBot && (await beforeBot(id, world.tick)) === "abort") {
+          result.aborted = true;
+          return finish();
+        }
+        const report = r.life.tick(buildBotState(world, snake));
         result.botTicks++;
         actions[id] = report.action;
         if (report.death) faults[id] = report.death.fault;
       }
       if (beforeBot) await beforeBot(null, world.tick);
       this.recorder.step(actions, faults);
+      result.ticks++;
+      const chunkTick = this.recorder.pending?.snapshot.tick ?? world.tick;
       for (const death of world.deaths) {
         const r = this.running.get(death.id);
+        kills?.delete(death.id);
         if (!r) continue;
         r.life?.dispose();
         r.life = null;
@@ -159,26 +194,18 @@ export class RoomSim {
         ended.set(death.id, r);
         const killerId = death.killerId;
         const killer = killerId ? (this.running.get(killerId) ?? ended.get(killerId)) : undefined;
-        result.ended.push({ entry: r.entry, death, killer: killer?.entry ?? null });
+        result.ended.push({ entry: r.entry, death, killer: killer?.entry ?? null, chunkTick });
       }
     }
-    result.chunks = this.chunks;
-    this.chunks = [];
-    return result;
+    return finish();
   }
 
   /** Ends the open replay chunk (room shutting down). */
-  flush(): { key: string; bytes: Uint8Array }[] {
+  flush(): { key: string; tick: number; bytes: Uint8Array }[] {
     this.recorder.flush();
     const chunks = this.chunks;
     this.chunks = [];
     return chunks;
-  }
-
-  /** Mass and life tick of a living snake. */
-  snake(lifeId: string): { lifeTick: number; mass: number } | null {
-    const s = this.world.snakes.find((x) => x.id === lifeId);
-    return s ? { lifeTick: s.lifeTick, mass: s.mass } : null;
   }
 
   dispose(): void {

@@ -41,18 +41,27 @@ export const REALTIME_BATCH_TICKS = 10;
 export const DEFAULT_MAX_SNAKES = 20;
 export const DEFAULT_MIN_AUTHORS = 5;
 
+/** Stop simulating while the outbox holds more undelivered items than this. */
+export const DEFAULT_MAX_OUTBOX = 500;
+
 /** After the matchmaker had nothing for us, ask again at most this often (unless a life ends). */
 export const NEXT_LIFE_RETRY_MS = 10_000;
-/** The alarm set before a batch starts, so a batch that dies is picked up again. */
+/**
+ * The alarm set before a batch starts, so a batch that dies is picked up again. Cloudflare also
+ * retries a failed alarm, but only a few times.
+ */
 export const SAFETY_ALARM_MS = 1_000;
 
 /**
  * Ticks for the next batch: the most whose worst case (every bot at its full budget every tick,
  * plus starting `lifeStarts` lives) stays within `BATCH_CPU_SHARE` of the DO CPU limit.
+ *
+ * The sandbox's op budget doesn't yet bound straight-line code inside one op (#60), so a bot can
+ * still run far over this worst case; the backstop (`room/backstop.ts`) covers that.
  */
-export function batchTicks(bots: number, lifeStarts: number): number {
+export function batchTicks(bots: number, lifeStarts: number, cpuLimitMs = DO_CPU_LIMIT_MS): number {
   const budget =
-    DO_CPU_LIMIT_MS * BATCH_CPU_SHARE - BATCH_OVERHEAD_MS - lifeStarts * WORST_LIFE_START_MS;
+    cpuLimitMs * BATCH_CPU_SHARE - BATCH_OVERHEAD_MS - lifeStarts * WORST_LIFE_START_MS;
   const perTick = bots * WORST_BOT_TICK_MS + ENGINE_TICK_MS;
   return Math.max(1, Math.min(MAX_BATCH_TICKS, Math.floor(budget / perTick)));
 }

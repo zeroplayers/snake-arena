@@ -1,6 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+  CHUNK_TICKS,
   createWorld,
+  DEFAULT_CONFIG,
   decodeReplayChunk,
   encodeReplayChunk,
   type Fault,
@@ -14,14 +16,17 @@ import wasmModule from "../node_modules/@jitl/quickjs-wasmfile-release-sync/dist
 import { insertLives, recordBan } from "./db.ts";
 import {
   batchTicks,
+  DEFAULT_MAX_OUTBOX,
   DEFAULT_MAX_SNAKES,
   DEFAULT_MIN_AUTHORS,
+  DO_CPU_LIMIT_MS,
   NEXT_LIFE_RETRY_MS,
   REALTIME_BATCH_TICKS,
   SAFETY_ALARM_MS,
 } from "./limits.ts";
 import type {
   BanRecord,
+  IncidentOutcome,
   JoinResult,
   LifeResult,
   LifeTicket,
@@ -31,6 +36,18 @@ import type {
   RoomStartOptions,
   RoomStatus,
 } from "./protocol.ts";
+import {
+  DEFAULT_SLOW_TICK_MS,
+  INCIDENT_WINDOW_MS,
+  judgeCrash,
+  retryDelayMs,
+  SLOW_TICKS_TO_KILL,
+  STRIKES_TO_BAN,
+  WATCH_ABORT_SHARE,
+  WATCH_STOP_SHARE,
+  watching,
+  watchWindow,
+} from "./room/backstop.ts";
 import { houseFill } from "./room/house.ts";
 import { type BatchHooks, type BatchPlan, type BatchResult, RoomSim } from "./room/sim.ts";
 import {
@@ -41,8 +58,6 @@ import {
   RoomStore,
 } from "./room/store.ts";
 
-/** Outbox items that keep failing are dropped after this many attempts. */
-const MAX_OUTBOX_ATTEMPTS = 10;
 const TICK_MS = 1000 / TICK_RATE;
 
 /**
@@ -52,25 +67,29 @@ const TICK_MS = 1000 / TICK_RATE;
  * A batch, step by step:
  *  1. plan: spawn the pending tickets (and house bots up to 5 distinct authors), kill banned and
  *     leaving lives; size the batch for the worst case (see `limits.ts`);
- *  2. write a marker and `sync()` it, so a batch that dies is noticed by the next alarm;
+ *  2. write a marker with the invocation's start time and `sync()` it, so a batch that dies is
+ *     noticed by the next alarm;
  *  3. run it (engine + one QuickJS life per snake, recorded by `ReplayRecorder`);
  *  4. in one transaction: save the world, the open replay chunk and the roster, queue the side
  *     effects (replay chunks for R2, finished lives for D1 and the matchmaker), clear the marker;
- *  5. drain the outbox, ask the matchmaker for replacements, schedule the next alarm.
+ *  5. deliver the outbox, ask the matchmaker for replacements, schedule the next alarm.
  *
- * Backstop: a marker left over means the batch died (DO CPU limit, eviction, exception). The room
- * reloads the saved world and replays the same batch one bot at a time, syncing "who is running"
- * to storage before each bot's code. If that dies too, the bot named in the marker is the
- * culprit: its version is banned and its snake killed. If it completes, the incident is logged as
- * inconclusive and its result kept.
+ * Backstop (`room/backstop.ts`): a marker left over means the batch died. If too little wall time
+ * passed for it to have been the CPU limit, it was a restart: the batch runs again and nobody is
+ * blamed. Otherwise the room switches to watch mode (each bot call synced and timed, batches
+ * stopped early) for a window that grows with repeated incidents. A crash in watch mode that only
+ * one bot's own call can explain is a strike for that version; so is a life killed for ticks
+ * measured far over budget. Two strikes ban the version.
  *
- * After any reload (eviction or backstop) every bot restarts with `init` and empty memory;
- * the world, replay and roster continue exactly.
+ * After any reload (eviction or crash) every bot restarts with `init` and empty memory; the
+ * world, replay and roster continue exactly.
  */
 export class RoomDO extends DurableObject<Env> implements RoomRpc {
   private readonly store: RoomStore;
   private sim: RoomSim | null = null;
   private busy = false;
+  /** Watch mode: slow ticks measured per life (in memory; a reload starts the count again). */
+  private readonly slowTicks = new Map<string, number>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -83,6 +102,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     if (!this.store.meta()) {
       const seed = options.seed ?? crypto.getRandomValues(new Uint32Array(1))[0] ?? 0;
       const world = createWorld({ seed });
+      const limits = options.limits ?? {};
       const meta: Meta = {
         roomId: options.roomId ?? crypto.randomUUID(),
         state: "running",
@@ -90,10 +110,19 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         maxSnakes: options.maxSnakes ?? DEFAULT_MAX_SNAKES,
         minAuthors: options.minAuthors ?? DEFAULT_MIN_AUTHORS,
         manual: options.manual ?? false,
+        limits: {
+          cpuLimitMs: limits.cpuLimitMs ?? DO_CPU_LIMIT_MS,
+          batchTicks: limits.batchTicks ?? 0,
+          slowTickMs: limits.slowTickMs ?? DEFAULT_SLOW_TICK_MS,
+          maxOutbox: limits.maxOutbox ?? DEFAULT_MAX_OUTBOX,
+          chunkTicks: limits.chunkTicks ?? CHUNK_TICKS,
+        },
         livesEnded: 0,
         lastBatchTicks: 0,
         nextLifeAfter: 0,
         realtimeNext: 0,
+        watch: { untilTick: 0, untilMs: 0 },
+        openChunkTick: null,
       };
       this.store.transaction(() => {
         this.store.setMeta(meta);
@@ -130,12 +159,12 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   }
 
   async setMode(mode: RoomMode): Promise<void> {
-    const meta = this.store.meta();
-    if (!meta || meta.mode === mode) return;
-    meta.mode = mode;
-    meta.realtimeNext = Date.now();
-    this.store.setMeta(meta);
-    if (meta.state !== "running" || meta.manual) return;
+    const meta = this.store.updateMeta((m) => {
+      if (m.mode === mode) return;
+      m.mode = mode;
+      m.realtimeNext = Date.now();
+    });
+    if (meta?.state !== "running" || meta.manual) return;
     // Switching to accelerated runs the next batch now; to real time, from now on.
     await this.ctx.storage.setAlarm(Date.now());
   }
@@ -144,6 +173,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     const meta = this.store.meta();
     const world = this.sim?.world ?? this.store.getJson<World>("world");
     const snakes = new Map((world?.snakes ?? []).map((s) => [s.id, s]));
+    const outbox = this.store.outboxStats();
     return {
       roomId: meta?.roomId ?? null,
       state: meta ? meta.state : "new",
@@ -160,8 +190,16 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       pending: this.store.pending().map((p) => p.lifeId),
       lastBatchTicks: meta?.lastBatchTicks ?? 0,
       livesEnded: meta?.livesEnded ?? 0,
-      incidents: this.store.incidents(),
+      incidents: this.store
+        .incidents()
+        .map(({ tick, outcome, versionId }) => ({ tick, outcome, versionId })),
+      strikes: this.store
+        .strikes()
+        .map(({ versionId, lifeId, kind, tick }) => ({ versionId, lifeId, kind, tick })),
       bans: this.store.bans().map((b) => b.versionId),
+      watching: meta ? watching(meta.watch, world?.tick ?? 0, Date.now()) : false,
+      outbox: { size: outbox.size, failing: outbox.failing },
+      paused: meta ? outbox.size > meta.limits.maxOutbox : false,
     };
   }
 
@@ -179,13 +217,27 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   private async cycle(): Promise<void> {
     if (this.busy) return;
     this.busy = true;
+    // CPU time never exceeds wall time since this point: the backstop's evidence.
+    const invokedAt = Date.now();
     try {
       const meta = this.store.meta();
-      if (meta?.state !== "running") return;
+      if (!meta) return;
+      await this.drain();
+      const outbox = this.store.outboxStats();
+      if (meta.state !== "running") {
+        if (outbox.size > 0) await this.scheduleRetry(meta, outbox.nextAt);
+        return;
+      }
+      if (outbox.size > meta.limits.maxOutbox) {
+        // D1/R2/matchmaker are failing: don't produce more until they recover.
+        console.error("room paused, outbox full", meta.roomId, outbox);
+        await this.scheduleRetry(meta, outbox.nextAt);
+        return;
+      }
       try {
         const marker = this.store.marker();
-        if (marker) await this.recover(meta, marker);
-        else await this.batch(meta);
+        if (marker) await this.recover(meta, marker, invokedAt);
+        else await this.batch(invokedAt);
       } catch (e) {
         // The in-memory room may be half a batch ahead of storage: drop it. The marker stays,
         // so the next cycle handles this like a batch that died.
@@ -201,86 +253,150 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     }
   }
 
-  private async batch(meta: Meta, ticks?: number): Promise<void> {
+  private async batch(invokedAt: number): Promise<void> {
+    const meta = this.store.meta();
+    if (!meta) return;
     const sim = await this.loadSim(meta);
     const maxPendingSeq = this.store.lastPendingSeq();
-    const plan = this.plan(meta, sim, maxPendingSeq, ticks);
-    await this.begin({
+    const plan = this.plan(meta, sim, maxPendingSeq);
+    const watch = watching(meta.watch, sim.world.tick, Date.now());
+    const marker: BatchMarker = {
       fromTick: sim.world.tick,
-      ticks: plan.ticks,
       maxPendingSeq,
-      isolate: false,
+      startedAt: invokedAt,
+      watch,
       suspectLife: null,
+      suspectAt: null,
       suspectTick: null,
-    });
-    const result = await sim.run(plan);
-    this.commit(meta, sim, plan, result, maxPendingSeq);
+    };
+    await this.begin(meta, marker);
+    const slowKilled = new Set<string>();
+    const hooks = watch ? this.watchHooks(meta, marker, slowKilled) : {};
+    const result = await sim.run(plan, hooks);
+    this.commit(sim, result, maxPendingSeq, slowKilled);
+    // Some bots ran a tick the world never stepped: restart them from the saved frame.
+    if (result.aborted) this.dropSim();
+  }
+
+  /**
+   * Watch mode: before each bot call, sync who is about to run and when; time each call (the
+   * clock moves at I/O, so the time between two syncs bounds the CPU in between); stop the batch
+   * before the invocation gets near the CPU limit.
+   */
+  private watchHooks(meta: Meta, marker: BatchMarker, slowKilled: Set<string>): BatchHooks {
+    const limit = meta.limits.cpuLimitMs;
+    const kills = new Map<string, Fault>();
+    let last = Date.now();
+    let lastLife: string | null = null;
+    return {
+      kills,
+      continueBatch: () => Date.now() - marker.startedAt < WATCH_STOP_SHARE * limit,
+      beforeBot: async (lifeId, tick) => {
+        // Any I/O moves the clock; a timer is the cheapest.
+        await new Promise((r) => setTimeout(r, 0));
+        const now = Date.now();
+        if (lastLife !== null && now - last > meta.limits.slowTickMs) {
+          const n = (this.slowTicks.get(lastLife) ?? 0) + 1;
+          this.slowTicks.set(lastLife, n);
+          console.warn("room slow tick", meta.roomId, lastLife, `${now - last} ms`, n);
+          if (n >= SLOW_TICKS_TO_KILL && !slowKilled.has(lastLife)) {
+            kills.set(lastLife, "timeout");
+            slowKilled.add(lastLife);
+          }
+        }
+        if (lifeId !== null && now - marker.startedAt > WATCH_ABORT_SHARE * limit) return "abort";
+        marker.suspectLife = lifeId;
+        marker.suspectAt = now;
+        marker.suspectTick = tick;
+        this.store.setMarker(marker);
+        await this.ctx.storage.sync();
+        last = Date.now();
+        lastLife = lifeId;
+        return "go";
+      },
+    };
   }
 
   /** A batch died before saving its result (the marker is still there). */
-  private async recover(meta: Meta, marker: BatchMarker): Promise<void> {
+  private async recover(meta: Meta, marker: BatchMarker, invokedAt: number): Promise<void> {
     this.dropSim();
+    this.slowTicks.clear();
     const now = Date.now();
-    if (marker.isolate) {
-      // The isolated replay died too: whoever's code was running did it.
-      const culprit = marker.suspectLife ? this.findLife(marker.suspectLife) : null;
-      this.store.transaction(() => {
-        if (culprit?.versionId) {
-          const ban: BanRecord = {
-            versionId: culprit.versionId,
-            author: culprit.author,
-            lifeId: culprit.lifeId,
-            roomId: meta.roomId,
-            tick: marker.suspectTick ?? marker.fromTick,
-            reason: "cpu",
-            message:
-              `The room ran out of CPU twice in ticks ${marker.fromTick}–` +
-              `${marker.fromTick + marker.ticks}; the second time, with one bot running at a ` +
-              `time, it was this bot's code (tick ${marker.suspectTick}).`,
-            at: now,
-          };
-          this.store.addBan({ ...ban });
-          this.store.enqueue({ kind: "ban", json: JSON.stringify(ban) });
-        } else if (culprit) {
-          this.store.markLeaving(culprit.lifeId);
-        }
-        this.store.addIncident(
-          {
-            tick: marker.fromTick,
-            outcome: culprit ? "banned" : "inconclusive",
-            versionId: culprit?.versionId ?? null,
-          },
-          now,
-        );
-        this.store.clearMarker();
+    const verdict = judgeCrash(marker, now, meta.limits.cpuLimitMs);
+    const culprit = verdict.kind === "culprit" ? this.findLife(verdict.lifeId) : null;
+    this.store.transaction(() => {
+      this.store.clearMarker();
+      let outcome: IncidentOutcome = verdict.kind;
+      if (verdict.kind === "culprit" && culprit?.versionId) {
+        const detail =
+          `the room died ${Math.round(verdict.gapMs)} ms after its batch began, ` +
+          `${Math.round(verdict.callMs)} ms into this bot's call at tick ${marker.suspectTick}, ` +
+          `with the CPU limit at ${meta.limits.cpuLimitMs} ms`;
+        outcome = this.strike(meta, culprit, "cpu", marker.suspectTick ?? marker.fromTick, detail);
+      } else if (verdict.kind === "culprit" && culprit) {
+        this.store.markLeaving(culprit.lifeId);
+      }
+      this.store.addIncident({
+        tick: marker.fromTick,
+        outcome,
+        versionId: culprit?.versionId ?? null,
+        at: now,
       });
-      console.error("room backstop", meta.roomId, marker, culprit?.versionId ?? "no culprit");
-      await this.batch(meta);
-      return;
-    }
-
-    // Replay the same batch from the saved world, one bot at a time.
-    console.warn("room batch died, replaying it isolated", meta.roomId, marker);
-    const sim = await this.loadSim(meta);
-    const plan = this.plan(meta, sim, marker.maxPendingSeq, marker.ticks);
-    await this.begin({ ...marker, isolate: true, suspectLife: null, suspectTick: null });
-    const hooks: BatchHooks = {
-      beforeBot: async (lifeId, tick) => {
-        this.store.setSuspect(lifeId, tick);
-        await this.ctx.storage.sync();
-      },
-    };
-    const result = await sim.run(plan, hooks);
-    this.commit(meta, sim, plan, result, marker.maxPendingSeq, () => {
-      this.store.addIncident(
-        { tick: marker.fromTick, outcome: "inconclusive", versionId: null },
-        now,
-      );
+      if (verdict.kind !== "restart") {
+        const recent = this.store.cpuIncidentsSince(now - INCIDENT_WINDOW_MS);
+        this.store.updateMeta((m) => {
+          m.watch = watchWindow(m.watch, recent, marker.fromTick, now, DEFAULT_CONFIG.lifeCap);
+        });
+      }
     });
+    console.error("room batch died", meta.roomId, verdict, culprit?.versionId ?? null);
+    await this.batch(invokedAt);
   }
 
-  /** What the next batch does. Depends only on saved state, so a replay plans the same batch. */
-  private plan(meta: Meta, sim: RoomSim, maxPendingSeq: number, ticks?: number): BatchPlan {
+  /**
+   * Records a strike against `life`'s version; bans it at `STRIKES_TO_BAN`. Returns the
+   * incident outcome. Runs inside a transaction.
+   */
+  private strike(
+    meta: Meta,
+    life: LifeEntry,
+    kind: "cpu" | "slow",
+    tick: number,
+    detail: string,
+  ): IncidentOutcome {
+    const versionId = life.versionId as string;
+    const now = Date.now();
+    const strikes = this.store.addStrike({
+      versionId,
+      lifeId: life.lifeId,
+      kind,
+      tick,
+      detail,
+      at: now,
+    });
+    if (strikes < STRIKES_TO_BAN) return kind === "cpu" ? "culprit" : "slow";
+    const ban: BanRecord = {
+      versionId,
+      author: life.author,
+      lifeId: life.lifeId,
+      roomId: meta.roomId,
+      tick,
+      reason: kind,
+      message:
+        kind === "cpu"
+          ? `Banned by the arena: this bot used up the room's CPU limit (${strikes} times; ` +
+            `last: ${detail}).`
+          : `Banned by the arena: this bot's ticks ran far over the time budget (${strikes} ` +
+            `lives; last: ${detail}).`,
+      at: now,
+    };
+    this.store.addBan({ versionId, lifeId: life.lifeId, tick, at: now });
+    this.store.enqueue({ kind: "ban", json: JSON.stringify(ban) });
+    return "banned";
+  }
+
+  /** What the next batch does. Depends only on saved state, so a rerun plans the same batch. */
+  private plan(meta: Meta, sim: RoomSim, maxPendingSeq: number): BatchPlan {
     const faults = new Map<string, Fault>();
     for (const e of sim.roster) {
       if (e.versionId && this.store.isBanned(e.versionId)) faults.set(e.lifeId, "timeout");
@@ -302,38 +418,38 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     );
     const bots = staying.length + spawns.length;
     const starts = spawns.length + sim.idleLives;
-    let n = ticks ?? batchTicks(bots, starts);
-    if (ticks === undefined && meta.mode === "realtime") n = Math.min(n, REALTIME_BATCH_TICKS);
-    return { spawns, faults, ticks: n };
+    let ticks = meta.limits.batchTicks || batchTicks(bots, starts, meta.limits.cpuLimitMs);
+    if (meta.mode === "realtime") ticks = Math.min(ticks, REALTIME_BATCH_TICKS);
+    return { spawns, faults, ticks };
   }
 
   /** Saves the marker (and a safety alarm) durably before a batch runs. */
-  private async begin(marker: BatchMarker): Promise<void> {
-    const meta = this.store.meta();
+  private async begin(meta: Meta, marker: BatchMarker): Promise<void> {
     this.store.setMarker(marker);
-    if (meta && !meta.manual) await this.ctx.storage.setAlarm(Date.now() + SAFETY_ALARM_MS);
+    if (!meta.manual) await this.ctx.storage.setAlarm(Date.now() + SAFETY_ALARM_MS);
     await this.ctx.storage.sync();
   }
 
   private commit(
-    meta: Meta,
     sim: RoomSim,
-    plan: BatchPlan,
     result: BatchResult,
     maxPendingSeq: number,
-    alsoInTransaction?: () => void,
+    slowKilled: Set<string>,
   ): void {
     const now = Date.now();
     this.store.transaction(() => {
-      alsoInTransaction?.();
+      const meta = this.store.meta() as Meta;
       const pending = sim.recorder.pending;
       this.store.putJson("world", sim.world);
       this.store.putBlob("chunk", pending ? encodeReplayChunk(pending) : null);
       for (const s of result.spawned) this.store.addToRoster(s);
       this.store.removePending(maxPendingSeq);
+      // Chunks first: a life is delivered only after the chunk it points to.
+      for (const c of result.chunks) this.store.enqueue({ kind: "chunk", ...c });
       let real = 0;
-      for (const { entry, death, killer } of result.ended) {
+      for (const { entry, death, killer, chunkTick } of result.ended) {
         this.store.removeFromRoster(entry.lifeId);
+        this.slowTicks.delete(entry.lifeId);
         if (!entry.versionId) continue;
         real++;
         const life: LifeResult = {
@@ -348,54 +464,71 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
           kills: death.kills,
           deathCause: entry.leaving ? "retired" : death.cause,
           killer: killer ? (killer.versionId ?? `house:${killer.house}`) : null,
-          replayKey: entry.replayKey,
+          replayKey: `${meta.roomId}/${String(chunkTick).padStart(10, "0")}.zsr`,
           startedAt: entry.startedAt,
           endedAt: now,
         };
-        this.store.enqueue({ kind: "life", json: JSON.stringify(life) });
+        this.store.enqueue({ kind: "life", json: JSON.stringify(life), chunkTick });
+        if (slowKilled.has(entry.lifeId)) {
+          const detail = `${SLOW_TICKS_TO_KILL} ticks over ${meta.limits.slowTickMs} ms in watch mode`;
+          const outcome = this.strike(meta, entry, "slow", death.tick, detail);
+          this.store.addIncident({
+            tick: death.tick,
+            outcome,
+            versionId: entry.versionId,
+            at: now,
+          });
+        }
       }
-      for (const c of result.chunks) this.store.enqueue({ kind: "chunk", ...c });
-      const fresh = this.store.meta() ?? meta;
-      fresh.livesEnded += result.ended.length;
-      fresh.lastBatchTicks = plan.ticks;
-      if (real > 0) fresh.nextLifeAfter = 0;
-      this.store.setMeta(fresh);
+      meta.livesEnded += result.ended.length;
+      meta.lastBatchTicks = result.ticks;
+      meta.openChunkTick = sim.openChunkTick;
+      if (real > 0) meta.nextLifeAfter = 0;
+      this.store.setMeta(meta);
       this.store.clearMarker();
     });
   }
 
   // --- Side effects ------------------------------------------------------------------------
 
-  /** Sends what committed batches queued: replay chunks to R2, lives and bans to D1. */
+  /**
+   * Delivers what committed batches queued: replay chunks to R2, lives (once their chunk is in
+   * R2) and bans to D1 and the matchmaker. Failures retry with exponential backoff; nothing is
+   * dropped.
+   */
   private async drain(): Promise<void> {
-    const meta = this.store.meta();
-    for (const { seq, item } of this.store.outbox()) {
-      try {
-        switch (item.kind) {
-          case "chunk":
-            await this.env.REPLAYS.put(item.key, item.bytes);
-            break;
-          case "life": {
-            const life = JSON.parse(item.json) as LifeResult;
-            await insertLives(this.env.DB, [life]);
-            await this.matchmaker().lifeEnded(life);
-            break;
+    for (let pass = 0; pass < 2; pass++) {
+      const meta = this.store.meta();
+      if (!meta) return;
+      const due = this.store.dueOutbox(Date.now(), meta.openChunkTick);
+      if (due.length === 0) return;
+      for (const { seq, item } of due) {
+        try {
+          switch (item.kind) {
+            case "chunk":
+              await this.env.REPLAYS.put(item.key, item.bytes);
+              break;
+            case "life": {
+              const life = JSON.parse(item.json) as LifeResult;
+              await insertLives(this.env.DB, [life]);
+              await this.matchmaker().lifeEnded(life);
+              break;
+            }
+            case "ban": {
+              const ban = JSON.parse(item.json) as BanRecord;
+              await recordBan(this.env.DB, ban);
+              await this.matchmaker().versionBanned(ban);
+              break;
+            }
+            case "closed":
+              await this.matchmaker().roomClosed(meta.roomId);
+              break;
           }
-          case "ban": {
-            const ban = JSON.parse(item.json) as BanRecord;
-            await recordBan(this.env.DB, ban);
-            await this.matchmaker().versionBanned(ban);
-            break;
-          }
-          case "closed":
-            if (meta) await this.matchmaker().roomClosed(meta.roomId);
-            break;
+          this.store.done(seq);
+        } catch (e) {
+          const attempts = this.store.failed(seq, (a) => Date.now() + retryDelayMs(a), String(e));
+          console.error("room outbox", meta.roomId, item.kind, `attempt ${attempts}`, e);
         }
-        this.store.done(seq);
-      } catch (e) {
-        const attempts = this.store.failed(seq);
-        console.error("room outbox", item.kind, `attempt ${attempts}`, e);
-        if (attempts >= MAX_OUTBOX_ATTEMPTS) this.store.done(seq);
       }
     }
   }
@@ -420,9 +553,9 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         return false;
       }
       if (!ticket) {
-        const fresh = this.store.meta() ?? meta;
-        fresh.nextLifeAfter = Date.now() + NEXT_LIFE_RETRY_MS;
-        this.store.setMeta(fresh);
+        this.store.updateMeta((m) => {
+          m.nextLifeAfter = Date.now() + NEXT_LIFE_RETRY_MS;
+        });
         return true;
       }
       const result = await this.join(ticket);
@@ -452,11 +585,15 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       for (const c of chunks) this.store.enqueue({ kind: "chunk", ...c });
       this.store.enqueue({ kind: "closed" });
       meta.state = "closed";
+      meta.openChunkTick = null;
       this.store.setMeta(meta);
     });
     this.dropSim();
-    await this.ctx.storage.deleteAlarm();
     await this.drain();
+    // Anything still undelivered retries from alarms.
+    const outbox = this.store.outboxStats();
+    if (outbox.size > 0) await this.scheduleRetry(meta, outbox.nextAt);
+    else await this.ctx.storage.deleteAlarm();
   }
 
   // --- Scheduling --------------------------------------------------------------------------
@@ -469,7 +606,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
 
   private async scheduleNext(): Promise<void> {
     const meta = this.store.meta();
-    if (!meta || meta.manual || meta.state !== "running") {
+    if (meta?.state !== "running" || meta.manual) {
       await this.ctx.storage.deleteAlarm();
       return;
     }
@@ -488,6 +625,12 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     await this.ctx.storage.setAlarm(next);
   }
 
+  /** Paused, or closed with deliveries left: wake up when the next retry is due. */
+  private async scheduleRetry(meta: Meta, nextAt: number | null): Promise<void> {
+    if (meta.manual) return;
+    await this.ctx.storage.setAlarm(Math.max(Date.now() + 1000, nextAt ?? 0));
+  }
+
   // --- Helpers -----------------------------------------------------------------------------
 
   private async loadSim(meta: Meta): Promise<RoomSim> {
@@ -502,6 +645,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       chunk ? decodeReplayChunk(chunk) : null,
       sandbox,
       this.store.roster(),
+      meta.limits.chunkTicks,
     );
     return this.sim;
   }

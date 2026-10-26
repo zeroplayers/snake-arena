@@ -73,18 +73,41 @@ export function insertLives(db: D1Database, results: LifeResult[]): Promise<D1Re
   );
 }
 
+/** `versions.report` (apps/web `CheckReport`): the deploy checks' result, shown by the CLI. */
+export interface CheckReport {
+  ok: boolean;
+  checks: { name: string; ok: boolean; message?: string }[];
+  qualificationScore?: number;
+}
+
+/** The check the arena appends to a version's report when the backstop bans it. */
+export const BAN_CHECK = "arena-backstop";
+
+/** The version's report with the ban appended as a failed check, keeping the earlier checks. */
+export function banReport(report: CheckReport | null, ban: BanRecord): CheckReport {
+  const checks = (report?.checks ?? []).filter((c) => c.name !== BAN_CHECK);
+  checks.push({ name: BAN_CHECK, ok: false, message: ban.message });
+  return { ...report, ok: false, checks };
+}
+
 /**
  * Records a backstop ban: the version leaves the arena for good. `versions.status` has no
- * `banned` value, so it becomes `rejected` with the ban as its report.
+ * `banned` value, so it becomes `rejected`, and the report gets a failed `arena-backstop` check.
+ * Idempotent.
  */
-export function recordBan(db: D1Database, ban: BanRecord): Promise<D1Result> {
-  const report = JSON.stringify({ ban });
-  return db
+export async function recordBan(db: D1Database, ban: BanRecord): Promise<void> {
+  const row = await db
+    .prepare("SELECT report FROM versions WHERE id = ?")
+    .bind(ban.versionId)
+    .first<{ report: string | null }>();
+  if (!row) return;
+  const report = banReport(row.report ? (JSON.parse(row.report) as CheckReport) : null, ban);
+  await db
     .prepare(
       `UPDATE versions SET status = 'rejected', report = ?,
         updated_at = cast(unixepoch('subsecond') * 1000 as integer)
-       WHERE id = ? AND status != 'rejected'`,
+       WHERE id = ?`,
     )
-    .bind(report, ban.versionId)
+    .bind(JSON.stringify(report), ban.versionId)
     .run();
 }

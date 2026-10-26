@@ -31,24 +31,55 @@ export interface LifeResult {
   deathCause: DeathCause;
   /** The killer's version id, `house:<kind>` for a house bot, null unless `collision`. */
   killer: string | null;
-  /** R2 key (REPLAYS) of the replay chunk the life starts in; later chunks follow by tick. */
+  /**
+   * R2 key (REPLAYS) of the replay chunk the life ended in (`<roomId>/<chunk start tick>.zsr`).
+   * The object exists before the row is written. Earlier chunks of the room precede it by tick.
+   */
   replayKey: string;
   /** Wall-clock ms. */
   startedAt: number;
   endedAt: number;
 }
 
-/** A version banned by a room's CPU backstop. */
+/** A version banned by a room's CPU backstop (after `STRIKES_TO_BAN` strikes, see `backstop.ts`). */
 export interface BanRecord {
   versionId: string;
   author: string;
+  /** The life of the last strike. */
   lifeId: string;
   roomId: string;
-  /** Room tick of the batch that blew the DO CPU limit. */
+  /** Room tick of the last strike. */
   tick: number;
-  reason: "cpu";
+  /**
+   * `cpu`: a call of this bot alone ran for most of the DO CPU limit (watch mode); `slow`: its
+   * ticks were measured far over budget, life after life.
+   */
+  reason: "cpu" | "slow";
   message: string;
   at: number;
+}
+
+/**
+ * - `restart`: a batch died too quickly to be the CPU limit (deploy, eviction); nobody blamed.
+ * - `overrun`: a batch died after long enough to be the CPU limit; the room is watched.
+ * - `culprit`: in watch mode, only one bot's own call can explain it; that version gets a strike.
+ * - `banned`: a culprit verdict or slow kill that was the version's last allowed strike.
+ * - `slow`: a life killed in watch mode for ticks measured far over budget (a strike).
+ */
+export type IncidentOutcome = "restart" | "overrun" | "culprit" | "banned" | "slow";
+
+/** Tunables of one room. Defaults suit production; tests shrink them. */
+export interface RoomLimits {
+  /** The DO CPU limit the room is deployed with (`limits.cpu_ms`). Default 30 000. */
+  cpuLimitMs?: number;
+  /** Fixed ticks per batch instead of worst-case sizing (0 = size it). Default 0. */
+  batchTicks?: number;
+  /** Watch mode: a bot call measured over this is a slow tick. Default 250. */
+  slowTickMs?: number;
+  /** Stop simulating while the outbox holds more items than this. Default 500. */
+  maxOutbox?: number;
+  /** Ticks per replay chunk. Default `CHUNK_TICKS` (1200, two minutes). */
+  chunkTicks?: number;
 }
 
 export type JoinResult =
@@ -70,6 +101,7 @@ export interface RoomStartOptions {
   minAuthors?: number;
   /** Don't schedule alarms; batches run only through `RoomRpc.runBatch` (tests, tools). */
   manual?: boolean;
+  limits?: RoomLimits;
 }
 
 export interface RoomSnakeStatus {
@@ -94,18 +126,30 @@ export interface RoomStatus {
   lastBatchTicks: number;
   /** Lives finished since the room started. */
   livesEnded: number;
-  /** Batches that died (CPU limit, eviction) and were replayed by the backstop. */
-  incidents: { tick: number; outcome: "banned" | "inconclusive"; versionId: string | null }[];
+  /** Batches that died (CPU limit, restarts) and what the backstop made of them. */
+  incidents: { tick: number; outcome: IncidentOutcome; versionId: string | null }[];
+  strikes: { versionId: string; lifeId: string; kind: "cpu" | "slow"; tick: number }[];
   bans: string[];
+  /** Watch mode (isolated running) is on. */
+  watching: boolean;
+  /** Side effects not delivered yet; `failing` of them failed at least once. */
+  outbox: { size: number; failing: number };
+  /** Simulation paused until the outbox drains below `maxOutbox`. */
+  paused: boolean;
 }
 
-/** Calls the matchmaker accepts from rooms. */
+/**
+ * Calls the matchmaker accepts from rooms. Notifications come from the room's outbox, which
+ * retries until a call succeeds: they are **at least once** (a call that timed out after taking
+ * effect is repeated), so handle each idempotently (`lifeId`, `versionId`, `roomId` as keys).
+ */
 export interface MatchmakerRpc {
   /** The next life for `roomId` whose author is not in `excludeAuthors`, or null. */
   nextLife(request: { roomId: string; excludeAuthors: string[] }): Promise<LifeTicket | null>;
-  /** A deployed version's life ended (already written to D1). */
+  /** A deployed version's life ended (already written to D1; may be minutes after the death,
+   * since rows wait for their replay chunk). At least once. */
   lifeEnded(result: LifeResult): Promise<void>;
-  /** The room's backstop banned a version (already recorded in D1). */
+  /** The room's backstop banned a version (already recorded in D1). At least once. */
   versionBanned(ban: BanRecord): Promise<void>;
   /** Only house bots were left and the queue was empty, so the room stopped. */
   roomClosed(roomId: string): Promise<void>;

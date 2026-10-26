@@ -196,21 +196,62 @@ describe("state size", () => {
     checkVision(world, world.snakes[0] as Snake, state);
   });
 
-  it("downsamples bodies evenly, keeping each snake's first visible point", () => {
+  it("spends the point budget nearest first, keeping each snake's nearest point", () => {
     const world = crowd(10, { visionMaxSegments: 40, visionMaxSelfSegments: 7 });
     const me = world.snakes[0] as Snake;
+    const r = world.config.visionRadius;
     const state = buildBotState(world, me);
     const points = state.snakes.reduce((n, s) => n + s.segments.length, 0);
-    expect(points).toBeLessThanOrEqual(40);
+    expect(points).toBe(40);
+
+    // Every visible point of the shown snakes, flagged shown or not.
+    const all: { d: number; shown: boolean; forced: boolean }[] = [];
     for (const view of state.snakes) {
       const s = world.snakes.find((o) => o.id === view.id) as Snake;
-      const first = s.segments.find((p) => dist(p, me.head) <= world.config.visionRadius);
-      expect(view.segments[0]).toEqual(first);
-      expect(view.head).toEqual(s.head);
+      const visible = s.segments.filter((p) => dist(p, me.head) <= r);
+      const nearest = Math.min(...visible.map((p) => dist(p, me.head)));
+      expect(Math.min(...view.segments.map((p) => dist(p, me.head)))).toBe(nearest);
+      const shown = new Set(view.segments.map((p) => `${p.x},${p.y}`));
+      for (const p of visible) {
+        const d = dist(p, me.head);
+        all.push({ d, shown: shown.has(`${p.x},${p.y}`), forced: d === nearest });
+      }
+      // Head to tail order is kept.
+      const order = view.segments.map((p) =>
+        s.segments.findIndex((q) => q.x === p.x && q.y === p.y),
+      );
+      expect(order).toEqual([...order].sort((a, b) => a - b));
     }
+    // Nothing hidden is nearer than a shown point that was not forced in as a snake's nearest.
+    const cut = Math.max(...all.filter((p) => p.shown && !p.forced).map((p) => p.d));
+    for (const p of all) if (p.d < cut) expect(p.shown).toBe(true);
+
     expect(state.self.segments).toHaveLength(7);
     expect(state.self.segments[0]).toEqual(me.head);
     expect(state.self.segments[6]).toEqual(me.segments[me.segments.length - 1]);
+  });
+
+  it("shows a body crossing close ahead without gaps, even in a crowd", () => {
+    const world = crowd(30);
+    const me = world.snakes[0] as Snake;
+    // A long body running across the bot's path 4 units ahead.
+    const wall = place(world, { id: "wall", x: 4, y: 30, angle: Math.PI / 2, mass: 3000 });
+    const state = buildBotState(world, me);
+    expect(state.snakes.reduce((n, s) => n + s.segments.length, 0)).toBe(
+      world.config.visionMaxSegments,
+    );
+    const view = state.snakes.find((s) => s.id === "wall");
+    if (!view) throw new Error("wall not in view");
+    const near = (p: { x: number; y: number }) => dist(p, me.head) <= 15;
+    const truth = wall.segments.filter(near);
+    expect(view.segments.filter(near)).toEqual(truth);
+    // So within that distance no gap is wider than the body (2 × radius).
+    for (let k = 1; k < truth.length; k++) {
+      expect(dist(truth[k - 1] as Snake["head"], truth[k] as Snake["head"])).toBeLessThanOrEqual(
+        2 * view.radius + 1e-9,
+      );
+    }
+    expect(Math.min(...view.segments.map((p) => dist(p, me.head)))).toBeCloseTo(4, 0);
   });
 
   it("gives every visible snake at least one point when the budget is tiny", () => {

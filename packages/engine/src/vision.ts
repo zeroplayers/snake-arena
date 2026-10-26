@@ -10,11 +10,12 @@ import type { Food, Snake, SnakeId, Vec2, World } from "./types.ts";
  * from the head is at most the radius. Only visible points of other snakes and visible pellets
  * reach the state. Its size is capped so copying it into the sandbox stays cheap:
  *  - at most `visionMaxSnakes` other snakes, the nearest (by their nearest visible point);
- *  - at most `visionMaxSegments` body points over all of them: when there are more, each body
- *    keeps its first visible point and a share of the rest proportional to how much of it is
- *    visible, evenly spaced along the visible points (first and last kept);
+ *  - at most `visionMaxSegments` body points over all of them. When there are more, each snake
+ *    keeps its point nearest the head, and the rest of the budget goes to the nearest remaining
+ *    points overall. So bodies are complete (no fake gaps) up to some distance and only the far
+ *    parts of the view are cut, where they matter least;
  *  - at most `visionMaxSelfSegments` points of the bot's own body, evenly spaced, head and tail
- *    kept;
+ *    kept (a snake can't collide with itself, so gaps there are harmless);
  *  - at most `visionMaxFood` pellets, the nearest.
  * Snakes and food are listed nearest first (ties by world order / pellet id).
  *
@@ -46,7 +47,11 @@ interface Seen {
   snake: Snake;
   /** Indices of visible segments, head to tail. */
   visible: number[];
-  /** Squared distance to the nearest visible segment. */
+  /** Squared distance of each visible segment, same order. */
+  dist2: number[];
+  /** Position in `visible` of the nearest one. */
+  nearest: number;
+  /** Its squared distance. */
   d2: number;
   order: number;
 }
@@ -72,7 +77,8 @@ export function buildBotState(world: World, snake: Snake | SnakeId): BotState {
     const hdy = other.head.y - hy;
     if (hdx * hdx + hdy * hdy > reach * reach) continue;
     const visible: number[] = [];
-    let best = Number.POSITIVE_INFINITY;
+    const dist2: number[] = [];
+    let nearest = 0;
     const segs = other.segments;
     for (let k = 0; k < segs.length; k++) {
       const p = segs[k] as Vec2;
@@ -80,26 +86,21 @@ export function buildBotState(world: World, snake: Snake | SnakeId): BotState {
       const dy = p.y - hy;
       const d2 = dx * dx + dy * dy;
       if (d2 > r2) continue;
+      if (d2 < (dist2[nearest] ?? Number.POSITIVE_INFINITY)) nearest = visible.length;
       visible.push(k);
-      if (d2 < best) best = d2;
+      dist2.push(d2);
     }
-    if (visible.length > 0) seen.push({ snake: other, visible, d2: best, order: i });
+    if (visible.length > 0) {
+      const d2 = dist2[nearest] as number;
+      seen.push({ snake: other, visible, dist2, nearest, d2, order: i });
+    }
   }
   seen.sort((a, b) => a.d2 - b.d2 || a.order - b.order);
   const maxSnakes = Math.max(0, Math.min(c.visionMaxSnakes, c.visionMaxSegments));
   if (seen.length > maxSnakes) seen = seen.slice(0, maxSnakes);
 
-  let total = 0;
-  for (const v of seen) total += v.visible.length;
-  // Over budget: every snake keeps one point, the rest of the budget is shared out in
-  // proportion to each snake's remaining visible points (floored, so the sum never exceeds it).
-  const spare = c.visionMaxSegments - seen.length;
-  const extra = total - seen.length;
-  const snakes: SnakeView[] = seen.map(({ snake: other, visible }) => {
-    const keep =
-      total <= c.visionMaxSegments
-        ? visible.length
-        : 1 + Math.floor(((visible.length - 1) * spare) / extra);
+  const kept = keepNearest(seen, c.visionMaxSegments);
+  const snakes: SnakeView[] = seen.map(({ snake: other, visible }, s) => {
     const headVisible = visible[0] === 0;
     return {
       id: other.id,
@@ -109,7 +110,7 @@ export function buildBotState(world: World, snake: Snake | SnakeId): BotState {
       head: headVisible ? point(other.head) : null,
       angle: headVisible ? other.angle : null,
       boosting: other.boosting,
-      segments: evenlySpaced(visible, keep).map((k) => point(other.segments[k] as Vec2)),
+      segments: (kept[s] ?? visible).map((k) => point(other.segments[k] as Vec2)),
     };
   });
 
@@ -156,6 +157,33 @@ export function buildBotState(world: World, snake: Snake | SnakeId): BotState {
     food,
     wallDistance: c.arenaRadius - Math.sqrt(hx * hx + hy * hy),
   };
+}
+
+/**
+ * Segment indices to keep per snake (head to tail) when the visible points exceed `budget`, or
+ * an empty list when they all fit. Each snake keeps its nearest point; the remaining budget goes
+ * to the nearest of all other points (ties by snake, then head to tail).
+ */
+function keepNearest(seen: readonly Seen[], budget: number): number[][] {
+  let total = 0;
+  for (const v of seen) total += v.visible.length;
+  if (total <= budget) return [];
+  const rest: { d2: number; s: number; j: number }[] = [];
+  const keep: boolean[][] = seen.map((v, s) => {
+    const flags = new Array<boolean>(v.visible.length).fill(false);
+    flags[v.nearest] = true;
+    for (let j = 0; j < v.visible.length; j++) {
+      if (j !== v.nearest) rest.push({ d2: v.dist2[j] as number, s, j });
+    }
+    return flags;
+  });
+  rest.sort((a, b) => a.d2 - b.d2 || a.s - b.s || a.j - b.j);
+  const spare = Math.max(0, budget - seen.length);
+  for (let q = 0; q < spare && q < rest.length; q++) {
+    const p = rest[q] as { s: number; j: number };
+    (keep[p.s] as boolean[])[p.j] = true;
+  }
+  return seen.map((v, s) => v.visible.filter((_, j) => (keep[s] as boolean[])[j]));
 }
 
 function point(p: Vec2): Vec {

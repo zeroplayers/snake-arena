@@ -1,1 +1,1 @@
-export { createRng, type Rng } from "./rng";
+export { createRng, type Rng } from "./rng.ts";

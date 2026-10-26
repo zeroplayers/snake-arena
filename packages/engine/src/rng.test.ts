@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRng } from "./rng";
+import { createRng } from "./rng.ts";
 
 const take = (n: number, f: () => number) => Array.from({ length: n }, f);
 

@@ -1,0 +1,23 @@
+{
+  "name": "@zerosnake/spike-quickjs-do",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Spike #2: QuickJS bot execution inside a Durable Object",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "bench:node": "node src/node.ts",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261025.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.153.0"
+  },
+  "dependencies": {
+    "@jitl/quickjs-wasmfile-release-sync": "^0.32.0",
+    "@zerosnake/engine": "workspace:*",
+    "quickjs-emscripten-core": "^0.32.0"
+  }
+}

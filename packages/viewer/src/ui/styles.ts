@@ -105,9 +105,11 @@ const CSS = `
   background: var(--zsv-panel); border-top: 1px solid var(--zsv-line); min-width: 0;
 }
 .zsv-timeline { position: relative; flex: 1; min-width: 80px; height: 22px; }
-.zsv-markers { position: absolute; inset: 0 7px; pointer-events: none; }
+.zsv-markers {
+  position: absolute; inset: 0 7px; pointer-events: none; --first: 0; --span: 1;
+}
 .zsv-marker {
-  position: absolute; top: 2px; bottom: 2px; width: 2px; margin-left: -1px; background: #4a4f58;
+  position: absolute; left: calc((var(--t) - var(--first)) / var(--span) * 100%); top: 2px; bottom: 2px; width: 2px; margin-left: -1px; background: #4a4f58;
   border-radius: 1px;
 }
 .zsv-marker.zsv-mine { background: var(--zsv-danger); top: 0; bottom: 0; width: 3px; }

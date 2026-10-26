@@ -63,6 +63,9 @@ class Viewer implements ViewerHandle {
   private lastFrame: number | undefined;
   private lastPanel = 0;
   private panelKey = "";
+  private readonly deathMarks = new Map<string, { el: HTMLElement; tick: number }>();
+  private readonly bornMark = h("div", { class: "zsv-marker zsv-born" });
+  private markedId: string | undefined;
   private fps = 0;
   private fpsFrames = 0;
   private fpsSince = 0;
@@ -143,7 +146,7 @@ class Viewer implements ViewerHandle {
       step: "1",
       "aria-label": "Tick",
     });
-    this.markers = h("div", { class: "zsv-markers" });
+    this.markers = h("div", { class: "zsv-markers" }, this.bornMark);
     const timeline = h("div", { class: "zsv-timeline" }, this.markers, this.range);
     this.tickLabel = h("span", { class: "zsv-tick" });
     this.liveBtn = button("Live", "Jump to the newest tick (L)", () => this.playback.goLive());
@@ -306,7 +309,7 @@ class Viewer implements ViewerHandle {
     this.panelKey = key;
     this.renderList(snap);
     this.renderPanel(snap);
-    this.renderMarkers();
+    this.syncMarkers();
   }
 
   private renderList(snap: TickSnapshot | undefined): void {
@@ -421,29 +424,44 @@ class Viewer implements ViewerHandle {
     logBox.scrollTop = logBox.scrollHeight;
   }
 
-  private renderMarkers(): void {
+  /**
+   * Death markers are kept, not rebuilt: each one is placed by its tick in CSS, so only the
+   * container's range changes as the match grows, and only new or evicted deaths touch the DOM.
+   */
+  private syncMarkers(): void {
     const s = this.source;
     const first = s.firstTick;
     const span = Math.max(1, (s.endTick ?? s.lastTick) - first);
-    const pct = (tick: number) => `${((tick - first) / span) * 100}%`;
-    const marks: HTMLElement[] = [];
+    const style = this.markers.style;
+    if (style.getPropertyValue("--first") !== String(first))
+      style.setProperty("--first", String(first));
+    if (style.getPropertyValue("--span") !== String(span))
+      style.setProperty("--span", String(span));
+
     for (const life of s.lives()) {
       const d = life.death;
-      if (!d || d.tick < first) continue;
-      const el = h("div", {
-        class: life.id === this.selectedId ? "zsv-marker zsv-mine" : "zsv-marker",
-        title: `${life.id} died (tick ${d.tick})`,
-      });
-      el.style.left = pct(Math.min(d.tick, first + span));
-      marks.push(el);
+      if (!d || this.deathMarks.has(life.id)) continue;
+      const el = h("div", { class: "zsv-marker", title: `${life.id} died (tick ${d.tick})` });
+      el.style.setProperty("--t", String(d.tick));
+      this.deathMarks.set(life.id, { el, tick: d.tick });
+      this.markers.append(el);
     }
-    const selected = this.selectedId === undefined ? undefined : s.life(this.selectedId);
-    if (selected && selected.bornTick > first) {
-      const el = h("div", { class: "zsv-marker zsv-born" });
-      el.style.left = pct(selected.bornTick);
-      marks.push(el);
+    for (const [id, mark] of this.deathMarks) {
+      if (mark.tick >= first) continue;
+      mark.el.remove();
+      this.deathMarks.delete(id);
     }
-    this.markers.replaceChildren(...marks);
+
+    if (this.markedId !== this.selectedId) {
+      if (this.markedId !== undefined)
+        this.deathMarks.get(this.markedId)?.el.classList.remove("zsv-mine");
+      this.markedId = this.selectedId;
+    }
+    const id = this.selectedId;
+    if (id !== undefined) this.deathMarks.get(id)?.el.classList.add("zsv-mine");
+    const born = id === undefined ? undefined : s.life(id)?.bornTick;
+    this.bornMark.hidden = born === undefined || born <= first;
+    if (born !== undefined) this.bornMark.style.setProperty("--t", String(born));
   }
 
   private jumpToDeath(): void {

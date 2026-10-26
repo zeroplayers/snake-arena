@@ -1,6 +1,11 @@
+import type { EngineConfig } from "@zerosnake/engine";
 import { describe, expect, it } from "vitest";
-import type { LiveBot } from "./LiveEngineSource.ts";
-import { LiveEngineSource } from "./LiveEngineSource.ts";
+import {
+  DEFAULT_VISION_RADIUS,
+  KEYFRAME_INTERVAL,
+  type LiveBot,
+  LiveEngineSource,
+} from "./LiveEngineSource.ts";
 
 /** Spawns facing the centre and never turns, so it crosses the arena and hits the wall. */
 const straight: LiveBot = {
@@ -35,6 +40,27 @@ describe("LiveEngineSource", () => {
     expect(run()).toEqual(run());
   });
 
+  it("rebuilds past ticks exactly as they were simulated", () => {
+    const bots = [spinner, straight, { ...straight, name: "other" }];
+    const live = new LiveEngineSource({ bots, seed: 8, respawnDelay: 3 });
+    const seen: unknown[] = [live.snapshot(0)];
+    for (let t = 1; t <= 450; t++) {
+      live.request(t);
+      seen.push(structuredClone(live.snapshot(t)));
+    }
+    expect(live.lives().some((l) => l.death)).toBe(true);
+    // Backwards, so nearly every tick misses the cache and is re-simulated from a keyframe.
+    for (let t = 450; t >= 0; t--) expect(live.snapshot(t), `tick ${t}`).toEqual(seen[t]);
+    for (let t = 0; t <= 450; t++) expect(live.snapshot(t), `tick ${t}`).toEqual(seen[t]);
+  });
+
+  it("takes the vision radius from the engine config when it has one", () => {
+    expect(new LiveEngineSource({ bots: [] }).info.visionRadius).toBe(DEFAULT_VISION_RADIUS);
+    const config = { visionRadius: 40 } as Partial<EngineConfig>;
+    expect(new LiveEngineSource({ bots: [], config }).info.visionRadius).toBe(40);
+    expect(new LiveEngineSource({ bots: [], config, visionRadius: 25 }).info.visionRadius).toBe(25);
+  });
+
   it("keeps old snapshots intact while the world moves on", () => {
     const source = new LiveEngineSource({ bots: [spinner], seed: 2 });
     source.request(5);
@@ -49,7 +75,7 @@ describe("LiveEngineSource", () => {
     const tick = source.snapshot(3);
     const s = tick?.snakes.find((x) => x.id === "straight#1");
     const head = tick?.frame.snakes.find((x) => x.id === "straight#1")?.segments[0];
-    expect(s?.action).toEqual({ turn: 0 });
+    expect(s?.action).toEqual({ turn: 0, boost: false });
     expect(s?.logs).toEqual([`at ${head?.x.toFixed(1)},${head?.y.toFixed(1)}`]);
     expect(tick?.snakes.find((x) => x.id === "spinner#1")?.action).toEqual({
       turn: 1,
@@ -79,7 +105,7 @@ describe("LiveEngineSource", () => {
     };
     const source = new LiveEngineSource({ bots: [broken], seed: 5 });
     const s = source.snapshot(0)?.snakes[0];
-    expect(s?.action).toEqual({ turn: 0 });
+    expect(s?.action).toEqual({ turn: 0, boost: false });
     expect(s?.logs).toEqual(["error: boom"]);
   });
 
@@ -88,7 +114,7 @@ describe("LiveEngineSource", () => {
     source.request(1000);
     expect(source.lastTick).toBe(1000);
     expect(source.firstTick).toBeGreaterThan(0);
-    expect(source.lastTick - source.firstTick).toBeLessThan(10 + 256);
+    expect(source.lastTick - source.firstTick).toBeLessThan(10 + KEYFRAME_INTERVAL);
     expect(source.snapshot(source.firstTick - 1)).toBeUndefined();
     expect(source.snapshot(source.firstTick)?.tick).toBe(source.firstTick);
   });

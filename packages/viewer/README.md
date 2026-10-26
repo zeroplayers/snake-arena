@@ -44,9 +44,14 @@ A `TickSnapshot` holds a `RenderFrame` for the renderer and per-snake stats: sco
 kills, and the `action`, `logs` and `ops` of the bot call that saw that tick. A source may
 leave out what it doesn't know.
 
-`LiveEngineSource` runs `LiveBot`s (`act(snake, world, log) => Action`) against the engine,
-respawns dead bots as new lives (`name#1`, `name#2`, …) and keeps every tick in memory for
-scrubbing (`maxTicks`, default 30 minutes at 10 tps).
+`LiveEngineSource` runs `LiveBot`s (`act(snake, world, log) => Action`) against the engine and
+respawns dead bots as new lives (`name#1`, `name#2`, …). It keeps up to `maxTicks` of history
+(default 30 minutes at 10 tps) as a world copy every 100 ticks plus each tick's bot output.
+Any other tick is rebuilt by re-simulating from the copy before it, since the engine is
+deterministic. That's about 2.4 KB per tick with 20 snakes (~44 MB for the full 30 minutes,
+`VIEWER_BENCH_TICKS=18000 pnpm vitest run memory` to measure). Playback steps forward one tick
+at a time, and a random seek takes about 1.5 ms. The vision radius comes from the engine's
+`config.visionRadius` when it has one.
 
 ## Controls
 

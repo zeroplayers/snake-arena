@@ -24,6 +24,7 @@ export {
 export { mountViewer, type ViewerHandle, type ViewerOptions } from "./mountViewer.ts";
 export { DEATH_LEAD_TICKS, Playback, type PlaybackSample, SPEEDS } from "./Playback.ts";
 export type {
+  BotTrace,
   LifeDeath,
   LifeInfo,
   MatchInfo,

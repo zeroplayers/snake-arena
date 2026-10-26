@@ -31,6 +31,11 @@ export interface MatchSource {
    */
   lives(): readonly LifeInfo[];
   life(id: string): LifeInfo | undefined;
+  /**
+   * What a life's bot did on a tick, without building the whole snapshot. Optional: the log
+   * panel reads many ticks back and uses this when present, `snapshot` otherwise.
+   */
+  trace?(id: string, tick: number): BotTrace | undefined;
   dispose?(): void;
 }
 
@@ -54,8 +59,20 @@ export interface TickSnapshot {
   readonly deaths: readonly string[];
 }
 
-/** A living snake on one tick. */
-export interface SnakeTick {
+/** One bot call: what it returned after seeing a tick (applied on the way to the next one). */
+export interface BotTrace {
+  /** `undefined` when the source doesn't know, e.g. the newest live tick before the bot ran. */
+  readonly action?: Action;
+  /** `log()` lines from that call. */
+  readonly logs?: readonly string[];
+  /** Whether `logs` hit the per-tick byte limit. */
+  readonly logTruncated?: boolean;
+  /** QuickJS operations used by that call, once the sandbox reports them. */
+  readonly ops?: number;
+}
+
+/** A living snake on one tick, with its bot's call on that tick. */
+export interface SnakeTick extends BotTrace {
   /** Life id; the same as the `RenderSnake` id. */
   readonly id: string;
   readonly score: number;
@@ -65,17 +82,6 @@ export interface SnakeTick {
   readonly kills: number;
   readonly lifeTick: number;
   readonly boosting: boolean;
-  /**
-   * What the bot returned after seeing this tick (applied on the way to the next one).
-   * `undefined` when the source doesn't know, e.g. the newest live tick before the bot ran.
-   */
-  readonly action?: Action;
-  /** `log()` lines from that same call. */
-  readonly logs?: readonly string[];
-  /** Whether `logs` hit the per-tick byte limit. */
-  readonly logTruncated?: boolean;
-  /** QuickJS operations used by that call, once the sandbox reports them. */
-  readonly ops?: number;
 }
 
 /** One snake life, from spawn to death. */

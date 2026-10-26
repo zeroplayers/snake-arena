@@ -16,6 +16,7 @@
     "@zerosnake/sdk": "workspace:*"
   },
   "devDependencies": {
+    "@types/node": "^26.6.5",
     "vite": "^8.3.5"
   }
 }

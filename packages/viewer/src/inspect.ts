@@ -39,10 +39,11 @@ export function recentLogs(
   const out: LogEntry[] = [];
   const from = Math.max(source.firstTick, life.bornTick);
   for (let t = Math.min(tick, source.lastTick); t >= from && out.length < maxTicks; t--) {
-    const snake = source.snapshot(t)?.snakes.find((s) => s.id === id);
-    if (!snake) continue;
-    if (snake.logs && snake.logs.length > 0) {
-      out.push({ tick: t, lines: snake.logs, truncated: snake.logTruncated === true });
+    const trace = source.trace
+      ? source.trace(id, t)
+      : source.snapshot(t)?.snakes.find((s) => s.id === id);
+    if (trace?.logs && trace.logs.length > 0) {
+      out.push({ tick: t, lines: trace.logs, truncated: trace.logTruncated === true });
     }
   }
   return out.reverse();

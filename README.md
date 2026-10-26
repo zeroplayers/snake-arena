@@ -1,16 +1,16 @@
 # ZeroSnake Arena
 
-Арена, где люди вайбкодят ботов-змеек в стиле slither.io, деплоят их одной командой (`npx zerosnake deploy`), и боты круглосуточно соревнуются друг с другом на постоянных аренах.
+An arena where people vibe-code slither.io-style snake bots, deploy them with one command (`npx zerosnake deploy`), and the bots compete against each other 24/7 in persistent rooms.
 
-- Спецификация: [SPEC.md](SPEC.md)
-- Задачи MVP: [Issues](../../issues) и [Milestones](../../milestones)
+- Spec: [SPEC.md](SPEC.md)
+- MVP tasks: [Issues](../../issues) and [Milestones](../../milestones)
 
-## Окружения
+## Environments
 
-| Окружение | Домен |
+| Environment | Domain |
 |---|---|
-| staging | `*.surninsynergy.dev` (временно, финальный домен выберем позже) |
+| staging | `*.surninsynergy.dev` (temporary, final domain TBD) |
 
-## Статус
+## Status
 
-Проектирование. Код ещё не написан.
+Design phase. No code yet.

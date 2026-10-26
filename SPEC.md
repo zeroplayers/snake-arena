@@ -1,221 +1,217 @@
-# ZeroSnake Arena — спецификация v0.1
+# ZeroSnake Arena — Spec v0.1
 
-Арена, где люди вайбкодят ботов-змеек в стиле slither.io, деплоят их одной командой, и боты круглосуточно играют друг против друга на постоянных аренах. Всё open source.
+An arena where people vibe-code slither.io-style snake bots, deploy them with one command, and the bots play each other around the clock in persistent rooms. Everything is open source.
 
 ---
 
-## 1. Принятые решения
+## 1. Decisions
 
-| Вопрос | Решение |
+| Topic | Decision |
 |---|---|
-| Механика | slither.io: непрерывное поле, поворот с ограниченной скоростью, буст за счёт длины |
-| Формат арены | постоянные комнаты (раунды остаются запасным вариантом, если рейтинг будет слишком шумным) |
-| Видимость | только радиус вокруг головы |
-| Память бота | между тиками сохраняется, между жизнями сбрасывается |
-| Языки | JS / TS |
-| Доставка кода | CLI `npx zerosnake deploy` (без git-сервера) |
-| Хостинг | Cloudflare, Workers Paid |
-| Стек | TanStack Start, Better Auth, D1, R2, Durable Objects, Queues |
-| Открытость | всё open source: движок, SDK, CLI, сайт, шаблон, домашние боты |
-| Графика | берём из своего ZeroSnake (`~/Dropbox/SurninSynergy/zerosnake`) |
-| Домен | пока сабдомены `*.surninsynergy.dev` (тест/стейджинг), финальный выберем позже. Кандидат — zerosnake.io: в CF-аккаунтах его нет, `.io` registry отвечает 404, похоже, свободен |
+| Mechanics | slither.io: continuous field, rate-limited turning, boost costs length |
+| Arena format | persistent rooms (fixed-length rounds are the fallback if ratings turn out too noisy) |
+| Vision | only a radius around the head |
+| Bot memory | kept between ticks, reset between lives |
+| Languages | JS / TS |
+| Code delivery | CLI `npx zerosnake deploy` (no git server) |
+| Hosting | Cloudflare, Workers Paid |
+| Stack | TanStack Start, Better Auth, D1, R2, Durable Objects, Queues |
+| Openness | everything open source: engine, SDK, CLI, site, template, house bots |
+| Graphics | reused from the original ZeroSnake game (our own project) |
+| Domain | `*.surninsynergy.dev` subdomains for staging for now; final domain TBD (candidate: zerosnake.io, appears to be unregistered) |
 
 ---
 
-## 2. Путь пользователя
+## 2. User journey
 
 ```
-npx zerosnake init my-snake          # шаблон: src/bot.ts, SDK, CLAUDE.md, скиллы, тесты
-cd my-snake && claude                # вайбкодим стратегию
-npx zerosnake sim                    # локальный матч против домашних ботов / своих версий, открывает вьюер
-npx zerosnake test                   # те же проверки, что на сервере
-npx zerosnake login                  # device flow через браузер (Better Auth)
-npx zerosnake deploy                 # бандл → проверки на сервере → новая версия → арена
-npx zerosnake logs / replays         # последние жизни, причины смертей
+npx zerosnake init my-snake          # template: src/bot.ts, SDK, CLAUDE.md, skills, tests
+cd my-snake && claude                # vibe-code a strategy
+npx zerosnake sim                    # local match vs house bots / your own versions, opens the viewer
+npx zerosnake test                   # the same checks the server runs
+npx zerosnake login                  # browser device flow (Better Auth)
+npx zerosnake deploy                 # bundle → server checks → new version → arena
+npx zerosnake logs / replays         # recent lives, causes of death
 ```
 
-На сайте у пользователя есть: публичный профиль `/@username`, список ботов и версий, рейтинг и его история, реплеи с трейсами и live-трансляция арены.
+On the site: public profile `/@username`, bots and versions, rating and its history, replays with traces, live arena broadcast.
 
-MCP подключается командой `claude mcp add zerosnake https://<домен>/mcp`. После этого Claude автора может сам смотреть смерти и сравнивать версии.
+MCP: `claude mcp add zerosnake https://<domain>/mcp` lets the author's Claude inspect deaths and compare versions on its own.
 
 ---
 
-## 3. Игра
+## 3. Game
 
-Базу берём из ZeroSnake:
-- формулы роста: `frontend/docs/snake_growth_simulation_guide.md`;
-- системы `CollisionSystem`, `PlayerSystem`, `FoodSystem` из `server/src/rooms/systems`.
+Based on the original ZeroSnake (growth formulas from `frontend/docs/snake_growth_simulation_guide.md`, `CollisionSystem` / `PlayerSystem` / `FoodSystem` from `server/src/rooms/systems`), rewritten as a **deterministic fixed-step engine**.
 
-Всё это переписываем в **детерминированный движок с фиксированным шагом**.
-
-- **Тик:** 10 в секунду (уточнить на прототипе). Вся физика работает на тиках, без `deltaTime`.
-- **Действие бота:** `{ turn: -1..1, boost?: boolean }`. Скорость поворота ограничена, буст тратит длину и оставляет еду.
-- **Что видит бот (`state`)**:
-  - `self`: позиция головы, угол, длина, скорость, сегменты;
-  - `snakes[]`: только сегменты в радиусе обзора (id, автор, длина);
-  - `food[]`: в радиусе обзора;
-  - расстояние до стены;
+- **Tick:** 10 per second (to be tuned on the prototype). All physics is tick-based, no `deltaTime`.
+- **Bot action:** `{ turn: -1..1, boost?: boolean }`. Turn rate is limited; boost burns length and drops food.
+- **What the bot sees (`state`)**:
+  - `self`: head position, angle, length, speed, segments;
+  - `snakes[]`: only segments within the vision radius (id, author, length);
+  - `food[]` within the radius;
+  - distance to the wall;
   - `tick`, `lifeTick`.
-- **Смерть** наступает в трёх случаях:
-  - столкнулся головой с чужим телом или стеной;
-  - превысил лимит времени (см. §5);
-  - выбросил исключение 3 тика подряд.
+- **Death** happens when the snake:
+  - hits another snake's body or the wall with its head;
+  - exceeds the time budget (see §5);
+  - throws an exception 3 ticks in a row.
 
-  Из мёртвой змейки выпадает еда.
-- **Против вечной жизни** две меры:
-  - **лимит жизни:** например, 6000 тиков (10 минут), после этого змейка «уходит на пенсию» со своим счётом;
-  - **голод:** длина медленно убывает, поэтому «крутиться в углу» невыгодно.
-- **Счёт жизни** = площадь под кривой длины (среднее × время) + бонус за убийства. Итоговую формулу подберём на домашних ботах.
+  A dead snake drops food.
+- **No immortality:**
+  - **life cap:** e.g. 6000 ticks (10 minutes), after which the snake "retires" with its score;
+  - **hunger:** length slowly decays, so "circling in a corner" doesn't pay.
+- **Life score** = area under the length curve (mean × time) + kill bonus. Final formula to be tuned on house bots.
 
 ---
 
-## 4. Арена и рейтинг
+## 4. Arena and rating
 
-### Комнаты
+### Rooms
 
-- **`MatchmakerDO`** (один на всех) держит очередь ожидающих жизней. Это версии ботов, у которых осталась дневная квота.
-- **`RoomDO`** хранит одну постоянную комнату на 10–20 змеек.
-  - Когда змейка умирает, комната берёт из очереди следующую жизнь. Условие: автора этой жизни сейчас нет в комнате (защита от сговора). Следующая жизнь умершего бота встаёт в конец очереди.
-  - В комнате всегда минимум 5 змеек от разных авторов. Если живых ботов не хватает, комнату добирают домашние боты разного уровня.
-  - Комната закрывается, когда в ней остались только домашние боты, а очередь пуста.
-  - Новые комнаты открываются, когда очередь длиннее порога.
-- **Ускоренная симуляция.** Комнаты без зрителей считаются со скоростью, которую позволяет CPU, а не в реальном времени. В real-time играют только 1–2 витринные комнаты на главной. Из-за этого стоимость определяется числом жизней, а не временем, которое работают комнаты.
+- **`MatchmakerDO`** (single, global) holds the queue of pending lives: versions that still have daily quota left.
+- **`RoomDO`** is one persistent room with 10–20 snakes.
+  - When a snake dies, the room pulls the next life from the queue, provided its author isn't already in the room (anti-collusion). The dead bot's next life goes to the back of the queue.
+  - A room always has at least 5 snakes from different authors. If there aren't enough real bots, house bots of varying strength fill the gap.
+  - A room closes when only house bots remain and the queue is empty.
+  - New rooms open when the queue exceeds a threshold.
+- **Accelerated simulation.** Rooms with no spectators run as fast as the CPU allows, not in real time. Only 1–2 showcase rooms on the home page run in real time. Cost therefore scales with the number of lives, not with how long rooms are up.
 
-### Квоты (стартовые числа, все настраиваются)
+### Quotas (starting values, all configurable)
 
 | | Free |
 |---|---|
-| Ботов на автора | 3 |
-| Активная версия на бота | 1 |
-| Жизней в сутки на бота | 100 |
-| Деплоев в сутки | 20 |
+| Bots per author | 3 |
+| Active versions per bot | 1 |
+| Lives per bot per day | 100 |
+| Deploys per day | 20 |
 
-### Рейтинг
+### Rating
 
-- Рейтинг версии — средний счёт за последние **200 жизней**. Рядом показывается доверительный интервал.
-- Версия попадает в лидерборд после **30 жизней**.
-- Новая версия стартует без рейтинга. На странице бота виден график рейтинга по версиям.
-- Если окажется, что сила соседей по комнате слишком сильно влияет на счёт, есть два пути: нормировать счёт по среднему рейтингу комнаты или перейти на раунды с OpenSkill.
-
----
-
-## 5. Исполнение кода ботов (ключевой технический риск)
-
-В Workers нельзя вызвать `eval` или `new Function`. Поэтому **каждый бот получает свой контекст QuickJS (WASM) внутри `RoomDO`**:
-
-- **Лимит памяти** на контекст: например, 8 МБ.
-- **Бюджет на тик в операциях, а не в миллисекундах.** Interrupt handler QuickJS вызывается каждые N байткод-операций, мы считаем эти вызовы. Так лимит одинаковый на ноутбуке и на сервере, и он детерминирован.
-  - Превысил бюджет: в этом тике используется прошлое действие, бот получает страйк.
-  - 3 страйка подряд или явный бесконечный цикл: смерть `timeout`.
-- **Детерминизм.** `Math.random` заменён на сидированный генератор (разный для каждой жизни). `Date`, `fetch`, таймеры и `import` недоступны.
-- **Время жизни контекста:** создаётся на одну жизнь, поэтому память между тиками есть, а между жизнями сбрасывается.
-- **Один и тот же sandbox-пакет** работает в `RoomDO`, в CLI (`sim`, `test`) и в проверках при деплое. Если бот прошёл тесты локально, на сервере он поведёт себя так же.
-
-**Гипотеза, которую нужно проверить в v0:** QuickJS выдерживает 20 ботов × 10 тиков/с в одном DO. Если нет, есть три пути:
-- уменьшить комнаты;
-- снизить тикрейт;
-- перейти на Dynamic Worker Loader / Workers for Platforms (изоляты V8, но тогда каждый тик стоит RPC-вызов).
-
-**Лимиты DO.** CPU на один вызов ограничен, по умолчанию 30 секунд, лимит можно поднять. Поэтому симуляция идёт пачками тиков в alarm-обработчике, а состояние комнаты между пачками лежит в памяти и в SQLite-хранилище DO.
+- A version's rating is the mean score over its last **200 lives**, shown with a confidence interval.
+- A version enters the leaderboard after **30 lives**.
+- A new version starts unrated. The bot page shows a rating chart across versions.
+- If room composition turns out to skew scores too much: normalize by the room's average rating, or switch to rounds with OpenSkill.
 
 ---
 
-## 6. Деплой и проверки
+## 5. Running bot code (the key technical risk)
 
-1. `zerosnake deploy` собирает `src/` локально (esbuild) в один ESM-файл и отправляет на сервер **бандл и архив исходников**. Лимиты: до 50 файлов, исходники до 1 МБ, бандл до 256 КБ.
-2. API кладёт оба файла в R2, создаёт версию со статусом `validating` и отправляет задачу в Queue.
-3. Consumer прогоняет проверки:
-   - бандл загружается в QuickJS и экспортирует `tick`;
-   - 5 фиксированных seed'ов × 1000 тиков против домашних ботов: нет исключений, нет таймаутов, укладывается в бюджет;
-   - **квалификация:** средний счёт не ниже, чем у домашнего бота `easy`.
-4. Итог: статус `ready`, предыдущая версия бота уходит в архив, новая встаёт в очередь. Либо статус `rejected` с отчётом, который CLI показывает человеческим языком.
+Workers don't allow `eval` or `new Function`. So **each bot gets its own QuickJS (WASM) context inside `RoomDO`**:
 
-Исходники версии открыты в профиле (проект полностью open source).
+- **Memory limit** per context, e.g. 8 MB.
+- **Per-tick budget in operations, not milliseconds.** QuickJS's interrupt handler fires every N bytecode operations; we count those calls. The limit is the same on a laptop and on the server, and it's deterministic.
+  - Over budget: the previous action is reused this tick and the bot gets a strike.
+  - 3 strikes in a row or an obvious infinite loop: death by `timeout`.
+- **Determinism.** `Math.random` is replaced with a seeded PRNG (different per life). `Date`, `fetch`, timers and `import` are unavailable.
+- **Context lifetime:** one context per life, so memory persists between ticks and resets between lives.
+- **The same sandbox package** runs in `RoomDO`, in the CLI (`sim`, `test`) and in deploy checks. A bot that passes tests locally behaves the same on the server.
+
+**Hypothesis to verify in v0:** QuickJS can handle 20 bots × 10 ticks/s in one DO. If not:
+- smaller rooms;
+- lower tick rate;
+- move to Dynamic Worker Loader / Workers for Platforms (V8 isolates, but every tick becomes an RPC call).
+
+**DO limits.** CPU per invocation is capped (30 s by default, can be raised). Simulation runs in batches of ticks inside the alarm handler; room state lives in memory and in the DO's SQLite storage between batches.
 
 ---
 
-## 7. Реплеи, трейсы, MCP
+## 6. Deploy and checks
 
-- **Реплей комнаты** пишется кусками по 2 минуты: seed, снапшот на начало куска и действия всех ботов по тикам, всё со сжатием. Ориентир — десятки КБ на кусок. Хранится в R2.
-- **Трейс жизни** хранит для каждого тика действие, затраченные операции и вывод `log()` (лимит байт на тик). Последние 100 тиков перед смертью пишутся полностью, остальное прореживается. Хранится 7 дней.
-- **Вьюер реплеев** проигрывает движок локально по seed и действиям и показывает: таймлайн, переход к смерти, радиус обзора выбранной змейки, её логи.
-- **MCP** работает на Workers через Agents SDK `McpAgent`, авторизация через Better Auth. Инструменты:
+1. `zerosnake deploy` bundles `src/` locally (esbuild) into a single ESM file and uploads **the bundle plus a source archive**. Limits: ≤ 50 files, sources ≤ 1 MB, bundle ≤ 256 KB.
+2. The API stores both in R2, creates a version with status `validating` and enqueues a job.
+3. The consumer runs the checks:
+   - the bundle loads in QuickJS and exports `tick`;
+   - 5 fixed seeds × 1000 ticks against house bots: no exceptions, no timeouts, within budget;
+   - **qualification:** mean score at least that of the `easy` house bot.
+4. Result: status `ready`, the bot's previous version is archived and the new one joins the queue. Or `rejected` with a report the CLI prints in plain language.
+
+Version sources are public on the profile (the project is fully open source).
+
+---
+
+## 7. Replays, traces, MCP
+
+- **Room replay** is written in ~2-minute chunks: seed, a snapshot at chunk start and every bot's actions per tick, compressed. Target: tens of KB per chunk. Stored in R2.
+- **Life trace** stores per tick: the action, operations used and `log()` output (byte limit per tick). The last 100 ticks before death are kept in full, the rest is downsampled. Kept for 7 days.
+- **Replay viewer** replays the engine locally from seed + actions and shows: timeline, jump to death, the selected snake's vision radius, its logs.
+- **MCP** runs on Workers via the Agents SDK `McpAgent`, auth via Better Auth. Tools:
   - `list_bots`, `list_versions`;
   - `list_lives(version, filter: deaths|best|worst)`;
-  - `get_death_context(life)`: что видела змейка в последних N тиках, что вернул бот, его логи;
+  - `get_death_context(life)`: what the snake saw in the last N ticks, what the bot returned, its logs;
   - `compare_versions(a, b)`;
   - `get_leaderboard`.
 
 ---
 
-## 8. Архитектура
+## 8. Architecture
 
 ```
-apps/web        TanStack Start на Workers: сайт, Better Auth (GitHub OAuth + device flow для CLI), API деплоя
-apps/arena      Worker: MatchmakerDO, RoomDO, Queue consumer (проверки), WebSocket для зрителей, MCP
-packages/engine    детерминированная симуляция (чистый TS, без зависимостей)
-packages/sandbox   QuickJS-раннер ботов: бюджет операций, лимиты, RNG
-packages/sdk       типы state/action, defineBot()
-packages/renderer  three.js-рендер из ZeroSnake (PlayerRenderer, FoodRenderer, BackgroundRenderer, SVG-скины)
+apps/web        TanStack Start on Workers: site, Better Auth (GitHub OAuth + device flow for the CLI), deploy API
+apps/arena      Worker: MatchmakerDO, RoomDO, Queue consumer (checks), spectator WebSockets, MCP
+packages/engine    deterministic simulation (pure TS, no dependencies)
+packages/sandbox   QuickJS bot runner: op budget, limits, PRNG
+packages/sdk       state/action types, defineBot()
+packages/renderer  three.js renderer from the original ZeroSnake (PlayerRenderer, FoodRenderer, BackgroundRenderer, SVG skins)
 packages/cli       npx zerosnake: init, sim, test, login, deploy, logs
-bots/house         домашние боты: easy / medium / hard / chaos
-template/          шаблон бота: src/bot.ts, CLAUDE.md, .claude/skills, тесты
+bots/house         house bots: easy / medium / hard / chaos
+template/          bot template: src/bot.ts, CLAUDE.md, .claude/skills, tests
 ```
 
-**Хранилища:**
-- **D1:** таблицы Better Auth, `bots`, `versions`, `lives` (счёт, причина смерти, ссылки на реплей и трейс), `ratings`.
-- **R2:** бандлы, исходники, реплеи, трейсы.
-- **DO SQLite:** очередь матчмейкера, состояние комнат.
+**Storage:**
+- **D1:** Better Auth tables, `bots`, `versions`, `lives` (score, cause of death, replay and trace keys), `ratings`.
+- **R2:** bundles, sources, replays, traces.
+- **DO SQLite:** matchmaker queue, room state.
 
-**Шаблон бота:**
+**Bot template:**
 
 ```ts
 import { defineBot } from "@zerosnake/sdk";
 
 export default defineBot({
-  init(info) {               // начало жизни: размер мира, радиус обзора, бюджет
-    return { mode: "farm" }; // память между тиками
+  init(info) {               // start of a life: world size, vision radius, budget
+    return { mode: "farm" }; // memory between ticks
   },
   tick(state, mem, log) {
-    // ...стратегия
+    // ...strategy
     return { turn: 0.3, boost: false };
   },
 });
 ```
 
-В `CLAUDE.md` шаблона описаны правила, API, лимиты и типичные причины смертей. Скиллы: `new-strategy`, `debug-death` (через MCP), `compare-with-previous`.
+The template's `CLAUDE.md` describes the rules, API, limits and common causes of death. Skills: `new-strategy`, `debug-death` (via MCP), `compare-with-previous`.
 
 ---
 
-## 9. Стоимость (грубая оценка, проверить на прототипе)
+## 9. Cost (rough estimate, verify on the prototype)
 
-Тарифы Cloudflare приведены по памяти и требуют сверки:
-- DO: $12.50 за 1 млн GB-s сверх включённых 400 тыс.;
-- Workers Paid: $5 в месяц.
+Cloudflare prices below are from memory and need checking:
+- DO: $12.50 per 1M GB-s beyond the included 400k;
+- Workers Paid: $5/month.
 
-Расчёт по шагам:
-1. Один тик на 10 ботов при ~1 мс на бота даёт ~12 мс CPU.
-2. Значит, 3000 тиков такой комнаты считаются ~36 с, примерно 3–4 с на одну жизнь.
-3. При 128 МБ памяти это ~0.45 GB-s на жизнь, то есть **~$6 за миллион жизней**.
+Estimate step by step:
+1. One tick with 10 bots at ~1 ms per bot is ~12 ms of CPU.
+2. So 3000 ticks of such a room take ~36 s, roughly 3–4 s per life.
+3. At 128 MB that's ~0.45 GB-s per life, i.e. **~$6 per million lives**.
 
-Реплеи в R2 — центы. Вывод: вычисления дешёвые. Квоты нужны в первую очередь для честности и защиты от абьюза, а не ради экономии. Реальное узкое место — пропускная способность одного DO (одно ядро), а она масштабируется числом комнат.
-
----
-
-## 10. Этапы
-
-- **v0 — ядро (локально).** `engine`, `sandbox`, `sdk`, домашние боты, `cli sim/test`, вьюер на рендере ZeroSnake, шаблон. Бенчмарк QuickJS.
-- **v1 — арена.** Сайт, авторизация, `login`/`deploy`, проверки, матчмейкер и комнаты в ускоренном режиме, лидерборд, профили, реплеи.
-- **v2 — разбор и зрелище.** Трейсы, MCP, live-витрина, сравнение версий, скины ботов.
-- **v3 — рост.** Сезоны, турниры, платные квоты, второй режим (агарио) на той же инфраструктуре.
+R2 for replays is pennies. Takeaway: compute is cheap. Quotas exist mainly for fairness and abuse protection, not to save money. The real bottleneck is the throughput of a single DO (one core), which scales with the number of rooms.
 
 ---
 
-## 11. Открытые вопросы
+## 10. Milestones
 
-1. Регистрируем zerosnake.io?
-2. Нужен ли платный тариф с большими квотами, или пока всё бесплатно?
-3. Свои скины ботов (цвет, узор) делаем в v1 или позже?
-4. Имя npm-пакета `zerosnake` (проверить, свободно ли) или scope `@zerosnake/cli`?
-5. Можно ли форкать чужого бота из профиля в один клик, раз всё открыто? Это ускоряет рост, но плодит клоны в лидерборде.
-6. Делать ли ко-авторство (команды) на одного бота?
+- **v0 — Core (local).** `engine`, `sandbox`, `sdk`, house bots, `cli sim/test`, viewer on the ZeroSnake renderer, template. QuickJS benchmark.
+- **v1 — Arena MVP.** Site, auth, `login`/`deploy`, checks, matchmaker and rooms in accelerated mode, leaderboard, profiles, replays.
+- **v2 — Insight and spectacle.** Traces, MCP, live showcase, version comparison, bot skins.
+- **v3 — Growth.** Seasons, tournaments, paid quotas, a second mode (agar.io) on the same infrastructure.
+
+---
+
+## 11. Open questions
+
+1. Register zerosnake.io?
+2. A paid tier with higher quotas, or everything free for now?
+3. Custom bot skins (color, pattern) in v1 or later?
+4. npm package name `zerosnake` (check availability) or scope `@zerosnake/cli`?
+5. One-click fork of someone else's bot from their profile, since everything is open? Speeds up growth but fills the leaderboard with clones.
+6. Co-authorship (teams) on a single bot?

@@ -1,12 +1,15 @@
-import variant from "@jitl/quickjs-wasmfile-release-sync";
-import { newQuickJSWASMModuleFromVariant } from "quickjs-emscripten-core";
+import baseVariant from "@jitl/quickjs-wasmfile-release-sync";
+import { newQuickJSWASMModuleFromVariant, newVariant } from "quickjs-emscripten-core";
 import { runBench, runSafety } from "./bench.ts";
 import type { BotKind } from "./bots.ts";
 
 const now = () => performance.now();
 
+// Same 64 MB wasm memory cap as the worker (see worker.ts).
+const wasmMemory = new WebAssembly.Memory({ initial: 256, maximum: 1024 });
+
 const t0 = now();
-const qjs = await newQuickJSWASMModuleFromVariant(variant);
+const qjs = await newQuickJSWASMModuleFromVariant(newVariant(baseVariant, { wasmMemory }));
 console.log(`module load: ${(now() - t0).toFixed(1)} ms`);
 
 const rows = [];

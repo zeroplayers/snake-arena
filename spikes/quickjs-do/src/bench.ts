@@ -11,6 +11,7 @@ import {
   DEEP_RECURSION_BOT,
   INFINITE_LOOP_BOT,
   MEMORY_BOMB_BOT,
+  SPARSE_INDEXOF_BOT,
 } from "./bots.ts";
 
 /**
@@ -176,35 +177,39 @@ export function runSafety(
   qjs: QuickJSWASMModule,
   now: () => number,
   budget = DEFAULT_BUDGET,
+  only?: string,
 ): SafetyResult[] {
   const state = makeStates(1)[0] as string;
   const cases = [
     ["infinite-loop", INFINITE_LOOP_BOT],
     ["memory-bomb", MEMORY_BOMB_BOT],
     ["deep-recursion", DEEP_RECURSION_BOT],
+    ["sparse-indexof", SPARSE_INDEXOF_BOT],
   ] as const;
-  return cases.map(([name, source]) => {
-    const bot = createBot(qjs, source, budget, DEFAULT_MEMORY);
-    const t0 = now();
-    const res = tickBot(bot, state);
-    const ms = now() - t0;
-    const interrupts = bot.interrupts;
-    // Swap in a well-behaved function to see whether the runtime survived.
-    let recovers = false;
-    try {
-      bot.ctx.unwrapResult(bot.ctx.evalCode(BOTS.typical)).dispose();
-      bot.fn.dispose();
-      bot.fn = bot.ctx.getProp(bot.ctx.global, "__tick");
-      recovers = tickBot(bot, state).ok;
-    } catch {
-      recovers = false;
-    }
-    const result = { name, error: res.ok ? null : res.error, interrupts, ms, recovers };
-    try {
-      disposeBot(bot);
-    } catch {
-      // A runtime that hit its memory limit may refuse to free cleanly; that's part of the finding.
-    }
-    return result;
-  });
+  return cases
+    .filter(([name]) => !only || name === only)
+    .map(([name, source]) => {
+      const bot = createBot(qjs, source, budget, DEFAULT_MEMORY);
+      const t0 = now();
+      const res = tickBot(bot, state);
+      const ms = now() - t0;
+      const interrupts = bot.interrupts;
+      // Swap in a well-behaved function to see whether the runtime survived.
+      let recovers = false;
+      try {
+        bot.ctx.unwrapResult(bot.ctx.evalCode(BOTS.typical)).dispose();
+        bot.fn.dispose();
+        bot.fn = bot.ctx.getProp(bot.ctx.global, "__tick");
+        recovers = tickBot(bot, state).ok;
+      } catch {
+        recovers = false;
+      }
+      const result = { name, error: res.ok ? null : res.error, interrupts, ms, recovers };
+      try {
+        disposeBot(bot);
+      } catch {
+        // A runtime that hit its memory limit may refuse to free cleanly; that's part of the finding.
+      }
+      return result;
+    });
 }

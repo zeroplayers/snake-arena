@@ -79,6 +79,11 @@ globalThis.__tick = function () {
 };
 `;
 
+/** A native built-in scanning a sparse array: almost no memory, and QuickJS never calls the interrupt handler. */
+export const SPARSE_INDEXOF_BOT = `
+globalThis.__tick = function () { const a = []; a.length = 1e8; return a.indexOf(1); };
+`;
+
 export const DEEP_RECURSION_BOT = `
 function f(n) { return f(n + 1) + 1; }
 globalThis.__tick = function () { return f(0); };

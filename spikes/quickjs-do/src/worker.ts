@@ -10,8 +10,18 @@ import wasmModule from "../node_modules/@jitl/quickjs-wasmfile-release-sync/dist
 import { runBench, runSafety } from "./bench.ts";
 import type { BotKind } from "./bots.ts";
 
-// Workers cannot compile wasm from bytes at runtime, so hand emscripten the precompiled module.
-const variant = newVariant(baseVariant, { wasmModule });
+/**
+ * QuickJS's per-runtime memory limit misses large allocations (big arrays, strings), so one bot
+ * could grow the shared wasm heap until the isolate dies. Capping the wasm memory itself turns that
+ * into a clean "out of memory" for the offending bot. 64 MB ≈ 1024 wasm pages.
+ */
+const WASM_MEMORY_CAP_PAGES = 1024;
+
+function createVariant() {
+  // Workers cannot compile wasm from bytes at runtime, so hand emscripten the precompiled module.
+  const wasmMemory = new WebAssembly.Memory({ initial: 256, maximum: WASM_MEMORY_CAP_PAGES });
+  return newVariant(baseVariant, { wasmModule, wasmMemory });
+}
 
 interface Env {
   BENCH: DurableObjectNamespace<BenchRoom>;
@@ -37,7 +47,7 @@ export class BenchRoom extends DurableObject<Env> {
   private qjs?: Promise<QuickJSWASMModule>;
 
   private module(): Promise<QuickJSWASMModule> {
-    this.qjs ??= newQuickJSWASMModuleFromVariant(variant);
+    this.qjs ??= newQuickJSWASMModuleFromVariant(createVariant());
     return this.qjs;
   }
 
@@ -62,7 +72,10 @@ export class BenchRoom extends DurableObject<Env> {
       return Response.json({ coldStart, ...runBench(qjs, opts, now) });
     }
     if (url.pathname === "/safety") {
-      return Response.json({ coldStart, results: runSafety(qjs, now) });
+      return Response.json({
+        coldStart,
+        results: runSafety(qjs, now, undefined, q.get("case") ?? undefined),
+      });
     }
     return new Response("not found", { status: 404 });
   }

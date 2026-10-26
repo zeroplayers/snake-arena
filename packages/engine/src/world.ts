@@ -1,9 +1,9 @@
-import { createConfig, type EngineConfig } from "./config";
-import { spawnAmbientFood } from "./food";
-import { segmentCountForMass, sizeForMass } from "./growth";
-import { cos, sin } from "./math";
-import { rngFromState, seedRngState } from "./rng";
-import type { Snake, SnakeId, Vec2, World } from "./types";
+import { createConfig, type EngineConfig } from "./config.ts";
+import { spawnAmbientFood } from "./food.ts";
+import { segmentCountForMass, sizeForMass } from "./growth.ts";
+import { cos, sin } from "./math.ts";
+import { rngFromState, seedRngState } from "./rng.ts";
+import type { Snake, SnakeId, Vec2, World } from "./types.ts";
 
 export interface CreateWorldOptions {
   seed: number;

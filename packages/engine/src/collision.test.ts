@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { Grid } from "./grid";
-import { createRng } from "./rng";
-import { step } from "./step";
-import { place, QUIET } from "./testing/setup";
-import type { World } from "./types";
-import { createWorld } from "./world";
+import { Grid } from "./grid.ts";
+import { createRng } from "./rng.ts";
+import { step } from "./step.ts";
+import { place, QUIET } from "./testing/setup.ts";
+import type { World } from "./types.ts";
+import { createWorld } from "./world.ts";
 
 const quiet = (config = {}) => createWorld({ seed: 1, config: { ...QUIET, ...config } });
 

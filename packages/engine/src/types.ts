@@ -1,5 +1,5 @@
-import type { EngineConfig } from "./config";
-import type { RngState } from "./rng";
+import type { EngineConfig } from "./config.ts";
+import type { RngState } from "./rng.ts";
 
 /**
  * World state. Everything here is plain data (numbers, strings, arrays, objects; no classes,

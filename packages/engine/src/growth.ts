@@ -1,5 +1,5 @@
-import type { EngineConfig } from "./config";
-import { clamp } from "./math";
+import type { EngineConfig } from "./config.ts";
+import { clamp } from "./math.ts";
 
 /**
  * Growth formulas ported from the original ZeroSnake

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CONFIG as C } from "./config";
-import { hungerDecay, lifeScore, segmentCountForMass, sizeForMass } from "./growth";
-import { step } from "./step";
-import { actionsFor, circle, farm, type Policy } from "./testing/policies";
-import { place, QUIET } from "./testing/setup";
-import type { Death } from "./types";
-import { createWorld, spawnSnake } from "./world";
+import { DEFAULT_CONFIG as C } from "./config.ts";
+import { hungerDecay, lifeScore, segmentCountForMass, sizeForMass } from "./growth.ts";
+import { step } from "./step.ts";
+import { actionsFor, circle, farm, type Policy } from "./testing/policies.ts";
+import { place, QUIET } from "./testing/setup.ts";
+import type { Death } from "./types.ts";
+import { createWorld, spawnSnake } from "./world.ts";
 
 describe("growth formulas", () => {
   it("size grows linearly with mass from minSize to maxSize", () => {

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createRng } from "./rng";
-import { step } from "./step";
-import { fingerprint } from "./testing/fingerprint";
-import { actionsFor, farm, type Policy, wander } from "./testing/policies";
-import { place, QUIET } from "./testing/setup";
-import type { World } from "./types";
-import { cloneWorld, createWorld, spawnSnake } from "./world";
+import { createRng } from "./rng.ts";
+import { step } from "./step.ts";
+import { fingerprint } from "./testing/fingerprint.ts";
+import { actionsFor, farm, type Policy, wander } from "./testing/policies.ts";
+import { place, QUIET } from "./testing/setup.ts";
+import type { World } from "./types.ts";
+import { cloneWorld, createWorld, spawnSnake } from "./world.ts";
 
 /** 20 snakes, dead ones respawned under a new id. Farmers are slow (full food scan), so optional. */
 function run(seed: number, ticks: number, farmers = true): World {

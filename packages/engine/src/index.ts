@@ -14,10 +14,10 @@ export {
   DEFAULT_CONFIG,
   type EngineConfig,
   TICK_RATE,
-} from "./config";
-export { hungerDecay, lifeScore, segmentCountForMass, sizeForMass } from "./growth";
-export { createRng, type Rng, type RngState } from "./rng";
-export { step } from "./step";
+} from "./config.ts";
+export { hungerDecay, lifeScore, segmentCountForMass, sizeForMass } from "./growth.ts";
+export { createRng, type Rng, type RngState } from "./rng.ts";
+export { step } from "./step.ts";
 export type {
   Action,
   ActionMap,
@@ -31,11 +31,11 @@ export type {
   SnakeId,
   Vec2,
   World,
-} from "./types";
+} from "./types.ts";
 export {
   type CreateWorldOptions,
   cloneWorld,
   createWorld,
   type SpawnOptions,
   spawnSnake,
-} from "./world";
+} from "./world.ts";

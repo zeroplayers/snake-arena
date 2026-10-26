@@ -1,6 +1,6 @@
-import { cos, sin, TAU } from "./math";
-import type { Rng } from "./rng";
-import type { Food, FoodKind, World } from "./types";
+import { cos, sin, TAU } from "./math.ts";
+import type { Rng } from "./rng.ts";
+import type { Food, FoodKind, World } from "./types.ts";
 
 /**
  * Food storage. `world.food` is the source of truth; alongside it the engine keeps a spatial

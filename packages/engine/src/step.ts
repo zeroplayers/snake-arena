@@ -1,10 +1,10 @@
-import { addFood, foodIndex, removeFood, spawnAmbientFood } from "./food";
-import { Grid } from "./grid";
-import { hungerDecay, lifeScore, segmentCountForMass, sizeForMass } from "./growth";
-import { clamp, cos, exitTime, firstContact, sin, wrapAngle } from "./math";
-import { type Rng, rngFromState } from "./rng";
-import type { ActionMap, Death, DeathCause, FaultMap, Food, Snake, Vec2, World } from "./types";
-import { layoutSegments } from "./world";
+import { addFood, foodIndex, removeFood, spawnAmbientFood } from "./food.ts";
+import { Grid } from "./grid.ts";
+import { hungerDecay, lifeScore, segmentCountForMass, sizeForMass } from "./growth.ts";
+import { clamp, cos, exitTime, firstContact, sin, wrapAngle } from "./math.ts";
+import { type Rng, rngFromState } from "./rng.ts";
+import type { ActionMap, Death, DeathCause, FaultMap, Food, Snake, Vec2, World } from "./types.ts";
+import { layoutSegments } from "./world.ts";
 
 /**
  * Advances the world by one tick **in place** and returns it (use `cloneWorld` to keep a

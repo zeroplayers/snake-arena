@@ -1,3 +1,4 @@
+import type { Cost, Overrun, SuiteBudget } from "./cost.ts";
 import type { LimitProblem, LimitsDetails } from "./limits.ts";
 import type { FaultDetails, LifeEnd, TickStats } from "./match.ts";
 
@@ -15,10 +16,13 @@ export type CheckStatus = "pass" | "fail" | "skip";
 export interface CheckReport {
   version: typeof REPORT_VERSION;
   passed: boolean;
-  /** Seeds and ticks per seed the run and qualification used. */
+  /** Seeds (from the bundle's hash) and ticks per seed the run and qualification used. */
   seeds: number[];
   ticks: number;
+  /** Per-tick op budget of the sandbox. */
   opBudget: number;
+  /** Caps on the candidate's cost over the whole suite. */
+  budget: SuiteBudget;
   limits: LimitsCheck;
   load: LoadCheck;
   run: RunCheck;
@@ -56,8 +60,12 @@ export interface SeedRun {
 export interface RunCheck extends CheckBase {
   /** The fatal sandbox death, if any. */
   fault: FaultDetails | null;
+  /** The suite cap that stopped the run, if any. */
+  overrun: Overrun | null;
   seeds: SeedRun[];
   stats: TickStats;
+  /** What the candidate cost over all its ticks. */
+  cost: Cost;
   /** Problems that didn't fail the check but will cost lives in the arena. */
   warnings: string[];
 }

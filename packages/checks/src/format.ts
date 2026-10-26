@@ -55,14 +55,12 @@ export function formatReport(report: CheckReport): string {
             .join(", ")
         : "";
       out.push(
-        `${INDENT}seed ${String(s.seed).padEnd(5)} ${fmt(s.score).padStart(9)} vs ${fmt(s.bar).padStart(9)}   lives: ${ends}`,
+        `${INDENT}seed ${String(s.seed).padEnd(10)} ${fmt(s.score).padStart(9)} vs ${fmt(s.bar).padStart(9)}   lives: ${ends}`,
       );
     }
   }
-  out.push(
-    "",
-    `(${report.seeds.length} seeds × ${report.ticks} ticks against easy, medium, hard and chaos; budget ${report.opBudget} ops per tick)`,
-  );
+  const setup = `(${report.seeds.length} seeds × ${report.ticks} ticks against easy, medium, hard and chaos; budget ${report.opBudget} ops per tick, at most half of it on average)`;
+  out.push("", ...wrap(setup, ""));
   return `${out.join("\n")}\n`;
 }
 

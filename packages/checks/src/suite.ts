@@ -1,16 +1,22 @@
-import { DEFAULT_CONFIG } from "@zerosnake/engine";
 import { houseBots } from "@zerosnake/house-bots";
+import { createSandbox, DEFAULT_OP_BUDGET, type WasmModule, WORK_PER_OP } from "@zerosnake/sandbox";
 import {
-  createSandbox,
-  DEFAULT_OP_BUDGET,
-  type Sandbox,
-  type WasmModule,
-  WORK_PER_OP,
-} from "@zerosnake/sandbox";
-import { LOG_LIMIT_BYTES } from "@zerosnake/sdk";
-import { faultHint, limitsHint, loadHint, qualifyHint, shortError } from "./hints.ts";
+  AVERAGE_BUDGET_SHARE,
+  CostMeter,
+  DEFAULT_MAX_MILLIS,
+  type Overrun,
+  type SuiteBudget,
+} from "./cost.ts";
+import { checkSeeds } from "./disguise.ts";
+import { faultHint, limitsHint, loadHint, overrunHint, qualifyHint, shortError } from "./hints.ts";
 import { formatBytes, measureLimits, type SourceFile } from "./limits.ts";
-import { CANDIDATE_ID, type MatchResult, playMatch, type TickStats } from "./match.ts";
+import {
+  emptyStats,
+  type FaultDetails,
+  type MatchResult,
+  playMatch,
+  type TickStats,
+} from "./match.ts";
 import {
   type CheckReport,
   type LoadCheck,
@@ -20,9 +26,9 @@ import {
   type SeedRun,
 } from "./report.ts";
 
-/** The fixed seeds every deploy is checked on. Changing them changes every report. */
-export const CHECK_SEEDS: readonly number[] = [101, 202, 303, 404, 505];
-/** Ticks per seed (100 s of game time at 10 ticks/s). */
+/** Matches per check: each on its own seed (SPEC §6). */
+export const CHECK_SEED_COUNT = 5;
+/** Ticks per seed after the candidate joins (100 s of game time at 10 ticks/s). */
 export const CHECK_TICKS = 1000;
 
 /** Peak budget use above this fraction is reported as a warning. */
@@ -41,9 +47,15 @@ export interface CheckOptions {
    * which can't compile wasm at runtime; loaded from disk in Node when omitted.
    */
   wasmModule?: WasmModule;
-  /** For tests only: deploys are always judged on {@link CHECK_SEEDS} × {@link CHECK_TICKS}. */
+  /**
+   * For tests only. Deploys are judged on {@link CHECK_SEED_COUNT} seeds from `checkSeeds(bundle)`
+   * × {@link CHECK_TICKS} ticks and the default budget.
+   */
   seeds?: readonly number[];
   ticks?: number;
+  budget?: Partial<SuiteBudget>;
+  /** Milliseconds, for {@link SuiteBudget.maxMillis}. Default `performance.now`. */
+  clock?: () => number;
 }
 
 /**
@@ -53,20 +65,24 @@ export interface CheckOptions {
  * 2. `load`: the bundle loads in the sandbox and default-exports a bot with `tick()`.
  * 3. `run`: on each seed, a {@link CHECK_TICKS}-tick match against the house bots (easy, medium,
  *    hard, chaos), respawning on death. Isolated timeouts and exceptions are tolerated as in the
- *    arena (previous action, strike); a death by timeout, error or out of memory fails.
+ *    arena (previous action, strike); a death by timeout, error or out of memory fails, and so
+ *    does going over the suite's {@link SuiteBudget}.
  * 4. `qualify`: mean score per life ≥ that of `easy` playing the same seat on the same seeds.
  *
  * Used by `zerosnake test` (Node) and the version-check consumer (workerd); both get the same
- * report for the same input. A fresh sandbox is created per call, so nothing carries over from
- * an earlier run. Never throws for problems in the bot.
+ * report for the same input (except for the wall-clock cap, see {@link SuiteBudget}). Never
+ * throws for problems in the bot.
  */
 export async function runChecks(
   input: CheckInput,
   options: CheckOptions = {},
 ): Promise<CheckReport> {
-  const seeds = [...(options.seeds ?? CHECK_SEEDS)];
+  const seeds = options.seeds
+    ? [...options.seeds]
+    : await checkSeeds(input.bundle, CHECK_SEED_COUNT);
   const ticks = options.ticks ?? CHECK_TICKS;
   const opBudget = DEFAULT_OP_BUDGET;
+  const budget = defaultBudget(seeds.length * ticks, opBudget, options.budget);
   const matchOptions = (seed: number) => ({ seed, ticks, opBudget });
 
   const report: CheckReport = {
@@ -75,6 +91,7 @@ export async function runChecks(
     seeds,
     ticks,
     opBudget,
+    budget,
     limits: checkLimits(input),
     load: skippedLoad(),
     run: skippedRun(),
@@ -82,38 +99,55 @@ export async function runChecks(
   };
   if (report.limits.status !== "pass") return report;
 
+  // A fresh sandbox per call, so nothing carries over from an earlier run. The Sandbox has no
+  // dispose(): every life is disposed by the match, and the wasm heap goes with the last
+  // reference to `sandbox` when this function returns.
   const sandbox = await createSandbox(options.wasmModule ? { wasmModule: options.wasmModule } : {});
-  report.load = checkLoad(sandbox, input.bundle, opBudget);
-  if (report.load.status !== "pass") return report;
+  const meter = new CostMeter(budget, options.clock ?? (() => performance.now()));
+  const seat = { kind: "sandbox", sandbox, bundle: input.bundle, meter } as const;
 
+  // The first life of the first match is the load check: same info as any arena life, so a bot
+  // can't tell it apart.
   const matches: MatchResult[] = [];
   for (const seed of seeds) {
-    const m = playMatch({ kind: "sandbox", sandbox, bundle: input.bundle }, matchOptions(seed));
+    const m = playMatch(seat, matchOptions(seed));
+    if (matches.length === 0 && m.fault?.atLoad && m.fault.life === 1) {
+      report.load = loadFailed(m.fault);
+      return report;
+    }
     matches.push(m);
-    if (m.fault) break;
+    if (m.fault || m.overrun) break;
   }
-  report.run = checkRun(matches, opBudget);
+  report.load = {
+    status: "pass",
+    summary: "the bundle loads and default-exports a bot with tick()",
+    hint: null,
+    error: null,
+  };
+  report.run = checkRun(matches, opBudget, meter);
   if (report.run.status !== "pass") return report;
 
-  report.qualify = checkQualify(matches, baselineFor(seeds, ticks, opBudget));
+  // The bar: `easy` playing the candidate's seat on the same seeds.
+  const baseline = seeds.map((seed) =>
+    playMatch({ kind: "house", bot: houseBots.easy }, matchOptions(seed)),
+  );
+  report.qualify = checkQualify(matches, baseline);
   report.passed = report.qualify.status === "pass";
   return report;
 }
 
-/** Baseline matches by seeds and ticks. They are deterministic, so one run per isolate is enough. */
-const baselines = new Map<string, MatchResult[]>();
-
-/** `easy` playing the candidate's seat on the same seeds: the qualification bar. */
-function baselineFor(seeds: number[], ticks: number, opBudget: number): MatchResult[] {
-  const key = `${ticks}/${opBudget}/${seeds.join(",")}`;
-  let matches = baselines.get(key);
-  if (!matches) {
-    matches = seeds.map((seed) =>
-      playMatch({ kind: "house", bot: houseBots.easy }, { seed, ticks, opBudget }),
-    );
-    baselines.set(key, matches);
-  }
-  return matches;
+function defaultBudget(
+  ticks: number,
+  opBudget: number,
+  overrides: Partial<SuiteBudget> = {},
+): SuiteBudget {
+  const ops = Math.floor(ticks * opBudget * AVERAGE_BUDGET_SHARE);
+  return {
+    maxMillis: DEFAULT_MAX_MILLIS,
+    maxInterrupts: ops,
+    maxWork: ops * WORK_PER_OP,
+    ...overrides,
+  };
 }
 
 function checkLimits({ bundle, sources }: CheckInput): CheckReport["limits"] {
@@ -142,36 +176,17 @@ function checkLimits({ bundle, sources }: CheckInput): CheckReport["limits"] {
   };
 }
 
-function checkLoad(sandbox: Sandbox, bundle: string, opBudget: number): LoadCheck {
-  const life = sandbox.startLife(bundle, {
-    snakeId: CANDIDATE_ID,
-    worldRadius: DEFAULT_CONFIG.arenaRadius,
-    visionRadius: DEFAULT_CONFIG.visionRadius,
-    tickRate: 10,
-    maxLifeTicks: DEFAULT_CONFIG.lifeCap,
-    opBudget,
-    logLimitBytes: LOG_LIMIT_BYTES,
-    seed: 0,
-  });
-  const death = life.death;
-  life.dispose();
-  if (!death) {
-    return {
-      status: "pass",
-      summary: "the bundle loads and default-exports a bot with tick()",
-      hint: null,
-      error: null,
-    };
-  }
+function loadFailed(fault: FaultDetails): LoadCheck {
   return {
     status: "fail",
-    summary: `the bundle does not load: ${shortError(death.message)}`,
-    hint: loadHint(death),
-    error: death.message,
+    summary: `the bundle does not load: ${shortError(fault.message)}`,
+    hint: loadHint(fault),
+    error: fault.message,
   };
 }
 
-function checkRun(matches: MatchResult[], opBudget: number): RunCheck {
+function checkRun(matches: MatchResult[], opBudget: number, meter: CostMeter): RunCheck {
+  const cost = { ...meter.cost };
   const stats = sumStats(matches.map((m) => m.stats));
   const seeds: SeedRun[] = matches.map((m) => {
     const ends: SeedRun["ends"] = {};
@@ -185,6 +200,7 @@ function checkRun(matches: MatchResult[], opBudget: number): RunCheck {
     };
   });
   const fault = matches.find((m) => m.fault)?.fault ?? null;
+  const overrun = matches.find((m) => m.overrun)?.overrun ?? null;
   const warnings: string[] = [];
   if (stats.timeoutTicks > 0) {
     warnings.push(
@@ -198,7 +214,7 @@ function checkRun(matches: MatchResult[], opBudget: number): RunCheck {
     );
   }
   const peak = Math.max(stats.peakInterrupts / opBudget, stats.peakWork / (opBudget * WORK_PER_OP));
-  if (!fault && peak > BUDGET_WARNING) {
+  if (!fault && !overrun && peak > BUDGET_WARNING) {
     warnings.push(
       `your slowest tick used ${Math.round(peak * 100)}% of the budget; crowded rooms in the arena cost more than these matches`,
     );
@@ -209,8 +225,23 @@ function checkRun(matches: MatchResult[], opBudget: number): RunCheck {
       summary: `killed on seed ${fault.seed} at tick ${fault.tick} (life ${fault.life}): ${shortError(fault.message)}`,
       hint: faultHint(fault, opBudget),
       fault,
+      overrun: null,
       seeds,
       stats,
+      cost,
+      warnings,
+    };
+  }
+  if (overrun) {
+    return {
+      status: "fail",
+      summary: `too slow: ${overrunSummary(overrun)}, stopped on seed ${overrun.seed} at tick ${overrun.tick}`,
+      hint: overrunHint(overrun),
+      fault: null,
+      overrun,
+      seeds,
+      stats,
+      cost,
       warnings,
     };
   }
@@ -221,10 +252,23 @@ function checkRun(matches: MatchResult[], opBudget: number): RunCheck {
     summary: `${matches.length} matches, ${total} ticks, ${lives} lives without a timeout, error or out-of-memory death`,
     hint: null,
     fault: null,
+    overrun: null,
     seeds,
     stats,
+    cost,
     warnings,
   };
+}
+
+function overrunSummary(o: Overrun): string {
+  switch (o.limit) {
+    case "maxMillis":
+      return `the checks ran for over ${o.max / 1000} s`;
+    case "maxInterrupts":
+      return `your ticks used more than ${o.max} ops in total (on average over half the budget)`;
+    case "maxWork":
+      return `built-in functions did more than ${o.max} units of work in total (on average over half the budget)`;
+  }
 }
 
 function checkQualify(matches: MatchResult[], baseline: MatchResult[]): QualifyCheck {
@@ -264,14 +308,7 @@ function countLives(matches: readonly MatchResult[]): number {
 }
 
 function sumStats(all: TickStats[]): TickStats {
-  const out: TickStats = {
-    ticks: 0,
-    timeoutTicks: 0,
-    errorTicks: 0,
-    firstError: null,
-    peakInterrupts: 0,
-    peakWork: 0,
-  };
+  const out = emptyStats();
   for (const s of all) {
     out.ticks += s.ticks;
     out.timeoutTicks += s.timeoutTicks;
@@ -299,8 +336,10 @@ function skippedRun(): RunCheck {
     summary: SKIPPED,
     hint: null,
     fault: null,
+    overrun: null,
     seeds: [],
-    stats: sumStats([]),
+    stats: emptyStats(),
+    cost: { interrupts: 0, work: 0 },
     warnings: [],
   };
 }

@@ -39,6 +39,17 @@ export function easyWith(body: string): Promise<string> {
     export default { tick(state, mem, log) { ${body}; return easy.tick(state, mem, log); } };`);
 }
 
+/**
+ * `easy` plus a loop of `iterations` whose body is `statements` long: within the op budget (the
+ * sandbox counts interrupt polls, one per ~4,300 iterations) but slow per op (#60).
+ */
+export function longBody(statements: number, iterations: number): Promise<string> {
+  const body = Array.from({ length: statements }, (_, k) => `x = (x * ${k + 3} + i) % 1000003;`);
+  return easyWith(
+    `let x = 1; for (let i = 0; i < ${iterations}; i++) { ${body.join(" ")} } mem.x = x`,
+  );
+}
+
 /** Bots that must be rejected, as plain JS bundles. */
 export const BAD_BOTS = {
   infiniteLoop: botWithTick("if (state.lifeTick > 20) for (;;) {} return { turn: 0 };"),

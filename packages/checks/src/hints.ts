@@ -1,6 +1,7 @@
 // What to tell the author when a check fails. Plain language: the reader may not know what an
 // interrupt or a QuickJS context is, only what their bot does.
 import type { Death } from "@zerosnake/sandbox";
+import type { Overrun } from "./cost.ts";
 import { formatBytes, type LimitProblem, type LimitsDetails } from "./limits.ts";
 import type { FaultDetails, LifeResult } from "./match.ts";
 
@@ -34,7 +35,7 @@ export function limitsHint(problems: LimitProblem[], details: LimitsDetails): st
   return parts.join(" ");
 }
 
-export function loadHint(death: Death): string {
+export function loadHint(death: Pick<Death, "fault" | "reason" | "message">): string {
   const m = death.message;
   if (m.includes("export default")) {
     return "Your entry file must end with `export default defineBot({ tick(state, mem, log) { ... } })` (import defineBot from @zerosnake/sdk). A named export like `export const bot` is not enough.";
@@ -97,4 +98,11 @@ export function qualifyHint(lives: LifeResult[]): string {
     tips.push("A life's score is its length over time, so staying alive matters most.");
   }
   return tips.join(" ");
+}
+
+export function overrunHint(o: Overrun): string {
+  if (o.limit === "maxMillis") {
+    return "Your bot stays inside its op count but each op is very slow: long loop bodies, big blocks of straight-line code or huge expressions run between two budget checks. Do much less work per tick: precompute in init(), cache in mem, and look only at nearby food and snakes.";
+  }
+  return "On average your ticks use more than half of their budget. That leaves no room for crowded rooms, where every tick costs more. Do less work per tick: cache results in mem, look only at nearby food and snakes, and spread big searches over several ticks.";
 }

@@ -12,6 +12,14 @@
  * @packageDocumentation
  */
 
+export {
+  AVERAGE_BUDGET_SHARE,
+  type Cost,
+  DEFAULT_MAX_MILLIS,
+  type Overrun,
+  type SuiteBudget,
+} from "./cost.ts";
+export { checkSeeds } from "./disguise.ts";
 export { formatReport } from "./format.ts";
 export {
   formatBytes,
@@ -21,7 +29,6 @@ export {
   type SourceFile,
 } from "./limits.ts";
 export {
-  CANDIDATE_ID,
   type FaultDetails,
   type LifeEnd,
   type LifeResult,
@@ -41,7 +48,7 @@ export type {
 } from "./report.ts";
 export { REPORT_VERSION } from "./report.ts";
 export {
-  CHECK_SEEDS,
+  CHECK_SEED_COUNT,
   CHECK_TICKS,
   type CheckInput,
   type CheckOptions,

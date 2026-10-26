@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { runChecks } from "./index.ts";
+import { type CheckInput, runChecks } from "./index.ts";
 import { BAD_BOTS, houseBundle, input } from "./testing/fixtures.ts";
 
 let mf: Miniflare;
@@ -58,7 +58,8 @@ describe("workerd", () => {
       input(BAD_BOTS.oom),
       input(BAD_BOTS.missingExport),
     ];
-    // Shorter matches than a deploy gets, to keep the test quick; same code path.
+    // Shorter matches than a deploy gets, to keep the test quick; the next test runs the full
+    // configuration once.
     const options = { seeds: [101, 303], ticks: 500 };
     const response = await mf.dispatchFetch("http://checks/", {
       method: "POST",
@@ -71,5 +72,18 @@ describe("workerd", () => {
     for (const i of inputs) fromNode.push(await runChecks(i, options));
     expect(fromWorkerd).toEqual(JSON.parse(JSON.stringify(fromNode)));
     expect(fromNode.map((r) => r.passed)).toEqual([true, false, false, false, false, false]);
+  }, 180_000);
+
+  it("gives the same report as Node with the full deploy configuration", async () => {
+    const inputs = [input(await houseBundle("medium"))];
+    const response = await mf.dispatchFetch("http://checks/", {
+      method: "POST",
+      body: JSON.stringify({ inputs, options: {} }),
+    });
+    const [fromWorkerd] = (await response.json()) as unknown[];
+    const fromNode = await runChecks(inputs[0] as CheckInput);
+    expect(fromNode.ticks).toBe(1000);
+    expect(fromNode.seeds).toHaveLength(5);
+    expect(fromWorkerd).toEqual(JSON.parse(JSON.stringify(fromNode)));
   }, 180_000);
 });

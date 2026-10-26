@@ -5,6 +5,7 @@ import {
   addLife,
   createRatingState,
   EMPTY_RATING_STATE,
+  MAX_LIFE_SCORE,
   type RatingState,
   rate,
 } from "./rating.ts";
@@ -237,10 +238,15 @@ describe("numeric stability", () => {
 });
 
 describe("input checks", () => {
-  it("rejects scores that aren't finite", () => {
-    for (const bad of [Number.NaN, Infinity, -Infinity]) {
+  it("rejects scores that aren't finite or are out of range", () => {
+    for (const bad of [Number.NaN, Infinity, -Infinity, MAX_LIFE_SCORE * 2, 1e308]) {
       expect(() => addLife(EMPTY_RATING_STATE, bad)).toThrow(RangeError);
+      expect(() => createRatingState([1, bad])).toThrow(RangeError);
     }
+    expect(rate(feed([MAX_LIFE_SCORE, -MAX_LIFE_SCORE, MAX_LIFE_SCORE]))?.mean).toBeCloseTo(
+      MAX_LIFE_SCORE / 3,
+      -1,
+    );
   });
 
   it("rejects a life count below the stored scores", () => {

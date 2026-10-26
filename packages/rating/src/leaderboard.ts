@@ -1,49 +1,86 @@
 import { DEFAULT_RATING_CONFIG, type RatingConfig } from "./config.ts";
 
-/** What ordering looks at; any row carrying these (a D1 `ratings` join, a `Rating`) works. */
-export interface Rated {
-  /** Stable key for the last tie-break, e.g. the version id. */
-  id: string;
+/**
+ * One version as the leaderboard sees it. Field names are the D1 ones (`ratings` joined with
+ * `versions`), so a Drizzle row with these selected goes in as is.
+ */
+export interface RatedVersion {
+  versionId: string;
+  botId: string;
+  /** `versions.status`; only `"ready"` (the bot's active version) is ranked. */
+  status: string;
+  /** Mean score over the window (`ratings.mean`). */
   mean: number;
-  /** Half-width of the confidence interval; `null` or `Infinity` when unknown (widest). */
+  /** Half-width of the confidence interval; `null` or `Infinity` when unknown. */
   ci: number | null;
-  /** All-time lives. */
-  lives: number;
+  /** All-time lives (`ratings.n_lives`). */
+  nLives: number;
 }
 
-export type Ranked<T> = T & { rank: number };
+export type RankKey = Pick<RatedVersion, "mean" | "ci" | "nLives">;
+
+export type Ranked<T> = T & {
+  /** 1-based; rows that tie on every key share it. */
+  rank: number;
+  /** `mean − ci`, what the order is by; `-Infinity` without an interval. */
+  lowerBound: number;
+};
 
 /**
- * Leaderboard order: higher mean first; on equal means the narrower interval (the better
- * measured version), then more lives. Returns < 0 when `a` goes first. Ignores `id`.
+ * Lower end of the confidence interval: what the leaderboard sorts by. Ranking by the point
+ * mean rewards luck: a 30-life mean is off by about ±60% (life scores are heavy-tailed), so the
+ * best of a few fresh versions of the same code would outrank a truly better, well-measured one.
  */
-export function compareRated(a: Omit<Rated, "id">, b: Omit<Rated, "id">): number {
-  return b.mean - a.mean || width(a.ci) - width(b.ci) || b.lives - a.lives;
+export function lowerBound(r: Pick<RatedVersion, "mean" | "ci">): number {
+  return r.ci !== null && Number.isFinite(r.ci) ? r.mean - r.ci : Number.NEGATIVE_INFINITY;
 }
 
 /**
- * The leaderboard: versions with at least `minLives` lives, best first, each with a 1-based
- * `rank`. Rows that tie on mean, interval and lives share a rank ("1, 2, 2, 4") and are listed
- * by `id`, so the output doesn't depend on input order. Extra fields are kept, so the same call
- * serves the web leaderboard (#28) and the arena.
+ * Leaderboard order: higher lower bound (`mean − ci`) first; then the narrower interval, then
+ * more lives. Returns < 0 when `a` goes first.
  */
-export function leaderboard<T extends Rated>(
+export function compareRated(a: RankKey, b: RankKey): number {
+  return (
+    order(lowerBound(b), lowerBound(a)) || order(width(a.ci), width(b.ci)) || b.nLives - a.nLives
+  );
+}
+
+/**
+ * The leaderboard, best first, each row with its `rank` and `lowerBound`. Rules:
+ *
+ * - only `status === "ready"` versions with at least `minLives` lives are ranked, so archived
+ *   versions (frozen ratings) can't stay on the board;
+ * - at most one version per bot, the best-ordered one (D1 allows one ready version per bot, so
+ *   this is a guard);
+ * - order by `compareRated`, then `versionId`, so the output doesn't depend on input order;
+ * - rows that tie on lower bound, interval and lives share a rank ("1, 2, 2, 4").
+ *
+ * Other fields of the rows are kept.
+ */
+export function leaderboard<T extends RatedVersion>(
   rows: readonly T[],
   config: Pick<RatingConfig, "minLives"> = DEFAULT_RATING_CONFIG,
 ): Ranked<T>[] {
   const sorted = rows
-    .filter((r) => r.lives >= config.minLives)
-    .sort((a, b) => compareRated(a, b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    .filter((r) => r.status === "ready" && r.nLives >= config.minLives)
+    .sort((a, b) => compareRated(a, b) || order(a.versionId, b.versionId));
+  const bots = new Set<string>();
   const out: Ranked<T>[] = [];
-  for (const [i, row] of sorted.entries()) {
-    const prev = out[i - 1];
-    const rank = prev && compareRated(prev, row) === 0 ? prev.rank : i + 1;
-    out.push({ ...row, rank });
+  for (const row of sorted) {
+    if (bots.has(row.botId)) continue;
+    bots.add(row.botId);
+    const prev = out.at(-1);
+    const rank = prev && compareRated(prev, row) === 0 ? prev.rank : out.length + 1;
+    out.push({ ...row, rank, lowerBound: lowerBound(row) });
   }
   return out;
 }
 
-/** `Infinity − Infinity` is NaN, so unknown widths compare through this. */
+function order<T extends number | string>(a: T, b: T): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** Unknown widths sort as the widest. */
 function width(ci: number | null): number {
-  return ci === null || !Number.isFinite(ci) ? Number.MAX_VALUE : ci;
+  return ci === null || !Number.isFinite(ci) ? Number.POSITIVE_INFINITY : ci;
 }

@@ -1,49 +1,84 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { createRatingConfig } from "./config.ts";
-import { addLife, EMPTY_RATING_STATE, rate } from "./rating.ts";
-import { decodeScores, encodeScores, fromRatingsRow, toRatingsRow } from "./storage.ts";
+import { DEFAULT_NORMALIZATION } from "./normalize.ts";
+import { addLife, EMPTY_RATING_STATE, MAX_LIFE_SCORE, rate } from "./rating.ts";
+import {
+  decodeWindow,
+  encodeWindow,
+  fromRatingsRow,
+  RAW_SCORING,
+  scoringKey,
+  toRatingsRow,
+} from "./storage.ts";
+
+const anyScore = fc
+  .double({ min: -MAX_LIFE_SCORE, max: MAX_LIFE_SCORE, noNaN: true })
+  .map((x) => x || 0);
 
 describe("ratings row", () => {
   it("round-trips the state exactly", () => {
     const config = createRatingConfig({ window: 16 });
     fc.assert(
-      fc.property(
-        fc.array(
-          fc.double({ noNaN: true, noDefaultInfinity: true }).map((x) => x || 0),
-          { minLength: 1, maxLength: 40 },
-        ),
-        (xs) => {
-          const state = xs.reduce((s, x) => addLife(s, x, config), EMPTY_RATING_STATE);
-          const row = toRatingsRow(state, config);
-          const back = fromRatingsRow(JSON.parse(JSON.stringify(row)), config);
-          expect(back).toEqual(state);
-          expect(rate(back, config)).toEqual(rate(state, config));
-        },
-      ),
+      fc.property(fc.array(anyScore, { minLength: 1, maxLength: 40 }), (xs) => {
+        const state = xs.reduce((s, x) => addLife(s, x, config), EMPTY_RATING_STATE);
+        const row = toRatingsRow(state, config);
+        const back = fromRatingsRow(JSON.parse(JSON.stringify(row)), config);
+        expect(back).toEqual(state);
+        expect(back && rate(back, config)).toEqual(rate(state, config));
+      }),
     );
   });
 
   it("writes the leaderboard columns", () => {
     const state = [10, 20, 30].reduce((s, x) => addLife(s, x), EMPTY_RATING_STATE);
     const row = toRatingsRow(state);
-    expect(row).toMatchObject({ mean: 20, nLives: 3, recentScores: "[10,20,30]" });
-    expect(row.ci).toBeCloseTo(1.96 * (10 / Math.sqrt(3)), 12);
+    const ci = 1.96 * (10 / Math.sqrt(3));
+    expect(row).toMatchObject({ mean: 20, nLives: 3 });
+    expect(row.ci).toBeCloseTo(ci, 12);
+    expect(row.lowerBound).toBeCloseTo(20 - ci, 12);
+    expect(JSON.parse(row.recentScores)).toEqual({ v: 1, scoring: "raw", scores: [10, 20, 30] });
   });
 
   it("stores a missing interval as null", () => {
-    expect(toRatingsRow(addLife(EMPTY_RATING_STATE, 5)).ci).toBeNull();
+    const row = toRatingsRow(addLife(EMPTY_RATING_STATE, 5));
+    expect(row.ci).toBeNull();
+    expect(row.lowerBound).toBeNull();
   });
 
   it("has nothing to write before the first life", () => {
     expect(() => toRatingsRow(EMPTY_RATING_STATE)).toThrow(RangeError);
   });
 
-  it("rejects malformed stored scores", () => {
-    for (const bad of ["{}", '[1,"2"]', "[null]", "1"]) {
-      expect(() => decodeScores(bad)).toThrow(TypeError);
+  it("refuses to continue a window scored differently", () => {
+    const state = addLife(addLife(EMPTY_RATING_STATE, 1), 2);
+    const on = scoringKey({ ...DEFAULT_NORMALIZATION, enabled: true });
+    expect(scoringKey(DEFAULT_NORMALIZATION)).toBe(RAW_SCORING);
+    expect(on).toBe("norm:600:0.9:2");
+    expect(fromRatingsRow(toRatingsRow(state), undefined, on)).toBeNull();
+    expect(fromRatingsRow(toRatingsRow(state, undefined, on), undefined, on)).toEqual(state);
+    expect(fromRatingsRow(toRatingsRow(state, undefined, on))).toBeNull();
+  });
+
+  it("rejects malformed stored windows", () => {
+    for (const bad of [
+      "[1,2]",
+      "{}",
+      '{"v":2,"scoring":"raw","scores":[]}',
+      '{"v":1,"scores":[]}',
+      '{"v":1,"scoring":"raw","scores":[1,"2"]}',
+      '{"v":1,"scoring":"raw","scores":[null]}',
+      "null",
+    ]) {
+      expect(() => decodeWindow(bad)).toThrow(TypeError);
     }
-    expect(() => decodeScores("[1,")).toThrow(SyntaxError);
-    expect(decodeScores(encodeScores([0.1, -2, 1e300]))).toEqual([0.1, -2, 1e300]);
+    expect(() => decodeWindow("{")).toThrow(SyntaxError);
+    expect(() => fromRatingsRow({ nLives: 1, recentScores: encodeWindow([1e300]) })).toThrow(
+      RangeError,
+    );
+    expect(decodeWindow(encodeWindow([0.1, -2, 1e11]))).toEqual({
+      scoring: "raw",
+      scores: [0.1, -2, 1e11],
+    });
   });
 });

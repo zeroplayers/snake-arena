@@ -84,6 +84,14 @@ export function rate(
   };
 }
 
+/**
+ * Largest life score magnitude accepted. Real scores are in the thousands; the bound keeps a
+ * window's sums and squares far from overflow (which would turn the mean and the order into NaN).
+ */
+export const MAX_LIFE_SCORE = 1e12;
+
 function checkScore(score: number): void {
-  if (!Number.isFinite(score)) throw new RangeError(`life score must be finite, got ${score}`);
+  if (!(Math.abs(score) <= MAX_LIFE_SCORE)) {
+    throw new RangeError(`life score must be finite and within ±${MAX_LIFE_SCORE}, got ${score}`);
+  }
 }

@@ -211,6 +211,12 @@ export interface SteerOptions {
   safe: number;
   /** Penalty (in radians of misalignment) for a heading that is blocked right away. */
   dangerWeight: number;
+  /**
+   * Extra cost (in radians) for turning the other way than last tick. Without it a snake caught
+   * between two equally bad roads (typically along the wall) flips its turn every tick and in
+   * effect drives straight on.
+   */
+  reversalCost?: number;
 }
 
 export interface Steer {
@@ -237,6 +243,8 @@ export function steer(
   obstacles: readonly Obstacle[],
   desired: number,
   o: SteerOptions,
+  /** The `turn` sent last tick (0 on the first). */
+  previousTurn = 0,
 ): Steer {
   const { self } = state;
   const wall = arenaRadius(state) - self.radius;
@@ -254,7 +262,9 @@ export function steer(
     const clearance = pathClearance(self, offset, obstacles, wall, o.lookahead);
     if (k === 0) ahead = clearance;
     const danger = clearance >= o.safe ? 0 : (1 - clearance / o.safe) * o.dangerWeight;
-    const cost = Math.abs(angleDiff(angle, desired)) + Math.abs(offset) * 0.15 + danger;
+    // `turn` and `offset` have opposite signs, so the same sign means turning the other way.
+    const reversal = offset * previousTurn > 0 ? (o.reversalCost ?? 0) : 0;
+    const cost = Math.abs(angleDiff(angle, desired)) + Math.abs(offset) * 0.15 + danger + reversal;
     if (cost < bestCost) {
       bestCost = cost;
       bestOffset = offset;

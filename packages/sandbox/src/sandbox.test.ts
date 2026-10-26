@@ -152,6 +152,37 @@ describe("budget", () => {
     expect(report?.outcome).toBe("timeout");
   });
 
+  it("cannot be swallowed by a Promise executor (review of #49)", () => {
+    for (const body of [
+      "for (let j = 0; j < 3000; j++) new Promise(() => { for (let i = 0; i < 1e6; i++); }); return { turn: 0.5 };",
+      "for (;;) new Promise(() => { const a = []; a.length = 1e5; for (;;) a.slice(); }); return { turn: 0.5 };",
+      "for (;;) { try { new Promise(() => { for (;;); }); } catch (e) {} } return { turn: 0.5 };",
+      "for (;;) Promise.resolve().then(() => {}, () => {}); return { turn: 0.5 };",
+    ]) {
+      const life = sandbox.startLife(botWithTick(body), makeInfo());
+      const start = performance.now();
+      const report = life.tick(oneState());
+      expect(performance.now() - start, body).toBeLessThan(1000);
+      expect(report, body).toMatchObject({ outcome: "timeout", action: { turn: 0 }, strikes: 1 });
+      life.dispose();
+    }
+  });
+
+  it("rejects async code, which could swallow the interrupt", () => {
+    for (const source of [
+      "export default { async tick() { return { turn: 0 }; } };",
+      "export default { tick() { (async () => {})(); return { turn: 0 }; } };",
+      "export default { tick() { const f = async function* () {}; return { turn: 0 }; } };",
+    ]) {
+      const life = sandbox.startLife(source, makeInfo());
+      expect(life.death, source).toMatchObject({ fault: "error", reason: "load" });
+      expect(life.death?.message).toMatch(/^async functions are not available to bots/);
+    }
+    // An escaped spelling is not the keyword: QuickJS reports a syntax error.
+    const escaped = sandbox.startLife("export default { \\u0061sync tick() {} };", makeInfo());
+    expect(escaped.death?.message).toMatch(/SyntaxError/);
+  });
+
   it("reuses the previous action and dies after 3 timeouts in a row", () => {
     const reports = run(
       botWithTick(`
@@ -215,6 +246,16 @@ describe("errors", () => {
     }
   });
 
+  it("caps the message of a huge thrown value (review of #49)", () => {
+    const life = sandbox.startLife(
+      botWithTick("throw 'x'.repeat(2 ** 21);"),
+      makeInfo({ opBudget: 100 }),
+    );
+    const reports = makeStates(3).map((s) => life.tick(s));
+    for (const r of reports) expect(r.error?.length).toBeLessThan(2100);
+    expect(reports[2]?.death?.message.length).toBeLessThan(2200);
+  });
+
   it("describes thrown values without running bot code", () => {
     const thrown = [
       ["'plain string'", "uncaught plain string"],
@@ -259,6 +300,16 @@ describe("log", () => {
     }
   });
 
+  it("counts an empty line as at least one byte (review of #49)", () => {
+    const [report] = run(
+      botWithTick("for (let i = 0; i < 5000; i++) log(''); return { turn: 0 };"),
+      1,
+    );
+    expect(report?.outcome).toBe("ok");
+    expect(report?.log.lines.length).toBe(1024);
+    expect(report?.log.truncated).toBe(true);
+  });
+
   it("keeps the lines logged before a timeout or an exception", () => {
     const [timeout] = run(botWithTick("log('before'); for (;;) {}"), 1);
     expect(timeout?.log.lines).toEqual(["before"]);
@@ -301,7 +352,6 @@ describe("determinism", () => {
           () => Function('return 1'),
           () => (() => {}).constructor('return 1'),
           () => (function* () {}).constructor('yield 1'),
-          () => (async () => {}).constructor('return 1'),
         ]) {
           try { make(); log('compiled'); } catch (e) { log(e.name); }
         }
@@ -309,14 +359,7 @@ describe("determinism", () => {
         return { turn: 0 };`),
       1,
     );
-    expect(report?.log.lines).toEqual([
-      "none",
-      "EvalError",
-      "EvalError",
-      "EvalError",
-      "EvalError",
-      "undefined",
-    ]);
+    expect(report?.log.lines).toEqual(["none", "EvalError", "EvalError", "EvalError", "undefined"]);
   });
 
   it("cannot import anything", () => {

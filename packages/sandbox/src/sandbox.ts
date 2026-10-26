@@ -42,6 +42,7 @@ const HOUSEKEEPING_BUDGET = 50;
 export type WasmModule = object;
 interface WasmMemory {
   readonly buffer: ArrayBuffer;
+  grow(pages: number): number;
 }
 const { Memory } = (
   globalThis as unknown as {
@@ -91,7 +92,11 @@ export interface LifeOptions {
   maxErrors?: number;
 }
 
-export type TickOutcome = "ok" | "timeout" | "error";
+/**
+ * `skipped`: the shared heap ran out during this tick because of another bot (which was killed for
+ * it). The tick's result is discarded (previous action) and it counts as neither strike nor error.
+ */
+export type TickOutcome = "ok" | "timeout" | "error" | "skipped";
 
 /** Why a life ended inside the sandbox. */
 export interface Death {
@@ -107,7 +112,7 @@ export interface TickLogOutput {
 }
 
 export interface TickReport {
-  /** Apply this. On `timeout` or `error` it is the previous tick's action (`{ turn: 0 }` at first). */
+  /** Apply this. Unless `ok`, it is the previous tick's action (`{ turn: 0 }` at first). */
   action: BotAction;
   outcome: TickOutcome;
   /** The exception or the budget that ran out, when `outcome` is not `ok`. */
@@ -132,11 +137,11 @@ export interface TickReport {
  */
 export class Sandbox {
   private readonly qjs: QuickJSWASMModule;
-  private readonly memory: WasmMemory;
+  private readonly heap: Heap;
 
-  private constructor(qjs: QuickJSWASMModule, memory: WasmMemory) {
+  private constructor(qjs: QuickJSWASMModule, heap: Heap) {
     this.qjs = qjs;
-    this.memory = memory;
+    this.heap = heap;
   }
 
   static async create(options: SandboxOptions = {}): Promise<Sandbox> {
@@ -146,17 +151,18 @@ export class Sandbox {
       throw new RangeError(`wasmMemoryCapBytes must be at least ${WASM_INITIAL_PAGES * WASM_PAGE}`);
     }
     const memory = new Memory({ initial: WASM_INITIAL_PAGES, maximum });
+    const heap = new Heap(memory);
     // The casts only bridge our minimal types to the library's WebAssembly ones.
     const variant = newVariant(baseVariant, {
       wasmMemory: memory as never,
       ...(options.wasmModule ? { wasmModule: options.wasmModule as never } : {}),
     });
-    return new Sandbox(await newQuickJSWASMModuleFromVariant(variant), memory);
+    return new Sandbox(await newQuickJSWASMModuleFromVariant(variant), heap);
   }
 
   /** Current size of the shared wasm heap. It never shrinks, but freed memory is reused. */
   get heapBytes(): number {
-    return this.memory.buffer.byteLength;
+    return this.heap.memory.buffer.byteLength;
   }
 
   /**
@@ -168,7 +174,51 @@ export class Sandbox {
    * `info.seed` seeds `Math.random`, `info.logLimitBytes` caps `log()` output per tick.
    */
   startLife(source: string, info: BotInfo, options: LifeOptions = {}): BotLife {
-    return new BotLife(this.qjs, source, info, options);
+    return new BotLife(this.qjs, this.heap, source, info, options);
+  }
+}
+
+/** Emscripten tries this many sizes before its heap resize gives up (`emscripten_resize_heap`). */
+const RESIZE_ATTEMPTS = 3;
+
+/**
+ * Watches the shared wasm heap. When it can't grow, malloc returns NULL and QuickJS throws
+ * "out of memory" inside whichever bot was allocating, and that bot may catch it (or get a bare
+ * `null` when even the error object can't be allocated). So the host notices on its own:
+ * emscripten grows the heap through `memory.grow()`, and every attempt fails at the cap.
+ */
+class Heap {
+  readonly memory: WasmMemory;
+  /** Successful growths. */
+  grows = 0;
+  /** Resize requests where every attempt failed: an allocation failed for lack of heap. */
+  exhausted = 0;
+  /** Lives currently holding a runtime in this heap. */
+  readonly lives = new Set<BotLife>();
+  private failedAttempts = 0;
+
+  constructor(memory: WasmMemory) {
+    this.memory = memory;
+    const grow = memory.grow.bind(memory);
+    // An own property shadows WebAssembly.Memory.prototype.grow; emscripten calls memory.grow().
+    memory.grow = (pages) => {
+      try {
+        const before = grow(pages);
+        this.grows++;
+        this.failedAttempts = 0;
+        return before;
+      } catch (e) {
+        if (++this.failedAttempts % RESIZE_ATTEMPTS === 0) this.exhausted++;
+        throw e;
+      }
+    };
+  }
+
+  /** Kills every live bot over its memory limit. Returns how many. */
+  reclaim(): number {
+    let killed = 0;
+    for (const life of [...this.lives]) if (life.checkMemory()) killed++;
+    return killed;
   }
 }
 
@@ -216,6 +266,7 @@ export class BotLife {
   readonly loadLog: TickLogOutput;
 
   private vm: Vm | undefined;
+  private readonly heap: Heap;
 
   private readonly info: BotInfo;
   private readonly opBudget: number;
@@ -233,13 +284,22 @@ export class BotLife {
   private tickLog: TickLog;
   private readonly logLimit: number;
   private logUsed = 0;
+  /** Set when the limit was reached by lines the SDK counts as 0 bytes (empty lines). */
+  private logCut = false;
 
   private lastAction: BotAction = NO_ACTION;
   private strikes = 0;
   private errors = 0;
   private ticks = 0;
 
-  constructor(qjs: QuickJSWASMModule, source: string, info: BotInfo, options: LifeOptions) {
+  constructor(
+    qjs: QuickJSWASMModule,
+    heap: Heap,
+    source: string,
+    info: BotInfo,
+    options: LifeOptions,
+  ) {
+    this.heap = heap;
     this.info = info;
     if (!(info.opBudget > 0)) throw new RangeError("info.opBudget must be positive");
     this.opBudget = info.opBudget;
@@ -256,11 +316,20 @@ export class BotLife {
       this.kill({ fault: "error", reason: "load", message: problem });
       return;
     }
+    const exhaustedBefore = heap.exhausted;
     try {
       this.vm = this.boot(qjs, options);
+      heap.lives.add(this);
       this.load(this.vm, source, options.initOpBudget ?? 100);
     } catch (e) {
-      this.kill({ fault: "error", reason: "crash", message: hostMessage(e) });
+      if (heap.exhausted === exhaustedBefore) {
+        this.kill({ fault: "error", reason: "crash", message: hostMessage(e) });
+      }
+    }
+    if (heap.exhausted !== exhaustedBefore) {
+      // A half-loaded bot can't be resumed, so it dies even if another bot was the hog.
+      heap.reclaim();
+      this.kill({ fault: "error", reason: "oom", message: "the shared heap ran out during load" });
     }
     this.loadLog = this.flushLog();
     if (!this.death) this.checkMemory();
@@ -281,8 +350,11 @@ export class BotLife {
 
     let outcome: TickOutcome = "ok";
     let error: string | null = null;
+    let action: BotAction | null = null;
+    let crash: string | null = null;
     let interrupts = 0;
     let work = 0;
+    const { grows, exhausted } = this.heap;
     try {
       this.budget(this.opBudget);
       const stateArg = ctx.newString(json);
@@ -291,50 +363,74 @@ export class BotLife {
       stateArg.dispose();
       limitArg.dispose();
       interrupts = this.interrupts;
-      const timedOut = this.forced || this.interrupts > this.interruptLimit;
-
+      // Checked even when the call returned normally: the bot may have swallowed the interrupt.
+      const timedOut = this.overBudget();
       if (result.error) {
-        const message = timedOut ? null : this.describe(vm, result.error);
+        error = timedOut ? null : this.describe(vm, result.error);
         result.error.dispose();
-        if (timedOut) {
-          outcome = "timeout";
-          error = this.forced
-            ? `over budget: native built-ins did more than ${this.opBudget * WORK_PER_OP} units of work`
-            : `over budget: more than ${this.opBudget} interrupts`;
-        } else {
-          outcome = "error";
-          error = message;
-          if (isOutOfMemory(message)) this.kill({ fault: "error", reason: "oom", message });
-        }
       } else {
-        this.lastAction = readAction(ctx, result.value);
+        if (!timedOut) action = readAction(ctx, result.value);
         result.value.dispose();
       }
-      if (!this.death) work = this.readWork(vm);
+      if (timedOut) {
+        outcome = "timeout";
+        error = this.forced
+          ? `over budget: native built-ins did more than ${this.opBudget * WORK_PER_OP} units of work`
+          : `over budget: more than ${this.opBudget} interrupts`;
+      } else if (result.error) {
+        outcome = "error";
+      }
+      work = this.readWork(vm);
     } catch (e) {
-      outcome = "error";
-      error = hostMessage(e);
-      this.kill({ fault: "error", reason: "crash", message: error });
+      crash = hostMessage(e);
     }
 
-    if (!this.death) {
-      this.strikes = outcome === "timeout" ? this.strikes + 1 : 0;
-      this.errors = outcome === "error" ? this.errors + 1 : 0;
-      if (this.strikes >= this.maxStrikes) {
-        this.kill({
-          fault: "timeout",
-          reason: "timeouts",
-          message: `${this.strikes} ticks in a row over budget`,
-        });
-      } else if (this.errors >= this.maxErrors) {
-        this.kill({
-          fault: "error",
-          reason: "errors",
-          message: `${this.errors} ticks in a row threw; last: ${error}`,
-        });
-      } else if (this.ticks % this.memoryCheckInterval === 0) {
-        this.checkMemory();
+    if (this.heap.exhausted !== exhausted) {
+      // The shared heap ran out while this bot ran, whether or not it caught the error. Kill
+      // whoever is over their limit; if that wasn't this bot, it was a victim.
+      const killed = this.heap.reclaim();
+      if (!this.death && killed > 0) {
+        return this.report(
+          "skipped",
+          "the shared heap ran out because of another bot; this tick was discarded",
+          interrupts,
+          work,
+        );
       }
+      this.kill({
+        fault: "error",
+        reason: "oom",
+        message: "out of memory: the shared heap ran out while this bot was running",
+      });
+    } else if (crash !== null) {
+      outcome = "error";
+      error = crash;
+      this.kill({ fault: "error", reason: "crash", message: crash });
+    } else if (isOutOfMemory(error)) {
+      this.kill({ fault: "error", reason: "oom", message: error });
+    }
+    // kill() may have set death above; TypeScript still has it narrowed to null.
+    const death = this.death as Death | null;
+    if (death) return this.report(death.fault, death.message, interrupts, work);
+
+    if (action) this.lastAction = action;
+    this.strikes = outcome === "timeout" ? this.strikes + 1 : 0;
+    this.errors = outcome === "error" ? this.errors + 1 : 0;
+    if (this.strikes >= this.maxStrikes) {
+      this.kill({
+        fault: "timeout",
+        reason: "timeouts",
+        message: `${this.strikes} ticks in a row over budget`,
+      });
+    } else if (this.errors >= this.maxErrors) {
+      this.kill({
+        fault: "error",
+        reason: "errors",
+        message: `${this.errors} ticks in a row threw; last: ${error}`,
+      });
+    } else if (this.heap.grows !== grows || this.ticks % this.memoryCheckInterval === 0) {
+      // A bot that grew the heap is checked at once, so it can't hold more than its limit.
+      this.checkMemory();
     }
     return this.report(outcome, error, interrupts, work);
   }
@@ -343,6 +439,7 @@ export class BotLife {
   dispose(): void {
     const vm = this.vm;
     this.vm = undefined;
+    this.heap.lives.delete(this);
     if (!vm) return;
     try {
       for (const h of Object.values(vm.driver)) h.dispose();
@@ -370,7 +467,7 @@ export class BotLife {
     runtime.setMaxStackSize(options.maxStackBytes ?? 256 * 1024);
     runtime.setInterruptHandler(() => {
       this.interrupts++;
-      return this.forced || this.interrupts > this.interruptLimit;
+      return this.overBudget();
     });
     const ctx = runtime.newContext({ intrinsics: INTRINSICS });
 
@@ -438,12 +535,18 @@ export class BotLife {
     const loaded = ctx.callFunction(driver.load, ctx.undefined, ns, infoArg);
     infoArg.dispose();
     ns.dispose();
-    if (loaded.error) this.loadFailed(vm, loaded.error, "init()");
-    else loaded.value.dispose();
+    if (loaded.error) {
+      this.loadFailed(vm, loaded.error, "init()");
+      return;
+    }
+    loaded.value.dispose();
+    if (this.overBudget()) {
+      this.kill({ fault: "timeout", reason: "load", message: "loading went over its op budget" });
+    }
   }
 
   private loadFailed(vm: Vm, err: QuickJSHandle, phase: string): void {
-    const timedOut = this.forced || this.interrupts > this.interruptLimit;
+    const timedOut = this.overBudget();
     const message = timedOut ? `${phase} went over its op budget` : this.describe(vm, err);
     err.dispose();
     this.kill({
@@ -454,6 +557,15 @@ export class BotLife {
   }
 
   // ---- helpers ----
+
+  /**
+   * Whether the current budgeted call went over. The interrupt handler keeps failing every check
+   * once this is true, and the host also checks it after the call returns, because QuickJS turns
+   * an interrupt inside a Promise executor or async function into a rejection the bot can catch.
+   */
+  private overBudget(): boolean {
+    return this.forced || this.interrupts > this.interruptLimit;
+  }
 
   /** Resets interrupt accounting for the next call into QuickJS. */
   private budget(limit: number): void {
@@ -495,33 +607,53 @@ export class BotLife {
     }
   }
 
-  /** Host side of `log()`: returns false once the byte limit is reached. */
+  /**
+   * Host side of `log()`: returns false once the byte limit is reached. The SDK's TickLog counts
+   * an empty line as 0 bytes, so here every line costs at least 1 byte; otherwise `log('')` in a
+   * loop could keep an unbounded number of lines.
+   */
   private emit(line: string): boolean {
-    this.tickLog.log(line);
     const size = utf8Length(line);
+    if (size === 0 && this.logUsed + 1 > this.logLimit) {
+      this.logCut = true;
+      return false;
+    }
+    this.tickLog.log(line);
     if (this.logUsed + size > this.logLimit) {
       this.logUsed = this.logLimit + 1;
       return false;
     }
-    this.logUsed += size;
+    this.logUsed += Math.max(size, 1);
     return true;
   }
 
   private flushLog(): TickLogOutput {
+    const out = this.tickLog.flush();
+    if (this.logCut) out.truncated = true;
     this.logUsed = 0;
-    return this.tickLog.flush();
+    this.logCut = false;
+    return out;
   }
 
-  /** Deterministic per bot (it only depends on the bot's own allocations), so replays agree. */
-  private checkMemory(): void {
-    const used = this.memoryUsed();
-    if (used > this.memoryLimit) {
-      this.kill({
-        fault: "error",
-        reason: "oom",
-        message: `out of memory: ${used} bytes in use, limit ${this.memoryLimit}`,
-      });
+  /**
+   * Kills the bot if it uses more than its memory limit; returns whether it did. Deterministic
+   * per bot when run on a fixed schedule (it only depends on the bot's own allocations).
+   */
+  checkMemory(): boolean {
+    if (this.death) return false;
+    let used: number;
+    try {
+      used = this.memoryUsed();
+    } catch {
+      return false; // measuring allocates; with the heap full it can fail
     }
+    if (used <= this.memoryLimit) return false;
+    this.kill({
+      fault: "error",
+      reason: "oom",
+      message: `out of memory: ${used} bytes in use, limit ${this.memoryLimit}`,
+    });
+    return true;
   }
 
   /** QuickJS's own estimate from walking the heap: ~10–50 µs for a typical bot. */

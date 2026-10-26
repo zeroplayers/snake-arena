@@ -167,6 +167,20 @@ describe("native work budget", () => {
     sort: "const a = new Array(5e4).fill(0).map((_, i) => String(i)); for (;;) a.sort();",
     "valueOf size":
       "let n = 0; const size = { valueOf: () => (n++ % 2 ? 1e7 : 1) }; for (;;) new ArrayBuffer(size);",
+    // Review of #49: natives that walk every key or char of their input.
+    descriptors: "const s = 'x'.repeat(2e5); for (;;) Object.getOwnPropertyDescriptors(s);",
+    assign: "const s = 'x'.repeat(2e5); for (;;) Object.assign({}, s);",
+    "String.raw": "const raw = new Uint8Array(1e5); for (;;) String.raw({ raw });",
+    "Object.values": "const s = 'x'.repeat(2e5); for (;;) Object.values(s);",
+    "Object.entries": "const a = new Array(5e4).fill(0); for (;;) Object.entries(a);",
+    isFrozen: "const a = new Array(5e4).fill(0); for (;;) Object.isFrozen(a);",
+    parseFloat: "const s = '1'.repeat(1e6); for (;;) parseFloat(s);",
+    RegExp: "const p = 'a'.repeat(1e5); for (;;) new RegExp(p);",
+    "join separator":
+      "const a = new Array(100).fill(1); const sep = 'x'.repeat(1e5); for (;;) a.join(sep);",
+    "string indexOf in array":
+      "const s = 'x'.repeat(1e6); const a = new Array(100).fill(s + 'y'); for (;;) a.indexOf(s + 'z');",
+    bind: "const args = new Array(6e4).fill(0); for (;;) Math.max.bind(null, ...args);",
   };
   // Stopped by the work budget rather than by interrupt checks.
   const byWork = new Set([
@@ -180,6 +194,17 @@ describe("native work budget", () => {
     "spread",
     "apply",
     "sort",
+    "descriptors",
+    "assign",
+    "String.raw",
+    "Object.values",
+    "Object.entries",
+    "isFrozen",
+    "parseFloat",
+    "RegExp",
+    "join separator",
+    "string indexOf in array",
+    "bind",
   ]);
   for (const [name, body] of Object.entries(loops)) {
     it(`stops ${name} within one tick`, () => {
@@ -189,6 +214,15 @@ describe("native work budget", () => {
       if (byWork.has(name)) expect(report.error).toMatch(/native built-ins/);
     });
   }
+
+  it("stops set algebra within one tick", () => {
+    const report = tickOnce(
+      "for (;;) a.union(b); return { turn: 0 };",
+      "const a = new Set(), b = new Set(); for (let i = 0; i < 5e4; i++) { a.add(i); b.add(-i); }",
+    );
+    expect(report.ms).toBeLessThan(FAST_MS);
+    expect(report.error).toMatch(/native built-ins/);
+  });
 
   it("leaves room for normal bot work", () => {
     const report = tickOnce(`
@@ -239,6 +273,25 @@ describe("wrapped built-ins still behave", () => {
     ["Array.prototype.map.call('ab', (c) => c + c).join('')", "aabb"],
     ["(function () { return Array.prototype.slice.call(arguments, 1).join(); })(1, 2, 3)", "2,3"],
     ["[1, 2, 3].indexOf.name + [].concat.length", "indexOf1"],
+    ["JSON.stringify(Object.assign({ a: 1 }, 'xy', [3]))", '{"0":3,"1":"y","a":1}'],
+    ["Object.keys(Object.getOwnPropertyDescriptors('ab')).join()", "0,1,length"],
+    ["String.raw({ raw: ['a', 'b', 'c'] }, 1, 2)", "a1b2c"],
+    ["[...new Set([1, 2]).union(new Set([2, 3]))].join()", "1,2,3"],
+    ["new Set([1]).isSubsetOf(new Set([1, 2]))", "true"],
+    ["parseInt('ff', 16) + parseFloat('1.5') + Number(isNaN('x'))", "257.5"],
+    ["encodeURIComponent('a b') + decodeURI('%41')", "a%20bA"],
+    ["new RegExp('a+', 'g').test('caa') && RegExp('b').source", "b"],
+    ["Object.isFrozen(Object.freeze([1])) && Object.entries({ a: 1 }).length", "1"],
+    ["Math.max.bind(null, 1, 2)(3)", "3"],
+    ["Array.of(1, 2).length + String.fromCharCode(65)", "2A"],
+    ["new Promise((resolve) => resolve(1)) instanceof Promise", "true"],
+    ["new (class P extends Promise {})(() => {}) instanceof Promise", "true"],
+    ["Promise.resolve(1).constructor === Promise", "true"],
+    ["typeof Promise.try", "undefined"],
+    [
+      "(() => { let e; new Promise(() => { throw 7; }).catch((x) => { e = x; }); return typeof e; })()",
+      "undefined",
+    ],
   ];
   for (const [expr, expected] of cases) {
     it(expr, () => {

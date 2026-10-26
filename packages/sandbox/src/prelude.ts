@@ -63,6 +63,8 @@ export const PRELUDE = String.raw`
   const TYPED = 10;
   const BYTE = 1;
   const CHAR = 1;
+  // Building a fresh object or array per key (descriptors, entries).
+  const OBJECT = 500;
 
   // ---- native work accounting ----
 
@@ -135,6 +137,18 @@ export const PRELUDE = String.raw`
     return apply(taLength, o, []);
   }
 
+  // Number of own keys a native will walk, when it can be known up front without running bot
+  // code: strings, arrays, typed arrays and array-likes with a plain length. Other objects: 0
+  // (their key count is charged afterwards where the native returns it).
+  function sizeHint(o) {
+    if (typeof o === "string") return o.length;
+    if (typeof o !== "object" || o === null) return 0;
+    if (isArray(o)) return o.length;
+    if (isTypedArray(o)) return typedLength(o);
+    const d = getOwnPropertyDescriptor(o, "length");
+    return d !== undefined && hasOwn(d, "value") && typeof d.value === "number" ? toLength(d.value) : 0;
+  }
+
   function checked(name, len, weight) {
     if (len > maxArrayLength) tooLong(name, len);
     charge(len * weight);
@@ -163,6 +177,15 @@ export const PRELUDE = String.raw`
 
   const linear = (lengthOf, weight) => (self, _args, name) =>
     checked(name, lengthOf(self), weight);
+  // Comparing each element with a string argument (indexOf, includes) or joining with a long
+  // separator costs per char too.
+  const linearWithStrings = (lengthOf, weight) => (self, args, name) => {
+    const len = lengthOf(self);
+    checked(name, len, weight);
+    for (let i = 0; i < args.length; i++) {
+      if (typeof args[i] === "string") charge(len * args[i].length * CHAR);
+    }
+  };
   const nlogn = (lengthOf, weight) => (self, _args, name) => {
     const len = lengthOf(self);
     if (len > maxArrayLength) tooLong(name, len);
@@ -179,7 +202,7 @@ export const PRELUDE = String.raw`
   for (const name of Reflect.ownKeys(ArrayProto)) {
     if (ARRAY_CHEAP.has(name)) continue;
     const sorting = name === "sort" || name === "toSorted";
-    guard(ArrayProto, name, (sorting ? nlogn : linear)(arrayLength, ARRAY));
+    guard(ArrayProto, name, (sorting ? nlogn : linearWithStrings)(arrayLength, ARRAY));
   }
 
   function define(a, i, v) {
@@ -257,14 +280,18 @@ export const PRELUDE = String.raw`
   // by size too. The wrapper keeps prototype identity: instanceof and subclassing still work.
   function guardConstructor(name, cost) {
     const Native = g[name];
-    const Wrapped = function (...args) {
-      if (new.target === undefined) return apply(Native, this, args);
+    installConstructor(name, Native, function (...args) {
       cost(args);
+      if (new.target === undefined) return apply(Native, this, args);
       return construct(Native, args, new.target);
-    };
+    }, []);
+  }
+  // Puts Wrapped in place of the global Native with the same statics and prototype.
+  function installConstructor(name, Native, Wrapped, dropStatics) {
     setPrototypeOf(Wrapped, getPrototypeOf(Native));
     for (const key of Reflect.ownKeys(Native)) {
       if (key === "length" || key === "name" || key === "prototype") continue;
+      if (dropStatics.includes(key)) continue;
       defineProperty(Wrapped, key, getOwnPropertyDescriptor(Native, key));
     }
     defineProperty(Wrapped, "name", { value: name });
@@ -408,10 +435,105 @@ export const PRELUDE = String.raw`
       },
     }).m);
   }
-  for (const name of ["keys", "values", "entries", "getOwnPropertyNames", "getOwnPropertySymbols"]) {
-    chargeAfter(Object, name);
+  // Cost is linear in the number of keys returned, which we only know afterwards; for strings,
+  // arrays and typed arrays it is also charged up front, so one call can't run long.
+  function chargeKeys(obj, name, argIndex, weight) {
+    replaceMethod(obj, name, (native) => ({
+      m(...args) {
+        charge(sizeHint(args[argIndex]) * weight);
+        const out = apply(native, this, args);
+        if (isArray(out)) charge(out.length * weight);
+        return out;
+      },
+    }).m);
   }
-  chargeAfter(Reflect, "ownKeys");
+  for (const name of ["keys", "getOwnPropertyNames", "getOwnPropertySymbols", "freeze", "seal",
+    "isFrozen", "isSealed"]) {
+    chargeKeys(Object, name, 0, ARRAY);
+  }
+  for (const name of ["values", "entries", "getOwnPropertyDescriptors"]) {
+    chargeKeys(Object, name, 0, OBJECT);
+  }
+  chargeKeys(Object, "create", 1, OBJECT);
+  chargeKeys(Object, "defineProperties", 1, OBJECT);
+  chargeKeys(Reflect, "ownKeys", 0, ARRAY);
+  guard(Object, "assign", (_self, args) => {
+    for (let i = 1; i < args.length; i++) charge(sizeHint(args[i]) * ARRAY);
+  });
+  guard(String, "raw", (_self, args) => {
+    const strings = args[0];
+    if (typeof strings === "object" && strings !== null) {
+      const raw = strings.raw;
+      if (typeof raw === "object" && raw !== null) {
+        noIteratorGetter(raw);
+        checked("String.raw", arrayLength(raw), ARRAY);
+      }
+    }
+    charge(args.length * ARRAY);
+  });
+  for (const name of ["fromCharCode", "fromCodePoint"]) {
+    guard(String, name, (_self, args) => charge(args.length * ARRAY));
+  }
+  guard(Array, "of", (_self, args) => charge(args.length * ARRAY));
+  guard(Function.prototype, "bind", (_self, args) => charge(args.length * ARRAY));
+
+  // Global string functions walk their whole input.
+  for (const name of ["parseInt", "parseFloat", "isNaN", "isFinite", "escape", "unescape",
+    "encodeURI", "encodeURIComponent", "decodeURI", "decodeURIComponent"]) {
+    guard(g, name, (_self, args) => {
+      if (args.length > 0 && typeof args[0] !== "number") {
+        args[0] = typeof args[0] === "symbol" ? args[0] : StringCtor(args[0]);
+        if (typeof args[0] === "string") charge(args[0].length * CHAR);
+      }
+    });
+  }
+  // Compiling a pattern is linear in its length.
+  guardConstructor("RegExp", (args) => {
+    if (typeof args[0] === "string") charge(args[0].length * CHAR);
+  });
+  guard(RegExp.prototype, "compile", (_self, args) => {
+    if (typeof args[0] === "string") charge(args[0].length * CHAR);
+  });
+
+  // Set algebra walks both sets in C.
+  const setSize = getOwnPropertyDescriptor(Set.prototype, "size").get;
+  const sizeOf = (o) => {
+    try {
+      return apply(setSize, o, []);
+    } catch {
+      return 0;
+    }
+  };
+  for (const name of ["union", "intersection", "difference", "symmetricDifference", "isSubsetOf",
+    "isSupersetOf", "isDisjointFrom"]) {
+    guard(Set.prototype, name, (self, args) => charge((sizeOf(self) + sizeOf(args[0])) * ARRAY));
+  }
+
+  // An exception inside a Promise executor or an async function becomes a rejection, and that
+  // includes the interrupt that ends an over-budget tick: the bot could catch it and run on.
+  // Promise jobs never run in the sandbox, so neither is useful to a bot: async functions are
+  // rejected by the host's source check, and the executor is called from JS here, where the
+  // interrupt cannot be caught.
+  // Promise.try has the same problem and is removed.
+  const NativePromise = Promise;
+  installConstructor("Promise", NativePromise, function (executor) {
+    if (new.target === undefined) throw new TypeErrorCtor("Promise must be called with 'new'");
+    if (typeof executor !== "function") {
+      throw new TypeErrorCtor("Promise executor is not a function");
+    }
+    let resolve;
+    let reject;
+    const p = construct(NativePromise, [(a, b) => {
+      resolve = a;
+      reject = b;
+    }], new.target);
+    try {
+      apply(executor, undefined, [resolve, reject]);
+    } catch (e) {
+      apply(reject, undefined, [e]);
+    }
+    return p;
+  }, ["try"]);
 
   // ---- determinism and unavailable features ----
 
@@ -542,7 +664,9 @@ export const PRELUDE = String.raw`
     // Never runs bot code: only own data properties and primitive conversions.
     describe(e) {
       if ((typeof e !== "object" && typeof e !== "function") || e === null) {
-        return typeof e === "symbol" ? "Symbol" : "uncaught " + StringCtor(e);
+        return typeof e === "symbol"
+          ? "uncaught Symbol"
+          : "uncaught " + apply(sliceString, StringCtor(e), [0, 2000]);
       }
       const name = dataProp(e, "name");
       const message = dataProp(e, "message");

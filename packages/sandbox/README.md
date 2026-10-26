@@ -37,13 +37,23 @@ report is identical.
   survives to the next life.
 - Budget per tick: `info.opBudget` interrupt-handler calls (QuickJS calls it about every 10 000
   bytecode branches or C-function calls; ≈ 0.5 ms each on an M1). Over budget → previous action and a
-  strike; 3 strikes in a row → death `timeout`. Exceptions 3 ticks in a row → death `error`.
+  strike; 3 strikes in a row → death `timeout`. Exceptions 3 ticks in a row → death `error`. Once
+  over budget, every later interrupt check fails, and the host counts the tick as a timeout even if
+  the call returned normally.
 - Module evaluation + `init()` share a budget of `initOpBudget` (100).
-- Out of memory → death `error` (reason `oom`) at once, and the runtime is freed.
+- Out of memory → death `error` (reason `oom`) at once, and the runtime is freed. A bot can't
+  survive by catching the error: the host watches the shared heap itself (see below).
+- Outcome `skipped`: the shared heap ran out during this bot's tick because another bot was over
+  its limit (that bot is killed). The tick is discarded: previous action, no strike, no error.
 - `Math.random` is seeded from `info.seed`. No `Date`, `fetch`, timers, `import`, `eval`/`Function`,
   `Proxy`, `BigInt` (literals are rejected by `checkSource`), `WeakRef`.
+- No `async`: `checkSource` rejects the keyword. An exception inside an async function becomes a
+  rejection, including the interrupt that ends an over-budget tick, and promise jobs never run in
+  the sandbox anyway. The `Promise` constructor calls its executor from JS, where the interrupt
+  can't be caught; `Promise.try` is removed.
 - `log()` and `console.*` go to the tick's log, capped at `info.logLimitBytes` with the SDK's
-  truncation rules. Lines logged before a timeout are kept.
+  truncation rules. Lines logged before a timeout are kept. Unlike the SDK's `createTickLog`, an
+  empty line costs 1 byte, so `log('')` in a loop can't keep unbounded lines.
 
 ## Hardening (`src/prelude.ts`)
 
@@ -60,16 +70,29 @@ grows with its input:
   so a getter could grow one after it was checked).
 - Lengths are read the way the native will read them, without running bot code; accessor `length`s
   and `Symbol.iterator` getters on array-likes are refused.
+- Also charged: `Object.keys`/`values`/`entries`/`assign`/`getOwnPropertyDescriptors`/`freeze`/…
+  (by the size of strings, arrays and typed arrays up front and by the keys returned),
+  `String.raw`/`fromCharCode`, `bind`, `Array.of`, Set algebra (`union`, …), `parseInt`/`parseFloat`/
+  `encodeURI`/…, `RegExp` compilation, and string arguments to array methods (`join` separators,
+  `indexOf` of a long string).
 
 Memory: emscripten builds of QuickJS don't count allocation sizes, so `setMemoryLimit` only stops a
-single allocation above the limit. The real guards are the capped wasm heap (`wasmMemoryCapBytes`,
-64 MiB, shared by the sandbox) and a `computeMemoryUsage()` check every `memoryCheckInterval` (10)
-ticks against `memoryLimitBytes` (8 MiB); the check costs ~25 µs for a typical bot.
+single allocation above the limit. The real guards:
+
+- the capped wasm heap (`wasmMemoryCapBytes`, 64 MiB, shared by the sandbox);
+- a `computeMemoryUsage()` check against `memoryLimitBytes` (8 MiB) every `memoryCheckInterval`
+  (10) ticks, and right after any tick that grew the heap (~25 µs for a typical bot);
+- the host hooks `memory.grow()`, which emscripten calls to grow the heap. When every attempt fails,
+  an allocation failed. Then every bot over its limit is killed; if the bot that was running
+  isn't one of them, its tick is `skipped`; if nobody is over, the running bot dies.
+
+The cap should cover bots × `memoryLimitBytes`, or honest bots can run the heap out together.
 
 ## Known gaps
 
-- **Operators on huge strings** (`===`, `<`, `+`, using one as a property key) and object spread
-  over huge objects run in C uncharged, and nothing in JS can intercept them. A bot can build
+- **Operators on huge strings** (`===`, `<`, `+`, `Number(s)`, using one as a property key or a
+  Map/Set key) and object spread over huge objects run in C uncharged, and nothing in JS can
+  intercept them. A bot can build
   strings of tens of MB within one tick (`a = a + a`; the memory check only runs between ticks), and
   `for (;;) a === b` on two 16 MB strings runs for over a minute inside one tick (verified). Only
   the DO's CPU limit stops that, so the room backstop (replay the batch with bots isolated, ban

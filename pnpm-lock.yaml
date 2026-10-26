@@ -115,6 +115,10 @@ importers:
       '@zerosnake/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
+    devDependencies:
+      '@zerosnake/engine':
+        specifier: workspace:*
+        version: link:../../packages/engine
 
   packages/cli: {}
 

@@ -1,9 +1,10 @@
 name: Deploy staging
 
 # Runs after CI passes on main (or manually). No-ops until the Cloudflare secrets are set:
-#   CLOUDFLARE_API_TOKEN   "Edit Cloudflare Workers" template + Account D1: Edit + Queues: Edit,
-#                          zone surninsynergy.dev
+#   CLOUDFLARE_API_TOKEN   "Edit Cloudflare Workers" template (Workers Scripts, R2, Routes) plus
+#                          Account D1: Edit and Queues: Edit; zone surninsynergy.dev
 #   CLOUDFLARE_ACCOUNT_ID
+# See "Staging" in README.md.
 on:
   workflow_run:
     workflows: [CI]
@@ -84,3 +85,8 @@ jobs:
         run: |
           pnpm build
           pnpm exec wrangler deploy
+
+      - name: Smoke check
+        run: |
+          curl -fsS --retry 5 --retry-delay 5 --retry-all-errors https://api.arena.surninsynergy.dev/health
+          curl -fsS --retry 5 --retry-delay 5 --retry-all-errors https://arena.surninsynergy.dev/api/health

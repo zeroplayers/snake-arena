@@ -3,8 +3,6 @@
  * `env.staging` is what CI deploys to arena.surninsynergy.dev.
  *
  * Bindings are not inherited by environments, so every binding is declared twice.
- * Values marked PLACEHOLDER must be replaced with real IDs before the first staging deploy
- * (the deploy workflow refuses to run while any remain).
  *
  * Secrets (BETTER_AUTH_SECRET, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET) are not in this file:
  * `.dev.vars` locally (see `.dev.vars.example`), `wrangler secret put --env staging` on staging.
@@ -55,8 +53,7 @@
         {
           "binding": "DB",
           "database_name": "zerosnake-staging",
-          // PLACEHOLDER: `wrangler d1 create zerosnake-staging` → database_id
-          "database_id": "00000000-0000-0000-0000-000000000000",
+          "database_id": "d2d6929c-498c-4224-8cc5-b7aad4a4c3ec",
           "migrations_dir": "migrations"
         }
       ],

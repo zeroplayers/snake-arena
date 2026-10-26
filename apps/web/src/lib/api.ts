@@ -12,6 +12,8 @@ export interface LeaderboardEntry {
   rank: number;
   botId: string;
   botName: string;
+  /** `/@{author}/{botSlug}`. */
+  botSlug: string;
   author: string;
   version: number;
   rating: number;
@@ -23,8 +25,14 @@ export interface LeaderboardEntry {
 export interface BotSummary {
   id: string;
   name: string;
+  /** `/@{username}/{slug}`. */
+  slug: string;
   activeVersion: number | null;
+  /** The active version's rating, `null` while it has none. */
   rating: number | null;
+  ratingCi: number | null;
+  /** Lives behind `rating` (at most the last 200). */
+  ratedLives: number | null;
   lives: number;
 }
 

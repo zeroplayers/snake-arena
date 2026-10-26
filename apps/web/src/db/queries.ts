@@ -23,8 +23,11 @@ export async function getProfile(db: Db, username: string): Promise<Profile | nu
     .select({
       id: bots.id,
       name: bots.name,
+      slug: bots.slug,
       activeVersion: versions.n,
       rating: ratings.mean,
+      ratingCi: ratings.ci,
+      ratedLives: ratings.nLives,
       lives: sql<number>`(
         SELECT count(*) FROM ${lives}
         JOIN ${versions} AS v ON v.id = ${lives.versionId}
@@ -55,6 +58,7 @@ export function leaderboardQuery(db: Db, { limit = 50, offset = 0 }: Leaderboard
     .select({
       botId: bots.id,
       botName: bots.name,
+      botSlug: bots.slug,
       author: users.username,
       version: versions.n,
       rating: ratings.mean,

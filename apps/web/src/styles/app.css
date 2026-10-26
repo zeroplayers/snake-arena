@@ -386,3 +386,323 @@ button.button:disabled {
   border: 1px solid var(--border);
   border-radius: 50%;
 }
+
+/* Public pages: leaderboard, profile, bot page, replay */
+
+.small {
+  font-size: 12px;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.table .rank {
+  width: 1%;
+  color: var(--text-muted);
+}
+
+.table tr.selected td {
+  background: rgba(0, 255, 26, 0.05);
+}
+
+.show-narrow {
+  display: none;
+}
+
+.empty-block {
+  margin: 0;
+  padding: 24px 0;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.warning {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid #ffb300;
+  border-radius: 8px;
+  color: #ffd27a;
+  font-size: 14px;
+}
+
+.breadcrumbs {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 16px;
+  font-size: 14px;
+}
+
+.skeleton {
+  height: 14px;
+  margin: 12px 0;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #151515, #222, #151515);
+  background-size: 200% 100%;
+  animation: skeleton 1.2s ease-in-out infinite;
+}
+
+.skeleton-title {
+  width: 40%;
+  height: 32px;
+}
+
+.skeleton.short {
+  width: 60%;
+}
+
+@keyframes skeleton {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}
+
+.status {
+  display: inline-block;
+  padding: 0 8px;
+  border: 1px solid #333;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.status-ready {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.status-validating {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.status-rejected {
+  border-color: var(--pink);
+  color: var(--pink);
+}
+
+.status-archived {
+  color: var(--text-muted);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.chip {
+  display: inline-block;
+  padding: 2px 10px;
+  border: 1px solid #333;
+  border-radius: 999px;
+  font-size: 13px;
+}
+
+.chips .chip {
+  color: var(--text);
+}
+
+/* Rating chart */
+
+.chart {
+  margin: 0;
+}
+
+.chart-plot {
+  position: relative;
+}
+
+.chart-hit {
+  position: absolute;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: default;
+}
+
+.chart-hit:hover,
+.chart-hit:focus-visible {
+  background: rgba(255, 255, 255, 0.04);
+  outline: none;
+}
+
+.chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.chart-grid {
+  stroke: #222;
+  stroke-width: 1;
+}
+
+.chart-axis {
+  fill: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.chart-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-opacity: 0.5;
+  stroke-width: 2;
+}
+
+.chart-whisker {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.chart-dot {
+  fill: var(--accent);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.chart-dot.hollow {
+  fill: var(--surface);
+  stroke: var(--accent);
+}
+
+.chart-mark.active .chart-dot {
+  r: 7;
+}
+
+.chart-caption {
+  min-height: 1.5em;
+  padding-top: 8px;
+  font-size: 14px;
+}
+
+/* Sources */
+
+.source-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.source-tab {
+  padding: 4px 10px;
+  border: 1px solid #333;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.source-tab.active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.source-code {
+  max-height: 560px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid #222;
+  border-radius: 8px;
+  background: #000;
+  color: #ddd;
+  font-size: 13px;
+  line-height: 1.5;
+  tab-size: 2;
+}
+
+/* Replay */
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 32px;
+  margin: 0 0 16px;
+}
+
+.facts dt {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.facts dd {
+  margin: 0;
+  font-size: 18px;
+}
+
+.replay-stage {
+  position: relative;
+  height: min(80dvh, 720px);
+  min-height: 420px;
+  border: 1px solid #222;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.replay-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.participants {
+  padding-top: 16px;
+}
+
+@media (max-width: 640px) {
+  .hide-narrow {
+    display: none;
+  }
+
+  .show-narrow {
+    display: block;
+  }
+
+  .site-header {
+    flex-wrap: wrap;
+  }
+
+  .site-nav {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .panel {
+    padding: 16px 12px;
+  }
+
+  .table th,
+  .table td {
+    padding: 8px 6px;
+  }
+
+  .replay-stage {
+    height: 85dvh;
+  }
+}

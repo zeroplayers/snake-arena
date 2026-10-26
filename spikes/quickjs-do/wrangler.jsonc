@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "zerosnake-spike-quickjs",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-20",
+  // Surnin Synergy
+  "account_id": "ee83a53dc97b9d1754fdbde838c118a2",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [{ "name": "BENCH", "class_name": "BenchRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BenchRoom"] }],
+  "limits": { "cpu_ms": 300000 },
+  "observability": { "enabled": true }
+}

@@ -7,10 +7,33 @@ An arena where people vibe-code slither.io-style snake bots, deploy them with on
 
 ## Environments
 
-| Environment | Domain |
-|---|---|
-| staging | `*.surninsynergy.dev` (temporary, final domain TBD) |
+| Environment | Domain                                              |
+| ----------- | --------------------------------------------------- |
+| staging     | `*.surninsynergy.dev` (temporary, final domain TBD) |
+
+## Development
+
+Requires Node 24+ and pnpm (`corepack enable`).
+
+```bash
+pnpm install
+pnpm test        # vitest across all workspaces
+pnpm typecheck
+pnpm lint        # biome; `pnpm format` to fix
+```
+
+| Path                | What                                     |
+| ------------------- | ---------------------------------------- |
+| `packages/engine`   | deterministic simulation                 |
+| `packages/sandbox`  | QuickJS bot runner                       |
+| `packages/sdk`      | bot types and helpers                    |
+| `packages/renderer` | three.js renderer                        |
+| `packages/cli`      | `npx zerosnake`                          |
+| `bots/house`        | built-in bots                            |
+| `apps/web`          | site (TanStack Start on Workers)         |
+| `apps/arena`        | arena worker (matchmaker, rooms, checks) |
+| `template/`         | starter repo for bot authors             |
 
 ## Status
 
-Design phase. No code yet.
+v0 in progress. See the [v0 milestone](../../milestone/1).

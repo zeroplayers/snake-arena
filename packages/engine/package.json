@@ -1,0 +1,14 @@
+{
+  "name": "@zerosnake/engine",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Deterministic fixed-step snake simulation",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "vitest": "^5.0.5"
+  }
+}

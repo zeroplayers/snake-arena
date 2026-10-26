@@ -1,0 +1,11 @@
+{
+  "name": "@zerosnake/house-bots",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Built-in house bots",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p ."
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "@zerosnake/arena",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Arena worker: matchmaker, rooms, checks",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p ."
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "@zerosnake/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Types and helpers for writing bots",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p ."
+  }
+}

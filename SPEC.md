@@ -54,6 +54,7 @@ Based on the original ZeroSnake (growth formulas from `frontend/docs/snake_growt
   - `tick`, `lifeTick`.
 - **Death** happens when the snake:
   - hits another snake's body or the wall with its head;
+  - meets another head: the smaller snake (by length) dies and the kill goes to the larger; equal length, both die;
   - exceeds the time budget (see §5);
   - throws an exception 3 ticks in a row.
 

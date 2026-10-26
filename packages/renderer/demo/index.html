@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ZeroSnake renderer demo</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+        color: #ddd;
+        font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+        overflow: hidden;
+      }
+      #app {
+        position: fixed;
+        inset: 0;
+      }
+      #panel {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        padding: 8px 10px;
+        background: rgb(0 0 0 / 0.6);
+        border: 1px solid #333;
+        border-radius: 8px;
+      }
+      button {
+        font: inherit;
+        color: #eee;
+        background: #222;
+        border: 1px solid #444;
+        border-radius: 6px;
+        padding: 4px 10px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #333;
+      }
+      #help {
+        color: #888;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="panel">
+      <button id="overview" type="button">Overview (O)</button>
+      <button id="follow" type="button">Follow next (F / Tab)</button>
+      <button id="pause" type="button">Pause</button>
+      <span id="hud"></span>
+      <span id="help">wheel / +/- to zoom</span>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

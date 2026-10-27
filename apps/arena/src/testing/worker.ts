@@ -4,7 +4,7 @@
  * (`{ target, name, method, args }`).
  */
 import { DurableObject } from "cloudflare:workers";
-import type { BotLife } from "@zerosnake/sandbox";
+import type { BotLife, InstrumentResult } from "@zerosnake/sandbox";
 import type { LifeResult, LifeTicket, MatchmakerRpc, QuarantineRecord } from "../protocol.ts";
 import type { LifeStarter } from "../room/sim.ts";
 import { RoomDO as BaseRoomDO } from "../room.ts";
@@ -26,17 +26,34 @@ function spin(ms: number): void {
   for (let i = 0; i < ms * SPIN_PER_MS; i++) crypto.getRandomValues(SPIN_BUFFER);
 }
 
+/** Storage key of `slowInstrument`'s delay (it survives restarts, like a slow machine). */
+const INSTRUMENT_DELAY_KEY = "test:instrumentDelayMs";
+
 /**
  * The real room, but each bot tick may ask the host to burn CPU through its log. That's what an
  * operation the sandbox's meter can't charge looks like to the room: a call that doesn't return.
  * The tests don't depend on which such holes the sandbox still has (#62 closed the string ones).
  */
 export class RoomDO extends BaseRoomDO {
-  protected override async newSandbox(): Promise<LifeStarter> {
-    const sandbox = await super.newSandbox();
+  /**
+   * Makes instrumenting each bundle take `ms` longer (wall time), as on a slow machine, for this
+   * room from now on.
+   */
+  async slowInstrument(ms: number): Promise<void> {
+    await this.ctx.storage.put(INSTRUMENT_DELAY_KEY, ms);
+  }
+
+  protected override async instrumentBundle(source: string): Promise<InstrumentResult> {
+    const ms = (await this.ctx.storage.get<number>(INSTRUMENT_DELAY_KEY)) ?? 0;
+    if (ms > 0) await new Promise((r) => setTimeout(r, ms));
+    return super.instrumentBundle(source);
+  }
+
+  protected override async newLifeStarter(): Promise<LifeStarter> {
+    const starter = await super.newLifeStarter();
     return {
-      startLife: (...args: Parameters<LifeStarter["startLife"]>) =>
-        burnOnRequest(sandbox.startLife(...args)),
+      prepare: (sources) => starter.prepare(sources),
+      startLife: (source, info) => burnOnRequest(starter.startLife(source, info)),
     };
   }
 }

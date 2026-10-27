@@ -488,6 +488,11 @@ describe("RoomDO backstop", () => {
     await startRoom("periodic", [periodic, other], {
       limits: { ...limits, batchTicks: 5, killWindowTicks: 100 },
     });
+    // More lives of the same version, in case one dies of something else between its burns: the
+    // tally counts the version's kills across lives.
+    for (const n of [2, 3]) {
+      await h.call("matchmaker", "offer", { ...periodic, lifeId: `life-pete-${n}` }, "periodic");
+    }
     await spares("periodic", 2);
     const { kills, s } = await drive("periodic", (s) => s.quarantined.length > 0, { max: 600 });
     // One unwatched kill names nobody; every watched one names it.
@@ -495,10 +500,10 @@ describe("RoomDO backstop", () => {
     const named = Array(VERSION_KILLS_TO_QUARANTINE - 1).fill("suspect");
     expect(outcomes(s)).toEqual(["overrun", ...named, "evicted"]);
     expect(s.kills.length).toBeLessThan(KILLS_TO_EVICT);
-    expect(s.versionKills.map((k) => k.lifeId)).toEqual(
-      Array(VERSION_KILLS_TO_QUARANTINE).fill(periodic.lifeId),
+    expect(s.versionKills.map((k) => k.versionId)).toEqual(
+      Array(VERSION_KILLS_TO_QUARANTINE).fill(periodic.versionId),
     );
-    expect(s.evictions.map((x) => x.lifeId)).toEqual([periodic.lifeId]);
+    expect(s.evictions.map((x) => x.versionId)).toEqual([periodic.versionId]);
     expect(s.quarantined).toEqual([periodic.versionId]);
 
     // D1 has the same kills, which would quarantine it however its lives were spread over rooms.
@@ -558,10 +563,14 @@ describe("RoomDO backstop", () => {
     // The reviewer's repro: five honest versions, 40 restarts 0-300 ms into a batch, each
     // recovered after 1.5 s (longer than this room's CPU limit, so every crash looks like the
     // CPU limit, and timing can't spare anyone).
+    // Each version has a bundle of its own, and instrumenting one takes 150 ms longer, as on a
+    // slow CI machine: every restart lands while the room instruments them again, so this fails
+    // if that's timed as the bots' `init`.
     const honest = await Promise.all(
-      ["h5", "h6", "h7", "h8", "h9"].map((a) => ticket(a, house.hard as string)),
+      ["h5", "h6", "h7", "h8", "h9"].map((a) => ticket(a, `${house.hard}\n// ${a}\n`)),
     );
     await startRoom("storm", honest, { limits });
+    await h.room("storm", "slowInstrument", 150);
     await h.room("storm", "runBatch");
     for (let i = 0; i < 40; i++) {
       void h.fire("storm", "runBatch");

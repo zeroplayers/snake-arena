@@ -52,10 +52,11 @@ export const INIT_OP_BUDGET = 100;
 /** Largest bundle a version can have (the checks' `LIMITS.maxBundleBytes`, test-enforced). */
 export const MAX_BUNDLE_BYTES = 256 * 1024;
 /**
- * Instrumenting a bundle of `MAX_BUNDLE_BYTES` for the meter, which `startLife` does before the
- * life starts: up to ~160 ms on an M1 (the worst shapes measured: many small functions; ~0.6 s per
- * MB), × 1.8 on Cloudflare. A room's sandbox caches it only while the room stays loaded, and every
- * rerun after a kill or an abandoned tick starts all its bots again in a fresh one.
+ * Instrumenting a bundle of `MAX_BUNDLE_BYTES` for the meter, which the room does before the life
+ * starts (`room/bundles.ts`): up to ~160 ms on an M1 (the worst shapes measured: many small
+ * functions; ~0.6 s per MB), × 1.8 on Cloudflare. The room keeps instrumented bundles while it
+ * stays loaded (a rerun after an abandoned tick reuses them), but the rerun after a kill, which
+ * resets the isolate, instruments every bundle again.
  */
 export const WORST_INSTRUMENT_MS = 300;
 /**

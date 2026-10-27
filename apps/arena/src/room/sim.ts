@@ -12,8 +12,8 @@ import {
   ReplayRecorder,
   type World,
 } from "@zerosnake/engine";
-import { type BotLife, DEFAULT_OP_BUDGET, type Sandbox } from "@zerosnake/sandbox";
-import { LOG_LIMIT_BYTES } from "@zerosnake/sdk";
+import { type BotLife, DEFAULT_OP_BUDGET } from "@zerosnake/sandbox";
+import { type BotInfo, LOG_LIMIT_BYTES } from "@zerosnake/sdk";
 import { HOUSE_BUNDLES } from "../house-bundles.gen.ts";
 import type { LifeEntry, RosterEntry } from "./store.ts";
 
@@ -54,8 +54,15 @@ export interface BatchHooks {
   continueBatch?: () => boolean;
 }
 
-/** The part of a `Sandbox` a room uses (tests wrap it). */
-export type LifeStarter = Pick<Sandbox, "startLife">;
+/** What a room starts its bots with: a sandbox and the room's bundles (`bundles.ts`). */
+export interface LifeStarter {
+  /**
+   * Host work for the bundles of every life in the room (`sources`, instrumenting them), run
+   * before any bot call so that watch mode doesn't time it as one.
+   */
+  prepare(sources: string[]): Promise<void>;
+  startLife(source: string, info: BotInfo): BotLife;
+}
 
 export interface BatchPlan {
   /** Lives to spawn before the first tick, in order. */
@@ -160,6 +167,11 @@ export class RoomSim {
       (r) => !r.life && !plan.faults.has(r.entry.lifeId),
     );
     if (shuffleStarts) shuffle(resumed);
+    // Instrument bundles before the first bot call is marked: it's host work, not the bot's.
+    await this.sandbox.prepare([
+      ...[...this.running.values()].map((r) => botSource(r.entry)),
+      ...plan.spawns.map(botSource),
+    ]);
     for (const r of resumed) {
       if (beforeBot) await beforeBot(r.entry.lifeId, "init", world.tick);
       r.life = this.startLife(r.entry);

@@ -237,8 +237,8 @@ export interface TimedCall {
  * past `WATCH_ABORT_SHARE` of `limitMs` (the room's budget); or, when watch mode abandons the tick
  * (`abandoned`), its slowest `tick` call, if its `tick` calls together ran past the share between
  * the stop and the abort (the tick started below the stop share, so they alone made it overrun).
- * Starts don't count toward that: they include instrumenting the bundle, host work that grows with
- * its size (`WORST_INSTRUMENT_MS`), and their bot code has an op budget of its own.
+ * Starts don't count toward that: their bot code has an op budget of its own. (A start's time is
+ * the bot's own: the room instruments bundles before marking any call, see `room/bundles.ts`.)
  */
 export function blameCall(
   calls: readonly TimedCall[],

@@ -9,7 +9,7 @@ import {
   TICK_RATE,
   type World,
 } from "@zerosnake/engine";
-import { createSandbox } from "@zerosnake/sandbox";
+import { createSandbox, type InstrumentResult, instrument } from "@zerosnake/sandbox";
 import { ARENA_CONTROL_POLL_MS } from "@zerosnake/web/shared";
 // Wrangler only treats specifiers ending in .wasm as compiled modules; the package's "./wasm"
 // export doesn't, so the file is imported by path.
@@ -73,6 +73,7 @@ import {
   watching,
   watchWindow,
 } from "./room/backstop.ts";
+import { BundleCache, lifeStarter } from "./room/bundles.ts";
 import { houseFill } from "./room/house.ts";
 import {
   type BatchHooks,
@@ -126,6 +127,8 @@ const TICK_MS = 1000 / TICK_RATE;
 export class RoomDO extends DurableObject<Env> implements RoomRpc {
   private readonly store: RoomStore;
   private sim: RoomSim | null = null;
+  /** Instrumented bundles of the room's lives; outlive `sim`, so a rerun reuses them. */
+  private readonly bundles = new BundleCache((source) => this.instrumentBundle(source));
   private busy = false;
   /** The kill switch as last read from D1, and when (wall ms; in memory only). */
   private paused = false;
@@ -864,7 +867,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     const world = this.store.getJson<World>("world");
     if (!world) throw new Error("room has no world");
     const chunk = this.store.getBlob("chunk");
-    const sandbox = await this.newSandbox();
+    const sandbox = await this.newLifeStarter();
     this.sim = new RoomSim(
       meta.roomId,
       world,
@@ -876,9 +879,14 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     return this.sim;
   }
 
-  /** The sandbox bots run in (one per loaded room). Tests wrap it. */
-  protected newSandbox(): Promise<LifeStarter> {
-    return createSandbox({ wasmModule });
+  /** A fresh sandbox per loaded `sim`, with the room's bundles. Tests wrap it. */
+  protected async newLifeStarter(): Promise<LifeStarter> {
+    return lifeStarter(await createSandbox({ wasmModule }), this.bundles);
+  }
+
+  /** Instruments a bot bundle (`room/bundles.ts`). Tests slow it down. */
+  protected async instrumentBundle(source: string): Promise<InstrumentResult> {
+    return instrument(source);
   }
 
   private dropSim(): void {

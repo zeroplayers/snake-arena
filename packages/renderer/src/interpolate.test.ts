@@ -3,7 +3,7 @@ import {
   FrameBuffer,
   interpolateSnake,
   lerpAngle,
-  pointAlong,
+  pointFromEnd,
   resamplePolyline,
 } from "./interpolate.ts";
 import type { RenderFrame, RenderSnake } from "./types.ts";
@@ -16,7 +16,15 @@ const snake = (segments: [number, number][], angle = 0): RenderSnake => ({
   length: segments.length,
   radius: 1,
 });
-const blank = () => ({ points: [] as number[], bodyLength: 0, angle: 0, radius: 0, length: 0 });
+const blank = () => ({
+  points: [] as number[],
+  pathLength: 0,
+  bodyLength: 0,
+  blended: false,
+  angle: 0,
+  radius: 0,
+  length: 0,
+});
 
 describe("lerpAngle", () => {
   it("takes the short way across ±π", () => {
@@ -48,13 +56,13 @@ describe("resamplePolyline", () => {
   });
 });
 
-describe("pointAlong", () => {
-  it("walks the polyline and clamps to its ends", () => {
+describe("pointFromEnd", () => {
+  it("walks the polyline back from its end and clamps to its start", () => {
     const p = { x: 0, y: 0 };
-    pointAlong([0, 0, 1, 0, 1, 2], 2, p);
+    pointFromEnd([0, 0, 1, 0, 1, 2], 1, p);
     expect(p).toEqual({ x: 1, y: 1 });
-    pointAlong([0, 0, 1, 0, 1, 2], 9, p);
-    expect(p).toEqual({ x: 1, y: 2 });
+    pointFromEnd([0, 0, 1, 0, 1, 2], 9, p);
+    expect(p).toEqual({ x: 0, y: 0 });
   });
 });
 

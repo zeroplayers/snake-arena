@@ -22,8 +22,12 @@ export function snakeRadius(snake: RenderSnake): number {
 export interface InterpolatedSnake {
   /** Flat `[x0, y0, x1, y1, ...]`, head first: the path the body lies along. */
   readonly points: number[];
+  /** Length of `points`. */
+  pathLength: number;
   /** How far along `points` the body reaches; the path may run a little past it. */
   bodyLength: number;
+  /** False when `next` was used as is (no previous tick, or a respawn). */
+  blended: boolean;
   angle: number;
   radius: number;
   length: number;
@@ -32,8 +36,9 @@ export interface InterpolatedSnake {
 /**
  * Blends a snake between two ticks along its path rather than point by point. The engine lays
  * a body out along the head's trail, so between ticks the head slides from `prev`'s head to
- * `next`'s in a straight line and the body follows it down `prev`'s path, while the body's
- * length blends from one tick's to the other's.
+ * `next`'s in a straight line and the body follows it down `prev`'s path (continued along
+ * `next`'s where the snake grew past its old tail), while the tail slides from where `prev`'s
+ * is on that path to where `next`'s is.
  *
  * Moving point `i` of `prev` to point `i` of `next` instead cuts every bend a little mid-tick
  * and the body's spacing changes whenever the snake grows, so the error adds up along the body:
@@ -53,44 +58,151 @@ export function interpolateSnake(
   const prevHead = prev?.segments[0];
   const nextHead = next.segments[0];
   const headStep = prevHead && nextHead ? distance(prevHead, nextHead) : 0;
-  const nextLength = pathLength(next.segments);
 
   if (!prev || !prevHead || !nextHead || headStep > nextRadius * 20) {
     for (const s of next.segments) pts.push(s.x, s.y);
-    out.bodyLength = nextLength;
+    out.pathLength = out.bodyLength = polylineLength(pts);
+    out.blended = false;
     out.angle = next.angle;
     out.radius = nextRadius;
     out.length = next.length;
     return out;
   }
 
-  const prevLength = pathLength(prev.segments);
+  const blend = blendFor(prev, next, headStep);
+  const back = alpha * headStep; // from the blended head back to `prev`'s
   pts.push(lerp(prevHead.x, nextHead.x, alpha), lerp(prevHead.y, nextHead.y, alpha));
-  for (const s of prev.segments) pts.push(s.x, s.y);
-  // A snake that grew reaches past `prev`'s tail: borrow the rest of the path from `next`.
-  const covered = headStep + prevLength;
-  let walked = 0;
-  for (let i = 1; i < next.segments.length; i++) {
-    const a = next.segments[i - 1] as Vec2;
-    const b = next.segments[i] as Vec2;
-    walked += distance(a, b);
-    if (walked > covered) pts.push(b.x, b.y);
-  }
-
-  out.bodyLength = lerp(prevLength, nextLength, alpha);
+  for (const v of blend.path) pts.push(v);
+  out.pathLength = back + blend.length;
+  out.bodyLength = back + lerp(blend.prevTail, blend.nextTail, alpha);
+  out.blended = true;
   out.angle = lerpAngle(prev.angle, next.angle, alpha);
   out.radius = lerp(snakeRadius(prev), nextRadius, alpha);
   out.length = lerp(prev.length, next.length, alpha);
   return out;
 }
 
-const distance = (a: Vec2, b: Vec2): number => Math.hypot(b.x - a.x, b.y - a.y);
+/** The part of a blend between two ticks that doesn't change with `alpha`. */
+interface PathBlend {
+  readonly prev: RenderSnake;
+  /** Flat, from `prev`'s head down its body, then on along `next`'s body if that is longer. */
+  readonly path: number[];
+  readonly length: number;
+  /** Where `prev`'s and `next`'s tails are along `path`. */
+  readonly prevTail: number;
+  readonly nextTail: number;
+}
 
-function pathLength(points: readonly Vec2[]): number {
+/** Keyed by the later tick's snake: a frame pair is drawn many times. */
+const blends = new WeakMap<RenderSnake, PathBlend>();
+
+function blendFor(prev: RenderSnake, next: RenderSnake, headStep: number): PathBlend {
+  const cached = blends.get(next);
+  if (cached?.prev === prev) return cached;
+
+  const path: number[] = [];
+  for (const s of prev.segments) path.push(s.x, s.y);
+  const prevTail = polylineLength(path);
+  const ahead: number[] = [];
+  for (const s of next.segments) ahead.push(s.x, s.y);
+  const nextLength = polylineLength(ahead);
+  // How far a tail can be from where the other tick's path length puts it: the two ticks
+  // sample the trail at different points, and the body may have grown or shrunk.
+  const slack =
+    3 * Math.max(longestSegment(path), longestSegment(ahead)) +
+    Math.abs(nextLength - prevTail) +
+    headStep;
+
+  // `prev`'s tail on `next`'s path. If `next` goes on past it, the snake grew: follow `next`.
+  const n = ahead.length; // flat
+  const where = project(
+    ahead,
+    path[path.length - 2] as number,
+    path[path.length - 1] as number,
+    headStep + prevTail,
+    slack,
+  );
+  if (nextLength - where.along > 1e-6) {
+    let from = 2 * where.segment;
+    if (ahead[from] === path[path.length - 2] && ahead[from + 1] === path[path.length - 1])
+      from += 2;
+    for (let i = from; i < n; i++) path.push(ahead[i] as number);
+    const length = polylineLength(path);
+    return remember(next, { prev, path, length, prevTail, nextTail: length });
+  }
+
+  // `next`'s tail is on `prev`'s path, give or take how differently the two ticks cut corners:
+  // route the path through it, so the tail ends the tick exactly where the next one starts it.
+  const on = project(
+    path,
+    ahead[n - 2] as number,
+    ahead[n - 1] as number,
+    nextLength - headStep,
+    slack,
+  );
+  if (on.segment === 0) return remember(next, { prev, path, length: 0, prevTail: 0, nextTail: 0 });
+  if (on.d2 === 0)
+    return remember(next, { prev, path, length: prevTail, prevTail, nextTail: on.along });
+  path.splice(2 * on.segment, 0, ahead[n - 2] as number, ahead[n - 1] as number);
+  const length = polylineLength(path);
+  const nextTail = polylineLength(path.slice(0, 2 * on.segment + 2));
+  return remember(next, { prev, path, length, prevTail: length, nextTail });
+}
+
+function remember(next: RenderSnake, blend: PathBlend): PathBlend {
+  blends.set(next, blend);
+  return blend;
+}
+
+/**
+ * The point of a flat polyline nearest to (x, y), looking only within `slack` of `around` along
+ * it: a coiled body passes the same spot many times. Returns how far along the polyline it is,
+ * the index of the point ending its segment and the squared distance to it.
+ */
+function project(
+  points: readonly number[],
+  x: number,
+  y: number,
+  around: number,
+  slack: number,
+): { along: number; segment: number; d2: number } {
+  const n = points.length >> 1;
+  let best = { along: 0, segment: Math.min(1, n - 1), d2: Number.POSITIVE_INFINITY };
+  let walked = 0;
+  for (let i = 1; i < n; i++) {
+    const ax = points[2 * i - 2] as number;
+    const ay = points[2 * i - 1] as number;
+    const dx = (points[2 * i] as number) - ax;
+    const dy = (points[2 * i + 1] as number) - ay;
+    const len2 = dx * dx + dy * dy;
+    const len = Math.sqrt(len2);
+    if (walked + len >= around - slack && walked <= around + slack) {
+      const t = len2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / len2)) : 0;
+      const ex = ax + dx * t - x;
+      const ey = ay + dy * t - y;
+      const d2 = ex * ex + ey * ey;
+      if (d2 < best.d2) {
+        best = { along: walked + len * t, segment: i, d2 };
+      }
+    }
+    walked += len;
+  }
+  return best;
+}
+
+const distance = (a: Vec2, b: Vec2): number => Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+
+function polylineLength(points: readonly number[]): number {
   let length = 0;
-  for (let i = 1; i < points.length; i++)
-    length += distance(points[i - 1] as Vec2, points[i] as Vec2);
+  for (let i = 1; i < points.length >> 1; i++) length += segmentLength(points, i);
   return length;
+}
+
+function longestSegment(points: readonly number[]): number {
+  let longest = 0;
+  for (let i = 1; i < points.length >> 1; i++)
+    longest = Math.max(longest, segmentLength(points, i));
+  return longest;
 }
 
 /** Spaced points closer than this many spacings to the end are left out. */
@@ -113,9 +225,7 @@ export function resamplePolyline(
   if (n === 0) return 0;
   out.push(points[0] as number, points[1] as number);
 
-  let total = 0;
-  for (let i = 1; i < n; i++) total += segmentLength(points, i);
-  const end = Math.min(length, total);
+  const end = Number.isFinite(length) ? length : polylineLength(points);
   if (!(end > 0)) return 1;
 
   const last = spacing > 0 ? end - spacing * END_GAP : Number.NEGATIVE_INFINITY;
@@ -135,44 +245,45 @@ export function resamplePolyline(
     if (end <= walked + len) {
       const t = (end - walked) / len;
       out.push(ax + (bx - ax) * t, ay + (by - ay) * t);
-      break;
+      return out.length >> 1;
     }
     walked += len;
   }
+  // The polyline is shorter than `length`: end on its last point.
+  if (walked > 0) out.push(points[2 * n - 2] as number, points[2 * n - 1] as number);
   return out.length >> 1;
 }
 
-/** Writes the point `d` along a flat polyline into `out` (clamped to its ends). */
-export function pointAlong(
+/** Writes the point `back` before the end of a flat polyline into `out` (clamped to its ends). */
+export function pointFromEnd(
   points: readonly number[],
-  d: number,
+  back: number,
   out: { x: number; y: number },
 ): void {
-  const n = points.length >> 1;
-  out.x = points[0] ?? 0;
-  out.y = points[1] ?? 0;
+  let i = (points.length >> 1) - 1;
+  out.x = points[2 * i] ?? 0;
+  out.y = points[2 * i + 1] ?? 0;
   let walked = 0;
-  for (let i = 1; i < n; i++) {
+  for (; i > 0; i--) {
     const len = segmentLength(points, i);
-    const bx = points[2 * i] as number;
-    const by = points[2 * i + 1] as number;
-    if (len > 0 && walked + len >= d) {
-      const t = Math.max(0, (d - walked) / len);
-      out.x += (bx - out.x) * t;
-      out.y += (by - out.y) * t;
+    const ax = points[2 * i - 2] as number;
+    const ay = points[2 * i - 1] as number;
+    if (len > 0 && walked + len >= back) {
+      const t = Math.max(0, (back - walked) / len);
+      out.x += (ax - out.x) * t;
+      out.y += (ay - out.y) * t;
       return;
     }
     walked += len;
-    out.x = bx;
-    out.y = by;
+    out.x = ax;
+    out.y = ay;
   }
 }
 
 function segmentLength(points: readonly number[], i: number): number {
-  return Math.hypot(
-    (points[2 * i] as number) - (points[2 * i - 2] as number),
-    (points[2 * i + 1] as number) - (points[2 * i - 1] as number),
-  );
+  const dx = (points[2 * i] as number) - (points[2 * i - 2] as number);
+  const dy = (points[2 * i + 1] as number) - (points[2 * i - 1] as number);
+  return Math.sqrt(dx * dx + dy * dy);
 }
 
 export interface FrameSample {

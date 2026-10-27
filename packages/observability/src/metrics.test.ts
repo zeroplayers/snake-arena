@@ -23,11 +23,12 @@ describe("metricPoint", () => {
         score: 12,
         ticks: 300,
         kills: 1,
+        durationMs: 30_000,
       }),
     ).toEqual({
       indexes: ["life.ended"],
       blobs: ["life.ended", "arena", "v1", "wall", "r1"],
-      doubles: [1, 12, 300, 1],
+      doubles: [1, 12, 300, 1, 30_000],
     });
   });
 
@@ -47,6 +48,41 @@ describe("metricPoint", () => {
       readyVersions: "double3",
       thresholdMinutes: "double4",
       playableVersions: "double5",
+    });
+    // apps/arena/README.md's dashboard and alert queries use these columns.
+    expect(metricColumns("room.batch")).toEqual({
+      roomId: "blob3",
+      mode: "blob4",
+      ticks: "double2",
+      snakes: "double3",
+      workUnits: "double4",
+      botTicks: "double5",
+      batches: "double6",
+      livesStarted: "double7",
+      livesEnded: "double8",
+      wallMs: "double9",
+      maxWallMs: "double10",
+      periodMs: "double11",
+      spectators: "double12",
+      watched: "double13",
+      cut: "double14",
+      tick: "double15",
+    });
+    expect(metricColumns("room.crashed")).toEqual({
+      roomId: "blob3",
+      cause: "blob4",
+      versionId: "blob5",
+      restarts: "double2",
+      gapMs: "double3",
+      callMs: "double4",
+    });
+    expect(metricColumns("arena.gauge")).toEqual({
+      rooms: "double2",
+      liveSnakes: "double3",
+      queuedLives: "double4",
+      readyVersions: "double5",
+      exhausted: "double6",
+      paused: "double7",
     });
     for (const [name, schema] of Object.entries(METRICS)) {
       // Analytics Engine: at most 20 blobs and 20 doubles; two of each are taken.

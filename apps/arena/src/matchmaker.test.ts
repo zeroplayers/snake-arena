@@ -5,6 +5,7 @@ import type { LifeDrop, LifeResult, LifeTicket, RoomStatus } from "./protocol.ts
 import { EVICTIONS_TO_QUARANTINE } from "./room/backstop.ts";
 import { BOTS, createHarness, type Harness } from "./testing/harness.ts";
 import type { FakeLife, FakeStep } from "./testing/matchmaker-worker.ts";
+import { type DataPoint, metricsNamed } from "./testing/metrics.ts";
 
 let h: Harness | null = null;
 
@@ -17,11 +18,13 @@ afterEach(async () => {
 async function setup(
   config: Partial<MatchmakerConfig> = {},
   rooms: "FakeRoom" | "RoomDO" = "FakeRoom",
+  metrics?: "record",
 ): Promise<Harness> {
   h = await createHarness({
     worker: "matchmaker-worker.ts",
     rooms,
     matchmaker: "TestMatchmakerDO",
+    ...(metrics && { metrics }),
   });
   await mm("configure", config);
   return h;
@@ -773,4 +776,87 @@ describe("MatchmakerDO with real rooms", () => {
     expect(await ledger(lifeId)).toMatchObject({ state: "ended", cause: "retired" });
     expect((await counted()).get("ann")).toBe(1);
   }, 120_000);
+});
+
+describe("MatchmakerDO metrics", () => {
+  const points = () => mm<DataPoint[]>("metricPoints");
+
+  it("writes arena.gauge once a minute and room.stalled for a room whose tick stands still", async () => {
+    await setup({ livesPerBotPerDay: 1 }, "FakeRoom", "record");
+    await seedBots(["ann", "bob", "cid"].map((a) => ({ author: a, bot: a })));
+    await settle();
+    const [roomId] = await openRooms();
+    if (!roomId) throw new Error("no room");
+    // One, though settling ran the alarm's work several times within the minute. A life counts
+    // toward the quota once issued, so with one a day every bot is out of quota already.
+    expect(metricsNamed(await points(), "arena.gauge")).toEqual([
+      { rooms: 1, liveSnakes: 3, queuedLives: 0, readyVersions: 3, exhausted: 3, paused: 0 },
+    ]);
+
+    // Every life ends, and nothing waits: the room closes.
+    expect((await step(roomId, { deaths: 3 })).state).toBe("closed");
+    await mm("advance", 61_000);
+    await mm("tick");
+    expect(metricsNamed(await points(), "arena.gauge").at(-1)).toEqual({
+      rooms: 0,
+      liveSnakes: 0,
+      queuedLives: 0,
+      readyVersions: 3,
+      exhausted: 3,
+      paused: 0,
+    });
+    expect(metricsNamed(await points(), "room.stalled")).toEqual([]);
+  }, 60_000);
+
+  it("reports a running room whose tick doesn't move between checks", async () => {
+    await setup({}, "FakeRoom", "record");
+    await seedBots(["ann", "bob"].map((a) => ({ author: a, bot: a })));
+    await settle();
+    const [roomId] = await openRooms();
+    if (!roomId) throw new Error("no room");
+    expect(metricsNamed(await points(), "arena.gauge").at(-1)).toMatchObject({
+      rooms: 1,
+      liveSnakes: 2,
+      readyVersions: 2,
+    });
+    // Settling checked the room (tick 0). It moves (a batch), then stands still.
+    await step(roomId);
+    await mm("advance", 61_000);
+    await mm("tick");
+    expect(metricsNamed(await points(), "room.stalled")).toEqual([]);
+    await mm("advance", 61_000);
+    await mm("tick");
+    expect(metricsNamed(await points(), "room.stalled")).toEqual([
+      { roomId, reason: "no_progress", tick: 100, stalledMs: expect.any(Number), outbox: 0 },
+    ]);
+    const [stalled] = metricsNamed(await points(), "room.stalled");
+    expect(stalled?.stalledMs).toBeGreaterThanOrEqual(60_000);
+    // Moving again: no more reports.
+    await step(roomId);
+    await mm("advance", 61_000);
+    await mm("tick");
+    expect(metricsNamed(await points(), "room.stalled")).toHaveLength(1);
+  }, 60_000);
+
+  it("writes version.quarantined when evictions across rooms quarantine a version", async () => {
+    await setup({ maxRooms: 0 }, "FakeRoom", "record");
+    await seedBots([
+      { author: "burner", bot: "burner" },
+      { author: "fine", bot: "fine" },
+    ]);
+    await settle();
+    for (let i = 0; i < EVICTIONS_TO_QUARANTINE; i++) {
+      const t = await mustLife(`room-${i}`, ["fine"]);
+      await mm("lifeEnded", ended(t, `room-${i}`, "evicted"));
+    }
+    expect(metricsNamed(await points(), "version.quarantined")).toEqual([
+      {
+        versionId: versionId("burner"),
+        by: "matchmaker",
+        roomId: `room-${EVICTIONS_TO_QUARANTINE - 1}`,
+        evictions: EVICTIONS_TO_QUARANTINE,
+        kills: 0,
+      },
+    ]);
+  }, 60_000);
 });

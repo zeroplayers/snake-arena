@@ -18,6 +18,7 @@ import {
 import { build, type Plugin } from "esbuild";
 import { Miniflare } from "miniflare";
 import { unstable_splitSqlQuery as splitSqlQuery } from "wrangler";
+import type { DataPoint } from "../../testing/metrics.ts";
 import type { VersionReport } from "../report.ts";
 
 const appDir = join(import.meta.dirname, "../../..");
@@ -65,6 +66,8 @@ export interface Harness {
   /** Fires the cron at `time` (Unix ms). */
   cron(time: number): Promise<void>;
   version(id: string): Promise<VersionState | null>;
+  /** The metric points written so far (with `metrics: "record"`). */
+  metricPoints(): Promise<DataPoint[]>;
   /** Waits until the version is no longer `validating` (or throws after `timeoutMs`). */
   settled(id: string, timeoutMs?: number): Promise<VersionState>;
   db: D1Database;
@@ -80,7 +83,12 @@ export interface Harness {
   dispose(): Promise<void>;
 }
 
-export async function createHarness(): Promise<Harness> {
+export async function createHarness({
+  metrics,
+}: {
+  /** A test `METRICS` binding that keeps (`record`) or refuses (`throw`) points; none if unset. */
+  metrics?: "record" | "throw";
+} = {}): Promise<Harness> {
   const out = await build({
     entryPoints: [join(appDir, "src/checks/testing/worker.ts")],
     bundle: true,
@@ -115,6 +123,7 @@ export async function createHarness(): Promise<Harness> {
             BUNDLES: { type: "r2", name: "bundles" },
             SOURCES: { type: "r2", name: "sources" },
             CHECKS_QUEUE: { type: "queue", name: QUEUE },
+            ...(metrics && { TEST_METRICS: { type: "json", value: metrics } }),
           },
           triggers: [
             {
@@ -226,6 +235,11 @@ export async function createHarness(): Promise<Harness> {
     },
 
     version,
+
+    async metricPoints() {
+      const response = await mf.dispatchFetch("http://arena/metrics");
+      return (await response.json()) as DataPoint[];
+    },
 
     async settled(id, timeoutMs = 120_000) {
       const deadline = Date.now() + timeoutMs;

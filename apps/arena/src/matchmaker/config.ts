@@ -36,6 +36,8 @@ export interface MatchmakerConfig {
   lostAfterMs: number;
   /** How often to re-read the kill switch (`arena_control`) when nobody calls. */
   arenaControlPollMs: number;
+  /** Most often the alarm writes the `arena.gauge` metric. */
+  gaugeMs: number;
   /** No alarms: work runs only through `tick()` (tests, tools). */
   manual: boolean;
   /** Extra options for every room the matchmaker starts (tests: manual rooms, small limits). */
@@ -54,6 +56,7 @@ export const DEFAULT_MATCHMAKER_CONFIG: MatchmakerConfig = {
   roomCheckMs: 60_000,
   lostAfterMs: 30 * 60_000,
   arenaControlPollMs: ARENA_CONTROL_POLL_MS,
+  gaugeMs: 60_000,
   manual: false,
   room: {},
 };

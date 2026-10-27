@@ -9,6 +9,7 @@ import {
   TICK_RATE,
   type World,
 } from "@zerosnake/engine";
+import { log, writeMetric } from "@zerosnake/observability";
 import { createSandbox, type InstrumentResult, instrument } from "@zerosnake/sandbox";
 import { ARENA_CONTROL_POLL_MS, traceKey } from "@zerosnake/web/shared";
 // Wrangler only treats specifiers ending in .wasm as compiled modules; the package's "./wasm"
@@ -28,6 +29,7 @@ import {
   DEFAULT_MAX_SNAKES,
   DEFAULT_MIN_AUTHORS,
   DO_CPU_LIMIT_MS,
+  METRICS_MS,
   NEXT_LIFE_RETRY_MS,
   REALTIME_BATCH_TICKS,
   ROOM_CPU_BUDGET_MS,
@@ -76,6 +78,7 @@ import {
 } from "./room/backstop.ts";
 import { BundleCache, lifeStarter } from "./room/bundles.ts";
 import { houseFill } from "./room/house.ts";
+import { BatchMetrics } from "./room/metrics.ts";
 import {
   type BatchHooks,
   type BatchPlan,
@@ -148,6 +151,11 @@ const REPORT_GRACE_MS = 60_000;
  *
  * After any reload (eviction or crash) every bot restarts with `init` and empty memory; the
  * world, replay and roster continue exactly.
+ *
+ * Metrics (`@zerosnake/observability`, the `METRICS` Analytics Engine binding; none without it):
+ * `room.started`, `room.batch` (sums of batches, at most every `metricsMs`), `room.crashed` (each
+ * backstop incident, and alarms that throw), `room.evicted`, `version.quarantined`, `life.ended`
+ * (once delivered) and `room.closed`. Incidents are also logged as structured records.
  */
 export class RoomDO extends DurableObject<Env> implements RoomRpc {
   private readonly store: RoomStore;
@@ -162,6 +170,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   private readonly spectators: Spectators;
   /** When the room last reported itself to the showcase (wall ms; in memory only). */
   private reportedAt = 0;
+  /** Sums of the batches since the last `room.batch` metric (in memory only). */
+  private readonly metrics = new BatchMetrics(Date.now());
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -238,8 +248,10 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
           killWindowTicks: limits.killWindowTicks ?? KILL_WINDOW_TICKS,
           spectatorGraceMs: limits.spectatorGraceMs ?? SPECTATOR_GRACE_MS,
           spectatorAckTimeoutMs: limits.spectatorAckTimeoutMs ?? ACK_TIMEOUT_MS,
+          metricsMs: limits.metricsMs ?? METRICS_MS,
         },
         livesEnded: 0,
+        startedAt: Date.now(),
         lastBatchTicks: 0,
         nextLifeAfter: 0,
         realtimeNext: 0,
@@ -252,6 +264,11 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         this.store.setMeta(meta);
         this.store.putJson("world", world);
         this.store.putBlob("chunk", null);
+      });
+      writeMetric(this.env.METRICS, "room.started", {
+        roomId: meta.roomId,
+        mode: meta.mode,
+        maxSnakes: meta.maxSnakes,
       });
     }
     return this.status();
@@ -371,7 +388,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       }
       if (outbox.size > meta.limits.maxOutbox) {
         // D1/R2/matchmaker are failing: don't produce more until they recover.
-        console.error("room paused, outbox full", meta.roomId, outbox);
+        log("error", "room.outbox_full", { roomId: meta.roomId, ...outbox });
         await this.scheduleRetry(meta, outbox.nextAt);
         return;
       }
@@ -385,6 +402,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         // so the next cycle handles this like a batch that died.
         this.dropSim();
         this.spectators.abort();
+        this.reportIncident(meta.roomId, "exception", null, Date.now(), e);
         throw e;
       }
       await this.drain();
@@ -426,8 +444,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     const afterStep = this.spectators.beginBatch(sim.world);
     const result = await sim.run(plan, { ...watcher?.hooks, ...(afterStep && { afterStep }) });
     const blamed = watcher?.blamed() ?? null;
-    this.commit(sim, result, maxPendingSeq, () => {
-      if (!blamed) return;
+    const overran = this.commit(sim, result, maxPendingSeq, () => {
+      if (!blamed) return null;
       // A call that ran past the abort share by itself: named as a kill would have named it.
       const now = Date.now();
       const verdict: Verdict = {
@@ -436,10 +454,25 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         gapMs: now - invokedAt,
         callMs: blamed.ms,
       };
-      const counted = this.countIncident(verdict, true, sim.world.tick, now);
-      console.error("room call overran", meta.roomId, verdict, counted);
+      return { verdict, counted: this.countIncident(verdict, true, sim.world.tick, now), now };
     });
+    if (overran) {
+      const { verdict, counted, now } = overran;
+      this.reportIncident(meta.roomId, "overran", verdict, now, undefined, counted);
+    }
     this.spectators.commit(sim.world, meta.limits.spectatorAckTimeoutMs ?? ACK_TIMEOUT_MS);
+    const now = Date.now();
+    this.metrics.add({
+      ticks: result.ticks,
+      botTicks: result.botTicks,
+      workUnits: result.work,
+      livesStarted: result.spawned.filter((e) => e.versionId !== null).length,
+      livesEnded: result.ended.filter((e) => e.entry.versionId !== null).length,
+      wallMs: now - invokedAt,
+      watched: watch,
+      cut: result.aborted || blamed !== null || result.ticks < plan.ticks,
+    });
+    this.flushMetrics(meta, sim.world, now);
     // Some bots ran a tick the world never stepped (or one was evicted): restart them from the
     // saved frame.
     if (result.aborted || blamed) this.dropSim();
@@ -536,7 +569,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       this.store.clearMarker();
       return this.countIncident(verdict, marker.watch, marker.fromTick, now);
     });
-    console.error("room batch died", meta.roomId, verdict, counted);
+    this.reportIncident(meta.roomId, counted.outcome, verdict, now, undefined, counted);
     await this.batch(invokedAt);
   }
 
@@ -545,12 +578,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
    * through the outbox), the evictions and quarantine they lead to, and the watch window. `tick` is
    * the frame the room restarts from.
    */
-  private countIncident(
-    verdict: Verdict,
-    watched: boolean,
-    tick: number,
-    now: number,
-  ): { kills: NamedKill[]; evict: string[]; versionKills: number } {
+  private countIncident(verdict: Verdict, watched: boolean, tick: number, now: number): Counted {
     const meta = this.store.meta() as Meta;
     const named = verdict.kind === "suspect" ? this.findLife(verdict.call.lifeId) : null;
     const window = meta.limits.killWindowTicks ?? KILL_WINDOW_TICKS;
@@ -604,7 +632,48 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         m.watch = watchWindow(m.watch, recent, tick, now, DEFAULT_CONFIG.lifeCap);
       });
     }
-    return { kills, evict: [...evict], versionKills };
+    return {
+      kills,
+      evict: [...evict],
+      versionKills,
+      outcome,
+      versionId: named?.versionId ?? null,
+    };
+  }
+
+  /**
+   * An incident (`countIncident`'s, a watched call that `overran`, or an alarm that threw):
+   * the `room.crashed` metric and a structured log.
+   */
+  private reportIncident(
+    roomId: string,
+    cause: IncidentOutcome | "overran" | "exception",
+    verdict: Verdict | null,
+    now: number,
+    error?: unknown,
+    counted?: Counted,
+  ): void {
+    let restarts = 0;
+    try {
+      restarts = this.store.incidentsSince(now - INCIDENT_WINDOW_MS);
+    } catch {
+      // Storage may be what threw: report the incident anyway.
+    }
+    const fields = {
+      roomId,
+      cause,
+      versionId: counted?.versionId ?? null,
+      restarts,
+      gapMs: verdict?.gapMs ?? 0,
+      callMs: verdict?.kind === "suspect" ? verdict.callMs : 0,
+    };
+    writeMetric(this.env.METRICS, "room.crashed", fields);
+    log(cause === "restart" ? "warn" : "error", "room.crashed", {
+      ...fields,
+      ...(verdict?.kind === "suspect" && { call: verdict.call }),
+      ...(counted && { kills: counted.kills.length, evict: counted.evict }),
+      error,
+    });
   }
 
   /**
@@ -659,11 +728,25 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       detail,
       at: now,
     });
-    console.warn("room evicted", meta.roomId, life.lifeId, versionId, detail);
+    log("warn", "room.evicted", {
+      roomId: meta.roomId,
+      lifeId: life.lifeId,
+      versionId,
+      evictions,
+      versionKills,
+      detail,
+    });
+    writeMetric(this.env.METRICS, "room.evicted", {
+      roomId: meta.roomId,
+      versionId,
+      evictions,
+      versionKills,
+    });
     const quarantine =
       evictions >= EVICTIONS_TO_QUARANTINE || versionKills >= VERSION_KILLS_TO_QUARANTINE;
     if (!versionId || !quarantine || this.store.isQuarantined(versionId)) return;
     this.store.quarantine(versionId, now);
+    this.reportQuarantine("room", meta.roomId, versionId, evictions, versionKills);
     const record: QuarantineRecord = {
       versionId,
       author: life.author,
@@ -722,15 +805,10 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     await this.ctx.storage.sync();
   }
 
-  /** Saves a batch's result; `then` runs last, in the same transaction. */
-  private commit(
-    sim: RoomSim,
-    result: BatchResult,
-    maxPendingSeq: number,
-    then: () => void = () => {},
-  ): void {
+  /** Saves a batch's result; `then` runs last, in the same transaction, and gives the result. */
+  private commit<T>(sim: RoomSim, result: BatchResult, maxPendingSeq: number, then: () => T): T {
     const now = Date.now();
-    this.store.transaction(() => {
+    return this.store.transaction(() => {
       const meta = this.store.meta() as Meta;
       const pending = sim.recorder.pending;
       this.store.putJson("world", sim.world);
@@ -791,7 +869,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       );
       this.store.setMeta(meta);
       this.store.clearMarker();
-      then();
+      return then();
     });
   }
 
@@ -821,6 +899,15 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
               const life = JSON.parse(item.json) as LifeResult;
               await insertLives(this.env.DB, [life]);
               await this.matchmaker().lifeEnded(life);
+              writeMetric(this.env.METRICS, "life.ended", {
+                versionId: life.versionId,
+                deathCause: life.deathCause,
+                roomId: life.roomId,
+                score: life.score,
+                ticks: life.endTick - life.startTick,
+                kills: life.kills,
+                durationMs: life.endedAt - life.startedAt,
+              });
               this.askAgain();
               break;
             }
@@ -832,7 +919,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
               const record = JSON.parse(item.json) as QuarantineRecord;
               if ((await recordQuarantine(this.env.DB, record)) === "missing") {
                 // Terminal: the version was deleted. The room's own quarantine stands.
-                console.error("room quarantine: version row missing in D1", meta.roomId, record);
+                log("error", "room.quarantine_missing", { ...record, roomId: meta.roomId });
               }
               await this.matchmaker().versionQuarantined(record);
               break;
@@ -869,6 +956,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
                   at: kill.at,
                 });
                 this.store.quarantine(kill.versionId, kill.at);
+                this.reportQuarantine("kills", meta.roomId, kill.versionId, 0, kills);
               }
               break;
             }
@@ -882,7 +970,12 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
           this.store.done(seq);
         } catch (e) {
           const attempts = this.store.failed(seq, (a) => Date.now() + retryDelayMs(a), String(e));
-          console.error("room outbox", meta.roomId, item.kind, `attempt ${attempts}`, e);
+          log("error", "room.outbox_failed", {
+            roomId: meta.roomId,
+            kind: item.kind,
+            attempts,
+            error: e,
+          });
         }
       }
     }
@@ -961,6 +1054,15 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     if (!meta) return;
     const sim = await this.loadSim(meta);
     const chunks = sim.flush();
+    const now = Date.now();
+    this.flushMetrics(meta, sim.world, now, true);
+    const closed = {
+      roomId: meta.roomId,
+      reason: this.paused ? "kill_switch" : "empty",
+      ticks: sim.world.tick,
+      lives: meta.livesEnded,
+      durationMs: meta.startedAt ? now - meta.startedAt : 0,
+    };
     this.store.transaction(() => {
       this.store.putJson("world", sim.world);
       this.store.putBlob("chunk", null);
@@ -971,6 +1073,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       meta.openChunkTick = null;
       this.store.setMeta(meta);
     });
+    writeMetric(this.env.METRICS, "room.closed", closed);
+    log("info", "room.closed", closed);
     this.dropSim();
     this.spectators.closeAll("room closed");
     try {
@@ -1088,6 +1192,35 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     return instrument(source);
   }
 
+  /** Writes `room.batch` when `metricsMs` passed since the last one (or `force`). */
+  private flushMetrics(meta: Meta, world: World, now: number, force = false): void {
+    this.metrics.flush(
+      this.env.METRICS,
+      {
+        roomId: meta.roomId,
+        mode: this.mode(meta),
+        snakes: world.snakes.length,
+        spectators: this.spectators.count,
+        tick: world.tick,
+      },
+      now,
+      meta.limits.metricsMs ?? METRICS_MS,
+      force,
+    );
+  }
+
+  private reportQuarantine(
+    by: "room" | "kills",
+    roomId: string,
+    versionId: string,
+    evictions: number,
+    kills: number,
+  ): void {
+    const fields = { versionId, by, roomId, evictions, kills };
+    writeMetric(this.env.METRICS, "version.quarantined", fields);
+    log("warn", "version.quarantined", fields);
+  }
+
   private dropSim(): void {
     this.sim?.dispose();
     this.sim = null;
@@ -1158,6 +1291,16 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   private matchmaker(): MatchmakerRpc {
     return this.env.MATCHMAKER.get(this.env.MATCHMAKER.idFromName("global"));
   }
+}
+
+/** What `countIncident` did. */
+interface Counted {
+  kills: NamedKill[];
+  evict: string[];
+  versionKills: number;
+  outcome: IncidentOutcome;
+  /** The version the kill named, if any. */
+  versionId: string | null;
 }
 
 function stripSeq({ seq: _, ...entry }: PendingEntry): LifeEntry {

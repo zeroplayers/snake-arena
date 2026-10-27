@@ -77,45 +77,124 @@ export const METRICS = {
   /** A room started (`RoomRpc.start`). */
   "room.started": { source: "arena", blobs: ["roomId", "mode"], doubles: ["maxSnakes"] },
   /**
-   * One alarm batch of a room. `ticks / period` over all rooms is the arena's ticks per second;
-   * `workUnits` is the sandbox's cost units for the batch (a deterministic CPU proxy: workerd
-   * doesn't expose CPU time to the code; DO CPU itself is in the Durable Objects metrics).
+   * A room's batches since its last `room.batch`, written at most every `RoomLimits.metricsMs`
+   * (30 s) per room, never per tick. `mode` is the one it runs in now (real time while
+   * spectators watch). Sums over the period: `ticks`, `workUnits` (the sandbox's cost units, a
+   * deterministic CPU proxy: workerd doesn't expose CPU time to code; DO CPU itself is in the
+   * Durable Objects metrics), `botTicks`, `batches`, `livesStarted` / `livesEnded` (real lives),
+   * `wallMs` (batch wall time, which the frozen clock only moves on I/O), `watched` (batches in
+   * watch mode) and `cut` (batches watch mode ended early). Now: `snakes`, `spectators`, `tick`
+   * (the world's; a room whose `tick` doesn't move is stuck). `periodMs` is the time the sums
+   * cover, so `ticks / periodMs * 1000` is the room's ticks per second. `maxWallMs`: the
+   * period's slowest batch.
    */
   "room.batch": {
     source: "arena",
     blobs: ["roomId", "mode"],
-    doubles: ["ticks", "snakes", "workUnits"],
+    doubles: [
+      "ticks",
+      "snakes",
+      "workUnits",
+      "botTicks",
+      "batches",
+      "livesStarted",
+      "livesEnded",
+      "wallMs",
+      "maxWallMs",
+      "periodMs",
+      "spectators",
+      "watched",
+      "cut",
+      "tick",
+    ],
   },
   /**
-   * A room's isolate died or an alarm threw and the room recovered from storage. `cause` is
-   * e.g. `cpu_limit`, `exception`, `restart`. Alert on any.
+   * An incident of the room's CPU backstop, or an alarm that threw. `cause`: `restart` (a batch
+   * died too young to be the CPU limit: deploys, evictions; counts for nothing), `overrun` (a
+   * batch died, possibly by the CPU limit, naming no one), `suspect` / `evicted` (a watched kill
+   * named a call; `evicted` when that evicted its life), `overran` (a watched call returned after
+   * running past the abort share: named like a kill), `exception` (the alarm threw). `restarts`:
+   * the room's incidents in the backstop's window (24 h), this one included. `versionId`: the
+   * version a kill named. Alert on any but `restart`.
    */
-  "room.crashed": { source: "arena", blobs: ["roomId", "cause"], doubles: ["restarts"] },
-  /** A room closed (no real lives left), or was closed by the kill switch. */
+  "room.crashed": {
+    source: "arena",
+    blobs: ["roomId", "cause", "versionId"],
+    doubles: ["restarts", "gapMs", "callMs"],
+  },
+  /**
+   * A room closed: `empty` (only house bots left, nothing queued) or `kill_switch` (the arena is
+   * stopped). `ticks`: its world's tick; `lives`: lives that ended in it; `durationMs` since
+   * `start` (0 for rooms started before this was recorded).
+   */
   "room.closed": {
     source: "arena",
     blobs: ["roomId", "reason"],
     doubles: ["ticks", "lives", "durationMs"],
   },
-  /** A life ended and its `lives` row is written. Counting these gives lives per hour. */
+  /**
+   * A life of a version ended and the room delivered it (its `lives` row is written, except for
+   * `evicted` lives, which get none). Counting these by `deathCause` gives lives per hour.
+   */
   "life.ended": {
     source: "arena",
     blobs: ["versionId", "deathCause", "roomId"],
-    doubles: ["score", "ticks", "kills"],
+    doubles: ["score", "ticks", "kills", "durationMs"],
   },
-  /** The room backstop banned a version (`reason`: `cpu` or `slow`). */
-  "version.banned": { source: "arena", blobs: ["versionId", "reason"], doubles: [] },
-  /** The checks consumer finished a version (`outcome`: `ready`, `rejected`, `archived`). */
+  /**
+   * The room's backstop evicted a life (`versionId` null for a house bot). `evictions`: the
+   * version's evictions in this room; `versionKills`: kills naming it in the tally.
+   */
+  "room.evicted": {
+    source: "arena",
+    blobs: ["roomId", "versionId"],
+    doubles: ["evictions", "versionKills"],
+  },
+  /**
+   * A version was quarantined: `by` a room (`room`: its evictions or kills there), by kills
+   * across rooms (`kills`, D1's tally) or by the matchmaker (`matchmaker`: evictions across
+   * rooms).
+   */
+  "version.quarantined": {
+    source: "arena",
+    blobs: ["versionId", "by", "roomId"],
+    doubles: ["evictions", "kills"],
+  },
+  /**
+   * The checks consumer finished a job. `outcome`: `ready`, `superseded`, `rejected`,
+   * `unchanged` (already done: a redelivery), `missing` (no version row), `failed` (an error on
+   * our side; the job is retried), `dead_letter` (out of retries: rejected), `malformed` (not a
+   * job), `reaped` (the cron rejected a version left `validating`). `reason`: for `rejected`
+   * and `reaped` the `FailureReason`, or the first failed check; for `failed` the error message;
+   * for `dead_letter` whether it `rejected` the version or found it done (`unchanged`).
+   * `durationMs`: the job's wall time (CPU included: the clock catches up at the next I/O).
+   * `attempt`: the delivery number (0 when reaped).
+   */
   "checks.finished": {
     source: "arena",
     blobs: ["outcome", "reason"],
-    doubles: ["durationMs"],
+    doubles: ["durationMs", "attempt"],
   },
-  /** The matchmaker's periodic snapshot (at most once a minute). */
+  /**
+   * The matchmaker's snapshot, at most once a minute (from its alarm). `rooms`: open (and
+   * opening) rooms; `liveSnakes`: lives issued and not reported back; `queuedLives`: bots whose
+   * next life can be issued now; `readyVersions`: bots with a playable version; `exhausted`:
+   * those that used today's quota; `paused`: 1 while the kill switch is on.
+   */
   "arena.gauge": {
     source: "arena",
     blobs: [],
-    doubles: ["rooms", "liveSnakes", "queuedLives", "readyVersions"],
+    doubles: ["rooms", "liveSnakes", "queuedLives", "readyVersions", "exhausted", "paused"],
+  },
+  /**
+   * The matchmaker's room check (every minute per room) found a running room whose world tick
+   * didn't move for `stalledMs`: `reason` is `outbox_full` (D1, R2 or the matchmaker failing)
+   * or `no_progress`. Alert on any.
+   */
+  "room.stalled": {
+    source: "arena",
+    blobs: ["roomId", "reason"],
+    doubles: ["tick", "stalledMs", "outbox"],
   },
 } as const satisfies Record<string, MetricSchema>;
 

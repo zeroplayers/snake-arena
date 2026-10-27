@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { log, writeMetric } from "@zerosnake/observability";
 import type { ActiveVersionChange, ArenaControl, MatchmakerSiteRpc } from "@zerosnake/web/shared";
 import { arenaPaused, recordQuarantine } from "./db.ts";
 import {
@@ -88,7 +89,13 @@ export interface MatchmakerStatus {
  *     kill switch (none if it can't be read);
  *  5. compares rooms' lives with the ledger (`status()`), so a life nobody reported for
  *     `lostAfterMs` frees its bot;
- *  6. forgets ledger rows older than yesterday, and evictions older than `EVICTION_WINDOW_MS`.
+ *  6. forgets ledger rows older than yesterday, and evictions older than `EVICTION_WINDOW_MS`;
+ *  7. writes the `arena.gauge` metric (rooms, lives in flight and waiting, playable and
+ *     exhausted bots) every `gaugeMs`.
+ *
+ * Metrics (`@zerosnake/observability`, the `METRICS` binding; none without it): `arena.gauge`,
+ * `room.stalled` (step 5 found a running room whose tick didn't move since its last check) and
+ * `version.quarantined` (by evictions across rooms).
  *
  * Rooms close by themselves when only house bots remain and `nextLife` has nothing for them.
  */
@@ -98,6 +105,10 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
   private readonly sources = new Map<string, string>();
   private running: Promise<TickReport> | null = null;
   private queued: Promise<TickReport> | null = null;
+  /** When `arena.gauge` was last written (in memory only). */
+  private gaugeAt = Number.NEGATIVE_INFINITY;
+  /** Each running room's tick at its last check, and since when it is that (in memory only). */
+  private readonly progress = new Map<string, { tick: number; since: number }>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -180,7 +191,7 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
     try {
       more = (await this.tick()).more;
     } catch (e) {
-      console.error("matchmaker alarm", e);
+      log("error", "matchmaker.alarm_failed", { error: e });
     }
     const c = this.config();
     if (!c.manual) await this.ctx.storage.setAlarm(Date.now() + (more ? 0 : c.pollMs));
@@ -255,6 +266,7 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
 
   async roomClosed(roomId: string): Promise<void> {
     this.store.setRoom(roomId, "closed", this.now());
+    this.progress.delete(roomId);
   }
 
   // --- Site → matchmaker (hints: the alarm loop finds the same in D1) ------------------------
@@ -286,7 +298,23 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
     await this.checkRooms(c);
     const now = this.now();
     this.store.prune(utcDay(now), now, now - EVICTION_WINDOW_MS, PRUNE_ROWS);
+    this.gauge(c, now);
     return { more };
+  }
+
+  /** The `arena.gauge` metric, at most every `gaugeMs`. */
+  private gauge(c: MatchmakerConfig, now: number): void {
+    if (now - this.gaugeAt < c.gaugeMs) return;
+    this.gaugeAt = now;
+    const day = utcDay(now);
+    writeMetric(this.env.METRICS, "arena.gauge", {
+      rooms: this.store.rooms().length,
+      liveSnakes: this.store.countIssued(),
+      queuedLives: this.store.countWaiting(day, c.livesPerBotPerDay),
+      readyVersions: this.store.countPlayable(),
+      exhausted: this.store.countExhausted(day, c.livesPerBotPerDay),
+      paused: this.store.meta().paused ? 1 : 0,
+    });
   }
 
   /** First start: the cursor at D1's latest change, today's usage from `lives`, a full reconcile. */
@@ -430,7 +458,7 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
       console.log("matchmaker: room opened", roomId);
       return true;
     } catch (e) {
-      console.error("matchmaker: room start failed", roomId, e);
+      log("error", "matchmaker.room_start_failed", { roomId, error: e });
       return false;
     }
   }
@@ -469,7 +497,8 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
   /**
    * Compares rooms' lives with the ledger, a few rooms per alarm: a life issued over
    * `lostAfterMs` ago that its room doesn't hold and nobody reported is lost. Also notices rooms
-   * that stopped.
+   * that stopped, and running rooms whose tick didn't move since their last check (`room.stalled`:
+   * a running room always ticks, real lives or house bots, unless its outbox is full).
    */
   private async checkRooms(c: MatchmakerConfig): Promise<void> {
     const rooms = this.store.roomsToCheck(this.now() - c.roomCheckMs, ROOM_CHECKS_PER_ALARM);
@@ -483,6 +512,7 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
       }
       const held = new Set([...s.snakes.map((x) => x.lifeId), ...s.pending]);
       const now = this.now();
+      this.checkProgress(r.roomId, s, now);
       this.store.transaction(() => {
         this.store.roomChecked(r.roomId, now);
         const running = s.state === "running";
@@ -496,6 +526,28 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
         }
       });
     }
+  }
+
+  /** Notes a room's tick; reports it stalled when it hasn't moved for a room check or more. */
+  private checkProgress(roomId: string, s: RoomStatus, now: number): void {
+    if (s.state !== "running") {
+      this.progress.delete(roomId);
+      return;
+    }
+    const seen = this.progress.get(roomId);
+    if (!seen || seen.tick !== s.tick) {
+      this.progress.set(roomId, { tick: s.tick, since: now });
+      return;
+    }
+    const fields = {
+      roomId,
+      reason: s.paused ? "outbox_full" : "no_progress",
+      tick: s.tick,
+      stalledMs: now - seen.since,
+      outbox: s.outbox.size,
+    };
+    writeMetric(this.env.METRICS, "room.stalled", fields);
+    log("error", "room.stalled", { ...fields, failing: s.outbox.failing });
   }
 
   // --- Helpers -----------------------------------------------------------------------------
@@ -590,7 +642,15 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
     if ((await recordQuarantine(this.env.DB, record)) === "missing") {
       console.error("matchmaker: quarantine of a deleted version", r.versionId);
     }
-    console.warn("matchmaker: version quarantined by evictions", r.versionId, evictions);
+    const fields = {
+      versionId: r.versionId,
+      by: "matchmaker",
+      roomId: r.roomId,
+      evictions,
+      kills: 0,
+    };
+    writeMetric(this.env.METRICS, "version.quarantined", fields);
+    log("warn", "version.quarantined", { ...fields, rooms: rooms.length });
     this.store.disableVersion(r.versionId);
   }
 

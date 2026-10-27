@@ -87,6 +87,8 @@ export interface BatchResult {
   /** A tick was abandoned halfway: some bots ran it, the world didn't step. */
   aborted: boolean;
   botTicks: number;
+  /** The sandbox's cost units of the bot ticks (`TickReport.work`), summed. */
+  work: number;
 }
 
 interface Running {
@@ -175,6 +177,7 @@ export class RoomSim {
       ticks: 0,
       aborted: false,
       botTicks: 0,
+      work: 0,
     };
     const finish = () => {
       result.chunks = this.chunks;
@@ -240,6 +243,7 @@ export class RoomSim {
         const report = r.life.tick(seen);
         if (afterBot) await afterBot();
         result.botTicks++;
+        result.work += report.work;
         if (r.trace) calls.push({ trace: r.trace, seen, report });
         actions[id] = report.action;
         if (report.death) faults[id] = report.death.fault;

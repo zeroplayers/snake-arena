@@ -18,6 +18,7 @@ import type {
 import type { LifeStarter } from "../room/sim.ts";
 import { RoomDO as BaseRoomDO } from "../room.ts";
 import { handleShowcase } from "../showcase.ts";
+import { type DataPoint, sqlPoints, withTestMetrics } from "./metrics.ts";
 
 export { ShowcaseDO } from "../showcase.ts";
 
@@ -48,8 +49,18 @@ const TRACE_FAILURES_KEY = "test:traceFailures";
  * The real room, but each bot tick may ask the host to burn CPU through its log. That's what an
  * operation the sandbox's meter can't charge looks like to the room: a call that doesn't return.
  * The tests don't depend on which such holes the sandbox still has (#62 closed the string ones).
+ * With the harness's `metrics` option, its `METRICS` is the test binding (`metrics.ts`).
  */
 export class RoomDO extends BaseRoomDO {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, withTestMetrics(env, sqlPoints(ctx.storage.sql).write));
+  }
+
+  /** The metric points the room wrote (with the harness's `metrics: "record"`). */
+  async metricPoints(): Promise<DataPoint[]> {
+    return sqlPoints(this.ctx.storage.sql).read();
+  }
+
   /**
    * Makes instrumenting each bundle take `ms` longer (wall time), as on a slow machine, for this
    * room from now on.

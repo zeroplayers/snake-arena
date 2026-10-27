@@ -49,6 +49,8 @@ export interface Meta {
   manual: boolean;
   limits: Required<RoomLimits>;
   livesEnded: number;
+  /** Wall ms the room started; missing in rooms saved before it was recorded. */
+  startedAt?: number;
   lastBatchTicks: number;
   /** Don't ask the matchmaker for lives before this wall-clock ms (it had none). */
   nextLifeAfter: number;
@@ -548,6 +550,13 @@ export class RoomStore {
   }
 
   /** Batches that died with CPU-limit evidence (all but `restart`) since `since`. */
+  /** Incidents of any outcome since `since` (wall ms). */
+  incidentsSince(since: number): number {
+    return this.sql
+      .exec<{ n: number }>("SELECT count(*) AS n FROM incidents WHERE at >= ?", since)
+      .one().n;
+  }
+
   cpuIncidentsSince(since: number): number {
     return this.sql
       .exec<{ n: number }>(

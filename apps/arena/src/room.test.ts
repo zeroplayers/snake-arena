@@ -150,6 +150,8 @@ describe("RoomDO", () => {
     expect((await events()).find((e) => e.kind === "lifeEnded")?.body).toMatchObject({
       lifeId: dave.lifeId,
     });
+    // No `METRICS` binding in this harness: nothing is written, and the room doesn't mind.
+    expect(await h.room("deaths", "metricPoints")).toEqual([]);
   }, 60_000);
 
   it("writes ~2-minute replay chunks to R2 and resumes exactly after an eviction", async () => {

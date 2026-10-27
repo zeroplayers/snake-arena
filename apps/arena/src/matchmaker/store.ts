@@ -284,6 +284,18 @@ export class MatchmakerStore {
       .one().n;
   }
 
+  /** Bots with a playable version that used up `day`'s quota. */
+  countExhausted(day: number, limitPerDay: number): number {
+    return this.sql
+      .exec<{ n: number }>(
+        `SELECT count(*) AS n FROM bots b JOIN usage u ON u.bot_id = b.bot_id AND u.day = ?1
+         WHERE b.version_id IS NOT NULL AND u.used >= ?2`,
+        day,
+        limitPerDay,
+      )
+      .one().n;
+  }
+
   /** Whether `versionId` is its bot's version. */
   plays(versionId: string): boolean {
     return (

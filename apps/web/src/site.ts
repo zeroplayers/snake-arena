@@ -15,3 +15,9 @@ export const REPO = {
  * name isn't registered, so a pasted snippet could run anyone's code.
  */
 export const CLI_PUBLISHED = false;
+
+/**
+ * The live showcase's WebSocket on this site (`src/server/showcase.ts` proxies it to the arena):
+ * the landing page's arena plays it when a showcase room is running.
+ */
+export const SHOWCASE_PATH = "/api/showcase";

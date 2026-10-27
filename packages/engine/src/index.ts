@@ -10,11 +10,34 @@
  * `@zerosnake/sdk`); `buildBotInfo` is what its `init()` gets.
  *
  * Record a room with `ReplayRecorder` (use its `spawn`/`step`); play it back and seek with
- * `ReplayPlayer`.
+ * `ReplayPlayer`. Spectators get a room as state deltas (`BroadcastEncoder` → `encodeBroadcast`,
+ * `decodeBroadcast` → `BroadcastView`).
  *
  * `step` mutates in place; `cloneWorld` snapshots. A world is plain data, so it also survives
  * JSON round-trips and storage.
  */
+export {
+  BROADCAST_VERSION,
+  type BroadcastDeath,
+  BroadcastEncoder,
+  type BroadcastEncoderOptions,
+  type BroadcastFood,
+  BroadcastFormatError,
+  BroadcastGapError,
+  type BroadcastLabel,
+  type BroadcastLife,
+  type BroadcastMessage,
+  type BroadcastSnake,
+  BroadcastView,
+  decodeBroadcast,
+  encodeBroadcast,
+  type Keyframe,
+  MAX_TRAIL_POINTS,
+  type TickDelta,
+  type TicksMessage,
+  type ViewDeath,
+  type ViewSnake,
+} from "./broadcast.ts";
 export {
   createConfig,
   DEFAULT_CONFIG,

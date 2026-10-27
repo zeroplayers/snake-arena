@@ -9,7 +9,8 @@ import type { RenderFrame } from "@zerosnake/renderer";
  * - a live engine running in the page (`LiveEngineSource`): `request` simulates synchronously;
  * - a replay (#9): `request` re-simulates from seed + actions, possibly in a worker, and
  *   `lastTick` catches up when it's done; `endTick` is the end of the recording;
- * - a broadcast of a room: `request` is a no-op and `lastTick` grows as messages arrive.
+ * - a broadcast of a room (`BroadcastSource`): `request` is a no-op and `lastTick` grows as
+ *   messages arrive.
  *
  * Ticks in `[firstTick, lastTick]` must stay readable; older ones may be evicted.
  */
@@ -47,6 +48,11 @@ export interface MatchInfo {
   readonly visionRadius: number;
   /** Shown in the viewer's header. */
   readonly title?: string;
+  /**
+   * A live broadcast that arrives in bursts: ticks to watch it behind its newest one
+   * (`followLive`). Undefined for sources that are never ahead of the playhead.
+   */
+  readonly liveDelay?: number;
 }
 
 /** One tick: what to draw plus what the side panel shows. Immutable once returned. */

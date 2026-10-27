@@ -2,6 +2,8 @@ import { type CheckJob, handleChecks, reapStaleVersions } from "./checks";
 
 export { MatchmakerDO } from "./matchmaker";
 export { RoomDO } from "./room";
+// The live showcase's spectators: only the site's `SHOWCASE` service binding reaches the entrypoint.
+export { ShowcaseDO, ShowcaseEntrypoint } from "./showcase";
 
 export default {
   async fetch(request, env) {

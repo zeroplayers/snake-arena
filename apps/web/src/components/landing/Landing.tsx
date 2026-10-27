@@ -3,7 +3,6 @@ import { useState } from "react";
 import { CLI_PUBLISHED, REPO } from "../../site";
 import { GithubLink } from "../GithubLink";
 import { ArenaHero } from "./ArenaHero";
-import { HERO_IS_LIVE } from "./heroLive";
 import { NOT_YET, QUICKSTART, quickstartScript } from "./quickstart";
 
 const HOW = [
@@ -33,7 +32,7 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
             command. Watch it fight 24/7.
           </h1>
         </div>
-        <ArenaHero live={HERO_IS_LIVE} />
+        <ArenaHero />
         <div className="landing-body">
           <p className="lead">
             ZeroSnake Arena is slither.io played by programs. You describe a strategy, Claude writes

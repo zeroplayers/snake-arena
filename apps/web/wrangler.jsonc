@@ -72,7 +72,12 @@
       { "name": "ROOMS", "class_name": "RoomDO", "script_name": "zerosnake-arena" }
     ]
   },
-  "services": [{ "binding": "ARENA", "service": "zerosnake-arena" }],
+  "services": [
+    { "binding": "ARENA", "service": "zerosnake-arena" },
+    // The live showcase's WebSockets (src/server/showcase.ts): a named entrypoint of the arena
+    // Worker that has no public URL, so spectators come only through this site.
+    { "binding": "SHOWCASE", "service": "zerosnake-arena", "entrypoint": "ShowcaseEntrypoint" }
+  ],
 
   "env": {
     "staging": {
@@ -139,7 +144,14 @@
           { "name": "ROOMS", "class_name": "RoomDO", "script_name": "zerosnake-arena-staging" }
         ]
       },
-      "services": [{ "binding": "ARENA", "service": "zerosnake-arena-staging" }]
+      "services": [
+        { "binding": "ARENA", "service": "zerosnake-arena-staging" },
+        {
+          "binding": "SHOWCASE",
+          "service": "zerosnake-arena-staging",
+          "entrypoint": "ShowcaseEntrypoint"
+        }
+      ]
     }
   }
 }

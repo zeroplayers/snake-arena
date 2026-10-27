@@ -21,6 +21,7 @@ import {
   bots,
   cliTokens,
   deviceCodes,
+  heldUsernames,
   lives,
   ratings,
   users,
@@ -35,10 +36,15 @@ import {
   PURGE_SQL,
 } from "../shared/account";
 import { ACTIVE_VERSION_CHANGE_VERSION, type ActiveVersionChange } from "../shared/arena";
+import { TRACE_RETENTION_DAYS } from "../shared/trace";
+import { hashToken } from "./cli-auth";
 import { noRateLimit, type RateLimiter, rateLimitedResponse } from "./rate-limit";
 import { setRequestOutcome, setRequestUser } from "./request-context";
 
 export const ACCOUNT_EXPORT_FORMAT = "zerosnake-account-export@1";
+
+/** How long a deleted account's username can't be claimed by anyone else. */
+export const USERNAME_HOLD_MS = 30 * 24 * 60 * 60_000;
 
 /** Lives read per D1 query while streaming the export. */
 const EXPORT_PAGE = 1000;
@@ -96,6 +102,11 @@ async function listedSessionTokens(kv: KVNamespace, userId: string): Promise<str
   return Array.isArray(list)
     ? list.flatMap((s) => (typeof s?.token === "string" ? [s.token] : []))
     : [];
+}
+
+/** What the user types to confirm the deletion: the username, or a word before they have one. */
+export function deleteConfirmation(username: string | null | undefined) {
+  return username ? username.toLowerCase() : "delete";
 }
 
 export function createAccount(env: AccountEnv, options: AccountOptions) {
@@ -270,10 +281,14 @@ export function createAccount(env: AccountEnv, options: AccountOptions) {
       lives: [],
     });
     const encoder = new TextEncoder();
+    // Traces older than this are gone (apps/arena `traces.ts`).
+    const traceCutoff = now().getTime() - TRACE_RETENTION_DAYS * 24 * 60 * 60_000;
     return new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
-          // `...,"lives":[` + rows + `]}`.
+          // `...,"lives":[` + rows + `],"complete":true}`. If a read fails midway the stream
+          // errors, so the download fails rather than ending early; a file without `complete`
+          // was cut short.
           controller.enqueue(encoder.encode(head.slice(0, -2)));
           let first = true;
           for (const versionId of versionIds) {
@@ -283,14 +298,15 @@ export function createAccount(env: AccountEnv, options: AccountOptions) {
                   ...life,
                   // Expired replays (`src/server/replays.ts`) have nothing left to link to.
                   replay: hasReplay && !replayExpiredAt ? `${siteOrigin}/replay/${life.id}` : null,
-                  traceKept: hasTrace !== null,
+                  traceKept:
+                    hasTrace !== null && (life.endedAt ?? life.startedAt).getTime() > traceCutoff,
                 };
                 controller.enqueue(encoder.encode((first ? "" : ",") + JSON.stringify(row)));
                 first = false;
               }
             }
           }
-          controller.enqueue(encoder.encode("]}"));
+          controller.enqueue(encoder.encode('],"complete":true}'));
           controller.close();
         } catch (error) {
           log("error", "account.export_failed", { error });
@@ -360,22 +376,30 @@ export function createAccount(env: AccountEnv, options: AccountOptions) {
       if (user instanceof Response) return user;
       const body = (await request.json().catch(() => null)) as { confirm?: unknown } | null;
       const confirm = typeof body?.confirm === "string" ? body.confirm.trim().toLowerCase() : "";
-      const expected = (user.username ?? "").toLowerCase();
-      if (!expected || confirm !== expected) {
+      const expected = deleteConfirmation(user.username);
+      if (confirm !== expected) {
         return refuse(
           "confirmation_mismatch",
-          `Type your username${user.username ? ` (${user.username})` : ""} to confirm.`,
+          user.username
+            ? `Type your username (${user.username}) to confirm.`
+            : `Type "${expected}" to confirm.`,
         );
       }
 
       const at = now().getTime();
       // Read before the batch: the session list is all KV keeps of who the tokens belong to.
       const tokens = await listedSessionTokens(env.AUTH_KV, user.id);
-      const results = await env.DB.batch<{ id: string; bot_id: string }>(
-        DELETE_ACCOUNT_STATEMENTS.map((s) =>
-          env.DB.prepare(s).bind(...deleteAccountParams(s, user.id, at)),
-        ),
+      const statements = DELETE_ACCOUNT_STATEMENTS.map((s) =>
+        env.DB.prepare(s).bind(...deleteAccountParams(s, user.id, at)),
       );
+      if (user.username) {
+        statements.push(
+          env.DB.prepare(
+            "INSERT OR REPLACE INTO held_usernames (username_hash, until) VALUES (?1, ?2)",
+          ).bind(await hashToken(user.username.toLowerCase()), at + USERNAME_HOLD_MS),
+        );
+      }
+      const results = await env.DB.batch<{ id: string; bot_id: string }>(statements);
       log("warn", "account.deleted", { userId: user.id });
 
       // Revoked in D1 already (`sessions_revoked_at`); this only drops the cached profile copies.
@@ -394,7 +418,12 @@ export function createAccount(env: AccountEnv, options: AccountOptions) {
           changedAt: at,
         });
       }
-      return json({ ok: true, purgeAfterMs: ACCOUNT_PURGE_AFTER_MS });
+      // The session is revoked already; this only tidies the browser.
+      const secure = siteOrigin.startsWith("https:");
+      const cookie = `${secure ? "__Secure-" : ""}better-auth.session_token=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`;
+      return json({ ok: true, purgeAfterMs: ACCOUNT_PURGE_AFTER_MS }, 200, {
+        "set-cookie": cookie,
+      });
     },
   };
 }
@@ -402,6 +431,32 @@ export function createAccount(env: AccountEnv, options: AccountOptions) {
 export type Account = ReturnType<typeof createAccount>;
 
 // ─── Purge (cron) ────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Deletes R2 object `key` unless a version of another author still names it (`inUse`).
+ *
+ * A deploy writes its `versions` row before its R2 object, so one with the same content that
+ * lands between the check and the delete would lose its object. Hence the object is read first,
+ * and put back if a user appeared once it's gone.
+ */
+async function deleteUnshared(
+  db: D1Database,
+  bucket: R2Bucket,
+  inUse: string,
+  key: string,
+  ownerId: string,
+) {
+  const used = () => db.prepare(inUse).bind(key, ownerId).first();
+  if (await used()) return;
+  const object = await bucket.get(key);
+  if (!object) return;
+  const bytes = await object.arrayBuffer();
+  await bucket.delete(key);
+  if (await used()) {
+    await bucket.put(key, bytes, { httpMetadata: object.httpMetadata ?? {} });
+    log("warn", "account.purge_object_restored", { key });
+  }
+}
 
 export interface PurgeBudget {
   /** Tombstones looked at per run. */
@@ -426,7 +481,7 @@ export interface PurgeResult {
 /**
  * Step 2 of account deletion (`src/shared/account.ts`), from the 5-minute cron: for each
  * tombstone older than `ACCOUNT_PURGE_AFTER_MS`, deletes its lives (traces first), then its
- * versions (bundles and sources first), then the user row. R2 objects go before the rows that
+ * versions (bundles and sources first, unless shared with another author), then the user row. R2 objects go before the rows that
  * name them, so an interrupted run leaves nothing unreachable; every step is idempotent.
  */
 export async function purgeDeletedAccounts(
@@ -459,8 +514,14 @@ export async function purgeDeletedAccounts(
         .bind(id, budget.page)
         .all<{ id: string; bundleKey: string; sourceKey: string }>();
       if (versionRows.length > 0) {
-        await env.BUNDLES.delete(versionRows.map((v) => v.bundleKey));
-        await env.SOURCES.delete(versionRows.map((v) => v.sourceKey));
+        const bundles = new Set(versionRows.map((v) => v.bundleKey));
+        const sources = new Set(versionRows.map((v) => v.sourceKey));
+        for (const key of bundles) {
+          await deleteUnshared(env.DB, env.BUNDLES, PURGE_SQL.bundleInUse, key, id);
+        }
+        for (const key of sources) {
+          await deleteUnshared(env.DB, env.SOURCES, PURGE_SQL.sourceInUse, key, id);
+        }
         await env.DB.prepare(PURGE_SQL.deleteVersions)
           .bind(JSON.stringify(versionRows.map((v) => v.id)))
           .run();
@@ -482,6 +543,32 @@ export async function purgeDeletedAccounts(
   return result;
 }
 
+/**
+ * Starts the deletion of accounts that signed in but never chose a username within this long:
+ * they can't have bots, and nobody comes back for them (the Privacy Policy says so).
+ */
+export const UNCLAIMED_ACCOUNT_DAYS = 30;
+
+/** Step 1 of the deletion for up to `limit` accounts unclaimed for `UNCLAIMED_ACCOUNT_DAYS`. */
+export async function deleteUnclaimedAccounts(d1: D1Database, now: Date, limit = 20) {
+  const before = now.getTime() - UNCLAIMED_ACCOUNT_DAYS * 24 * 60 * 60_000;
+  const { results } = await d1
+    .prepare(
+      `SELECT id FROM users WHERE username IS NULL AND deleted_at IS NULL AND created_at < ?1
+       LIMIT ?2`,
+    )
+    .bind(before, limit)
+    .all<{ id: string }>();
+  const at = now.getTime();
+  for (const { id } of results) {
+    await d1.batch(
+      DELETE_ACCOUNT_STATEMENTS.map((s) => d1.prepare(s).bind(...deleteAccountParams(s, id, at))),
+    );
+  }
+  if (results.length) log("info", "account.unclaimed_deleted", { users: results.length });
+  return results.length;
+}
+
 /** How long expired device codes and sign-in state stay, so late polls still read as expired. */
 const EXPIRED_GRACE_MS = 60 * 60_000;
 
@@ -497,5 +584,6 @@ export async function pruneExpiredCredentials(d1: D1Database, now: Date) {
     db.delete(cliTokens).where(lt(cliTokens.expiresAt, now)),
     db.delete(deviceCodes).where(lt(deviceCodes.expiresAt, grace)),
     db.delete(verifications).where(lt(verifications.expiresAt, grace)),
+    db.delete(heldUsernames).where(lt(heldUsernames.until, now)),
   ]);
 }

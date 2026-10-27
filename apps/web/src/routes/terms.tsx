@@ -45,8 +45,9 @@ function Terms() {
           copy, run, analyse and publicly display your bots' source code, bundles, names and the
           games they play, for as long as they are on the service and as needed to operate, secure
           and show the service (including in replays, on the leaderboard and in promotion of the
-          game). The licence ends when you delete the bot's versions or your account, apart from
-          replays of other players' games your bot took part in, which expire on their own.
+          game). The licence ends when you delete your account (archiving a bot or a version keeps
+          it, and its source, on the site), apart from replays of other players' games your bot took
+          part in, which expire on their own.
         </li>
         <li>
           <strong>The source code of every version you deploy is public</strong>: anyone can read it

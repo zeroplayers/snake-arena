@@ -414,7 +414,11 @@ On `/settings`, signed-in users can:
   GitHub link, CLI tokens and device codes are deleted, sessions are revoked and the bots
   archived, so the matchmaker stops them at its next poll. Step 2 is the 5-minute cron
   (`purgeDeletedAccounts`), 15 minutes later: lives and their traces, versions with their bundles
-  and sources, then the user row. Other players' lives keep `killer` pointing at the deleted
+  and sources (unless another author's version has the same content-addressed key: then the
+  object stays), then the user row. The username is held for 30 days (`held_usernames`, a
+  SHA-256), so nobody can claim it right away. Accounts that never claimed a username are
+  deleted the same way after 30 days (`deleteUnclaimedAccounts`); until then `/welcome` offers
+  the export and the deletion (confirmed with the word "delete"). Other players' lives keep `killer` pointing at the deleted
   version ("a deleted bot"); the moderation log keeps its ids. The same cron deletes expired CLI
   tokens, and device codes and OAuth state an hour after they expire
   (`pruneExpiredCredentials`).
@@ -427,7 +431,8 @@ a secret) is set and `ENVIRONMENT` isn't `development`; never on `/device`, whos
 CLI's one-time code. To turn it on: dashboard → **Analytics & Logs → Web Analytics → Add a
 site**, enter the hostname (`arena.surninsynergy.dev`), choose the manual JavaScript snippet,
 copy the `token` value out of it into `CF_BEACON_TOKEN` under `env.staging.vars`, and deploy.
-(Enabling automatic setup for the proxied zone instead makes Cloudflare inject the same beacon
-itself; then leave `CF_BEACON_TOKEN` empty so it isn't loaded twice.) If the site ever sends a
+Then check the zone has no automatic Web Analytics injection (Web Analytics → the site →
+"Automatic setup" off, or RUM off for the zone): Cloudflare would inject the beacon into every
+page itself, `/device` included, and it would load twice. If the site ever sends a
 Content-Security-Policy, allow `https://static.cloudflareinsights.com` (script) and
 `https://cloudflareinsights.com` (connect).

@@ -11,7 +11,11 @@
 import handler from "@tanstack/react-start/server-entry";
 import { log } from "@zerosnake/observability";
 import { createDb } from "./db";
-import { pruneExpiredCredentials, purgeDeletedAccounts } from "./server/account";
+import {
+  deleteUnclaimedAccounts,
+  pruneExpiredCredentials,
+  purgeDeletedAccounts,
+} from "./server/account";
 import { handleEdge } from "./server/edge";
 import { getRateLimiter } from "./server/env";
 import { runLivenessCheck } from "./server/liveness";
@@ -41,9 +45,9 @@ export default {
         ),
       );
       ctx.waitUntil(
-        purgeDeletedAccounts(env, now).catch((error) =>
-          log("error", "account.purge_failed", { error }),
-        ),
+        deleteUnclaimedAccounts(env.DB, now)
+          .then(() => purgeDeletedAccounts(env, now))
+          .catch((error) => log("error", "account.purge_failed", { error })),
       );
       ctx.waitUntil(
         pruneExpiredCredentials(env.DB, now).catch((error) =>

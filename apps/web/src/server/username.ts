@@ -4,10 +4,11 @@
  */
 import type { BetterAuthPlugin } from "better-auth";
 import { APIError, createAuthEndpoint, sessionMiddleware } from "better-auth/api";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import * as z from "zod";
 import type { Db } from "../db";
-import { users } from "../db/schema";
+import { heldUsernames, users } from "../db/schema";
+import { hashToken } from "./cli-auth";
 
 export const USERNAME_MIN = 2;
 export const USERNAME_MAX = 39;
@@ -63,6 +64,23 @@ export const usernameClaim = (db: Db) =>
             });
           }
           const userId = ctx.context.session.user.id;
+          // A deleted account's username stays out of reach for a while (`held_usernames`).
+          const [held] = await db
+            .select({ until: heldUsernames.until })
+            .from(heldUsernames)
+            .where(
+              and(
+                eq(heldUsernames.usernameHash, await hashToken(username.toLowerCase())),
+                gt(heldUsernames.until, new Date()),
+              ),
+            )
+            .limit(1);
+          if (held) {
+            throw new APIError("BAD_REQUEST", {
+              code: "USERNAME_IS_ALREADY_TAKEN",
+              message: "That username is taken",
+            });
+          }
           let claimed: { id: string }[];
           try {
             // Conditional, so two racing claims can't both win.

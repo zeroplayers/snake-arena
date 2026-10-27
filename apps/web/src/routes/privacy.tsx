@@ -89,7 +89,10 @@ function Privacy() {
                 So the CLI can deploy for you, and so you can see and revoke your logins in
                 Settings.
               </td>
-              <td>Device codes 10 minutes; tokens until revoked or 90 days after last use</td>
+              <td>
+                Device codes: valid 10 minutes, deleted an hour after that; tokens until revoked or
+                90 days after last use
+              </td>
             </tr>
             <tr>
               <td>
@@ -127,24 +130,25 @@ function Privacy() {
               <td>Moderation: bans, quarantines, their reasons, and a log of admin actions</td>
               <td>To keep the arena safe and fair, and to answer appeals.</td>
               <td>
-                Bans and quarantines with the account; the admin log (ids only) as long as it is
-                needed to prevent abuse
+                Bans and quarantines with the account; the admin log (ids and the moderator's note,
+                which may name your username) as long as it is needed to prevent abuse
               </td>
             </tr>
             <tr>
               <td>IP address of each request</td>
               <td>
-                Used, never stored by us, to rate-limit requests (Cloudflare keeps the counter for
-                one minute) and to cap live-arena connections per visitor (as a hash, in memory,
-                while connected).
+                Used to rate-limit requests (Cloudflare keeps the counter for one minute) and to cap
+                live-arena connections per visitor (as a hash, in memory, while connected). Our own
+                records never keep it, but IP addresses may appear in Cloudflare's request logs,
+                which we use only for security and debugging.
               </td>
-              <td>Not stored</td>
+              <td>Up to 7 days, in the request logs</td>
             </tr>
             <tr>
               <td>
                 Request logs: time, route, status, latency, request id and your user id if signed
-                in; Cloudflare's invocation logs add request details such as the URL, country and
-                user agent
+                in; Cloudflare's invocation logs add request details such as the URL, IP address,
+                country and user agent
               </td>
               <td>To run, debug and secure the service (Cloudflare Workers Logs).</td>
               <td>Up to 7 days</td>
@@ -224,15 +228,23 @@ function Privacy() {
         <Link to="/settings">Settings</Link> → <em>Delete my account</em>. At once: your name,
         email, avatar, GitHub login and username are erased, the link to your GitHub account and
         your CLI tokens are deleted, every session is signed out, and your bots stop playing and
-        leave your profile, the leaderboard and every page. Within about an hour: your bots, their
-        versions, source code, bundles, ratings, lives and traces are erased.
+        leave your profile, the leaderboard and every page. Then, usually within a few hours: your
+        bots, their versions, source code, bundles, ratings, lives and traces are erased. Your
+        username is held, as a one-way hash, for 30 days, so nobody else can take it and pose as
+        you; then anyone may claim it.
       </p>
       <p>
         What stays: other players' games keep the fact that a snake, now a “deleted bot”, took part,
         without your name; recorded replays expire on their own schedule (above); logs and metrics
-        age out as listed; the moderation log keeps ids that no longer lead to you. Database backups
-        (Cloudflare D1 point-in-time recovery) roll over within 30 days. If you sign in with the
-        same GitHub account later, you start a new, empty account.
+        age out as listed; the moderation log keeps ids that no longer lead to you, and the
+        moderator's note. A bundle or source file byte-for-byte identical to another player's upload
+        (an unchanged template, say) is stored once, and stays while their version uses it. Database
+        backups (Cloudflare D1 point-in-time recovery) roll over within 30 days. If you sign in with
+        the same GitHub account later, you start a new, empty account.
+      </p>
+      <p>
+        If you sign in but never choose a username, you can delete the account (or download what we
+        have) from the username page; otherwise we delete it ourselves after 30 days.
       </p>
 
       <h2>Your rights</h2>

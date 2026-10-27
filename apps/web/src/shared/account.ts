@@ -14,8 +14,9 @@
  *    from then on (no username, no `ready` version).
  * 2. **Later**, the site's 5-minute cron (`purgeDeletedAccounts`) erases what is left, once
  *    `ACCOUNT_PURGE_AFTER_MS` has passed so that rooms have written the retired lives: lives
- *    (and their traces in R2), then versions (bundles and sources in R2; ratings, activations and
- *    version kills go with them), then the user row, which takes the bots with it.
+ *    (and their traces in R2), then versions (bundles and sources in R2, unless another author's
+ *    version has the same content; ratings, activations and version kills go with them), then
+ *    the user row, which takes the bots with it.
  *
  * Rows that stay: other players' lives keep `killer` = the deleted version's id, which then
  * resolves to nothing ("a deleted bot"); `moderation_actions` keeps its plain ids (abuse
@@ -81,6 +82,15 @@ export const PURGE_SQL = {
   selectVersions: `SELECT v.id, v.bundle_key AS bundleKey, v.source_key AS sourceKey
                    FROM versions v JOIN bots b ON b.id = v.bot_id WHERE b.owner_id = ?1 LIMIT ?2`,
   deleteVersions: "DELETE FROM versions WHERE id IN (SELECT value FROM json_each(?1))",
+  /**
+   * Bundles and sources are content-addressed (`<sha256>.js`, `.json`), so another author's
+   * identical upload (the unchanged template, say) shares the object. Whether a version of
+   * someone other than `?2` still names key `?1` (`versions_bundle_key_idx`, `_source_key_idx`).
+   */
+  bundleInUse: `SELECT 1 FROM versions v JOIN bots b ON b.id = v.bot_id
+                WHERE v.bundle_key = ?1 AND b.owner_id != ?2 LIMIT 1`,
+  sourceInUse: `SELECT 1 FROM versions v JOIN bots b ON b.id = v.bot_id
+                WHERE v.source_key = ?1 AND b.owner_id != ?2 LIMIT 1`,
   /** Last: the tombstone, and with it bots and whatever else still points at the user. */
   deleteUser: "DELETE FROM users WHERE id = ?1 AND deleted_at IS NOT NULL",
 } as const;

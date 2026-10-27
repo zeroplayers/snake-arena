@@ -17,7 +17,7 @@ export const LEGAL = {
   governingLaw: "the laws of England and Wales",
   courts: "the courts of England and Wales",
   /** The maker's X profile, in the footer. */
-  x: { url: "https://x.com/oleksiisurnin", handle: "@oleksiisurnin", label: "Oleksii Surnin on X" },
+  x: { url: "https://x.com/oleksiisurnin", handle: "@oleksiisurnin" },
 } as const;
 
 /** When the pages last changed in substance (shown on each page). */

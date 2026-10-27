@@ -5,9 +5,9 @@
  * The object is the deploy API's `SourceArchive` JSON (#20): `{ format: "zerosnake-sources@1",
  * files: [{ path, content }] }`. Anything else is treated as missing rather than trusted.
  */
-import { eq } from "drizzle-orm";
+import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import type { Db } from "../db";
-import { versions } from "../db/schema";
+import { bots, users, versions } from "../db/schema";
 
 export const SOURCE_ARCHIVE_FORMAT = "zerosnake-sources@1";
 
@@ -69,7 +69,10 @@ export async function readSources(bucket: R2Bucket, key: string): Promise<Source
   return files ? { status: "ok", files } : { status: "invalid" };
 }
 
-/** Sources of a version by id; `null` if there is no such version. */
+/**
+ * Sources of a version by id; `null` if there is no such version, or its author is banned or
+ * deleted their account (whose profile and bot pages are gone too).
+ */
 export async function readVersionSources(
   db: Db,
   bucket: R2Bucket,
@@ -78,7 +81,16 @@ export async function readVersionSources(
   const [row] = await db
     .select({ key: versions.sourceKey })
     .from(versions)
-    .where(eq(versions.id, versionId))
+    .innerJoin(bots, eq(bots.id, versions.botId))
+    .innerJoin(users, eq(users.id, bots.ownerId))
+    .where(
+      and(
+        eq(versions.id, versionId),
+        isNull(users.bannedAt),
+        isNull(users.deletedAt),
+        isNotNull(users.username),
+      ),
+    )
     .limit(1);
   return row ? readSources(bucket, row.key) : null;
 }

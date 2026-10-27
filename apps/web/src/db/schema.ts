@@ -111,6 +111,16 @@ export const revokedSessions = sqliteTable(
   (t) => [index("revoked_sessions_expires_at_idx").on(t.expiresAt)],
 );
 
+/**
+ * Usernames of deleted accounts (SHA-256 of the lowercase name), which nobody may claim until
+ * `until`, so a new account can't pose as the old one straight away (`src/server/account.ts`,
+ * `/username/claim`). Pruned by the 5-minute cron.
+ */
+export const heldUsernames = sqliteTable("held_usernames", {
+  usernameHash: text("username_hash").primaryKey(),
+  until: integer("until", { mode: "timestamp_ms" }).notNull(),
+});
+
 export const accounts = sqliteTable(
   "accounts",
   {
@@ -281,6 +291,9 @@ export const versions = sqliteTable(
   },
   (t) => [
     index("versions_change_seq_idx").on(t.changeSeq),
+    // R2 keys are content-addressed and may be shared: the account purge checks for other users.
+    index("versions_bundle_key_idx").on(t.bundleKey),
+    index("versions_source_key_idx").on(t.sourceKey),
     // Bot page: versions newest first. No index on `status` alone: it would steer the
     // leaderboard query away from `ratings_rank_idx`.
     uniqueIndex("versions_bot_n_idx").on(t.botId, t.n),

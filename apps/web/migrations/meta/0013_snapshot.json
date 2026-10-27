@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "10cf05ae-1043-4d03-95b9-56837334c893",
+  "id": "8e952c1f-4858-48e3-bed0-2acbc681d7f8",
   "prevId": "21e44eba-66b7-4bfb-a32e-8853938677ca",
   "tables": {
     "accounts": {
@@ -637,6 +637,30 @@
           "onUpdate": "no action"
         }
       },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "held_usernames": {
+      "name": "held_usernames",
+      "columns": {
+        "username_hash": {
+          "name": "username_hash",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "until": {
+          "name": "until",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
@@ -1651,6 +1675,20 @@
           "name": "versions_change_seq_idx",
           "columns": [
             "change_seq"
+          ],
+          "isUnique": false
+        },
+        "versions_bundle_key_idx": {
+          "name": "versions_bundle_key_idx",
+          "columns": [
+            "bundle_key"
+          ],
+          "isUnique": false
+        },
+        "versions_source_key_idx": {
+          "name": "versions_source_key_idx",
+          "columns": [
+            "source_key"
           ],
           "isUnique": false
         },

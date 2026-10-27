@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDb } from "../db";
 import { getLeaderboard, getProfile } from "../db/queries";
+import { readVersionSources } from "../queries/sources";
 import { ACCOUNT_PURGE_AFTER_MS, type ActiveVersionChange, DELETED_USER_NAME } from "../shared";
 import { signUp, type TestAccount, webSessions } from "../test/accounts";
 import { createTestPlatform, dumpTables, type TestPlatformEnv } from "../test/d1";
 import {
   ACCOUNT_EXPORT_FORMAT,
   createAccount,
+  deleteUnclaimedAccounts,
   pruneExpiredCredentials,
   purgeDeletedAccounts,
 } from "./account";
@@ -113,9 +115,18 @@ async function seedBot(owner: string, slug: string, lives = 3) {
           .prepare(
             `INSERT INTO lives (id, version_id, room, start_tick, end_tick, score, death_cause,
                replay_key, trace_key, started_at, ended_at)
-             VALUES (?, ?, 'room-1', ?, ?, ?, 'wall', 'room-1/0.zsr', ?, 0, 1)`,
+             VALUES (?, ?, 'room-1', ?, ?, ?, 'wall', 'room-1/0.zsr', ?, ?, ?)`,
           )
-          .bind(`${id}-life${i}`, id, i * 100, i * 100 + 50, 10 + i, `2026-10-27/${id}-life${i}`),
+          .bind(
+            `${id}-life${i}`,
+            id,
+            i * 100,
+            i * 100 + 50,
+            10 + i,
+            `2026-10-27/${id}-life${i}`,
+            clock.getTime() - 60_000,
+            clock.getTime(),
+          ),
       );
     }
   }
@@ -270,6 +281,7 @@ describe("Delete my account", () => {
 
     const response = await account().deleteAccount(deleteRequest(ada, " Ada "));
     expect(response.status).toBe(200);
+    expect(response.headers.get("set-cookie")).toMatch(/^better-auth\.session_token=; Max-Age=0/);
 
     // Signed out: the web session reads as missing, the CLI token is gone.
     expect(await session(ada)).toBeNull();
@@ -317,14 +329,76 @@ describe("Delete my account", () => {
     const db = createDb(env.DB);
     expect(await getProfile(db, "ada")).toBeNull();
     expect((await getLeaderboard(db)).map((r) => r.botSlug)).toEqual(["cobra"]);
+    // Their sources aren't served by version id either; a banned author's aren't.
+    await env.SOURCES.put(
+      "sources/cobra-v2.json",
+      JSON.stringify({ format: "zerosnake-sources@1", files: [] }),
+    );
+    expect(await readVersionSources(db, env.SOURCES, "viper-v2")).toBeNull();
+    expect(await readVersionSources(db, env.SOURCES, "cobra-v2")).toMatchObject({ status: "ok" });
+    await env.DB.prepare("UPDATE users SET banned_at = 1 WHERE id = ?").bind(bob.id).run();
+    expect(await readVersionSources(db, env.SOURCES, "cobra-v2")).toBeNull();
   });
 
   it("lets the same GitHub account sign up again as a new user", async () => {
     const ada = await signUp(auth, env.DB, BASE, "ada", 1);
     await account().deleteAccount(deleteRequest(ada, "ada"));
-    const again = await signUp(auth, env.DB, BASE, "ada", 1);
+    const again = await signUp(auth, env.DB, BASE, "ada-again", 1);
     expect(again.id).not.toBe(ada.id);
     expect(await session(again)).not.toBeNull();
+  });
+
+  it("holds the username for 30 days", async () => {
+    const ada = await signUp(auth, env.DB, BASE, "ada", 1);
+    await account().deleteAccount(deleteRequest(ada, "ada"));
+    const claim = async (who: TestAccount, username: string) =>
+      auth.handler(
+        new Request(`${BASE}/api/auth/username/claim`, {
+          method: "POST",
+          headers: { "content-type": "application/json", origin: BASE, cookie: who.jar.header() },
+          body: JSON.stringify({ username }),
+        }),
+      );
+    const eve = await signUp(auth, env.DB, BASE, "eve", 5);
+    // eve already has a username; a fresh account tries to claim "ada".
+    await env.DB.prepare("UPDATE users SET username = NULL WHERE id = ?").bind(eve.id).run();
+    const taken = await claim(eve, "ADA");
+    expect(taken.status).toBe(400);
+    expect(await taken.json()).toMatchObject({ code: "USERNAME_IS_ALREADY_TAKEN" });
+    // The hold ends; the prune forgets it.
+    await env.DB.prepare("UPDATE held_usernames SET until = 1").run();
+    await pruneExpiredCredentials(env.DB, new Date());
+    expect(await count("SELECT count(*) AS n FROM held_usernames")).toBe(0);
+    expect((await claim(eve, "ada")).status).toBe(200);
+  });
+
+  it("works before a username is chosen, confirmed with a word", async () => {
+    const ada = await signUp(auth, env.DB, BASE, "ada", 1);
+    await env.DB.prepare("UPDATE users SET username = NULL WHERE id = ?").bind(ada.id).run();
+    const data = await (await account().exportData(req(ada, "/api/account/export"))).json();
+    expect(data).toMatchObject({
+      profile: { username: null, email: "ada@example.com" },
+      complete: true,
+    });
+    expect((await account().deleteAccount(deleteRequest(ada, "ada"))).status).toBe(400);
+    expect((await account().deleteAccount(deleteRequest(ada, "delete"))).status).toBe(200);
+    expect(await session(ada)).toBeNull();
+    expect(await count("SELECT count(*) AS n FROM held_usernames")).toBe(0);
+  });
+
+  it("deletes accounts that never chose a username after 30 days", async () => {
+    const ada = await signUp(auth, env.DB, BASE, "ada", 1);
+    const bob = await signUp(auth, env.DB, BASE, "bob", 2);
+    await env.DB.prepare("UPDATE users SET username = NULL, created_at = 0").run();
+    await env.DB.prepare("UPDATE users SET username = 'bob' WHERE id = ?").bind(bob.id).run();
+    expect(await deleteUnclaimedAccounts(env.DB, new Date())).toBe(1);
+    const row = await env.DB.prepare("SELECT deleted_at, email FROM users WHERE id = ?")
+      .bind(ada.id)
+      .first<{ deleted_at: number | null; email: string }>();
+    expect(row?.deleted_at).not.toBeNull();
+    expect(row?.email).toBe(`deleted-${ada.id}@deleted.invalid`);
+    expect(await session(bob)).not.toBeNull();
+    expect(await deleteUnclaimedAccounts(env.DB, new Date())).toBe(0);
   });
 });
 
@@ -336,6 +410,11 @@ describe("purgeDeletedAccounts", () => {
     await seedBot(bob.id, "cobra");
     // One of bob's lives was ended by ada's bot.
     await env.DB.prepare("UPDATE lives SET killer = 'viper-v2' WHERE id = 'cobra-v2-life0'").run();
+    // Bob deployed the same code as ada's v2 (content-addressed: same R2 objects).
+    await env.DB.prepare(
+      `INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key)
+       VALUES ('cobra-v3', 'cobra-bot', 3, 'archived', 'bundles/viper-v2.js', 'sources/viper-v2.json')`,
+    ).run();
     await account().deleteAccount(deleteRequest(ada, "ada"));
 
     const early = new Date(clock.getTime() + ACCOUNT_PURGE_AFTER_MS - 1);
@@ -362,18 +441,47 @@ describe("purgeDeletedAccounts", () => {
     expect(await count("SELECT count(*) AS n FROM ratings WHERE version_id LIKE 'viper-%'")).toBe(
       0,
     );
-    for (const bucket of [env.BUNDLES, env.SOURCES, env.TRACES]) {
-      const keys = (await bucket.list()).objects.map((o) => o.key);
-      expect(keys.some((k) => k.includes("viper"))).toBe(false);
-      expect(keys.some((k) => k.includes("cobra"))).toBe(true);
-    }
+    const keys = async (bucket: R2Bucket) =>
+      (await bucket.list()).objects.map((o) => o.key).filter((k) => k.includes("viper"));
+    // Only the objects bob's version shares are left.
+    expect(await keys(env.BUNDLES)).toEqual(["bundles/viper-v2.js"]);
+    expect(await keys(env.SOURCES)).toEqual(["sources/viper-v2.json"]);
+    expect(await keys(env.TRACES)).toEqual([]);
+    expect(await env.BUNDLES.get("bundles/cobra-v1.js")).not.toBeNull();
     // Bob's life is still there; its killer now resolves to nothing.
     expect(await count("SELECT count(*) AS n FROM lives WHERE id LIKE 'cobra-%'")).toBe(6);
+    expect(await count("SELECT count(*) AS n FROM versions WHERE id LIKE 'cobra-%'")).toBe(3);
     const life = await env.DB.prepare(
       "SELECT killer FROM lives WHERE id = 'cobra-v2-life0'",
     ).first();
     expect(life).toEqual({ killer: "viper-v2" });
     expect(await purgeDeletedAccounts(env, later)).toMatchObject({ users: 0, more: false });
+  });
+
+  it("puts a shared object back when an identical deploy lands mid-delete", async () => {
+    const ada = await signUp(auth, env.DB, BASE, "ada", 1);
+    const bob = await signUp(auth, env.DB, BASE, "bob", 2);
+    await seedBot(ada.id, "viper", 0);
+    await seedBot(bob.id, "cobra", 0);
+    await account().deleteAccount(deleteRequest(ada, "ada"));
+    // Bob's deploy of the same bundle writes its row right after the purge checked the key.
+    const bundles: R2Bucket = Object.create(env.BUNDLES);
+    bundles.delete = async (key) => {
+      await env.BUNDLES.delete(key);
+      if (key === "bundles/viper-v2.js") {
+        await env.DB.prepare(
+          `INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key)
+           VALUES ('cobra-v3', 'cobra-bot', 3, 'validating', 'bundles/viper-v2.js', 's')`,
+        ).run();
+      }
+    };
+    const later = new Date(clock.getTime() + ACCOUNT_PURGE_AFTER_MS);
+    await purgeDeletedAccounts({ ...env, BUNDLES: bundles }, later);
+    expect(await (await env.BUNDLES.get("bundles/viper-v2.js"))?.text()).toBe(
+      'export default "viper-v2";',
+    );
+    expect(await env.BUNDLES.get("bundles/viper-v1.js")).toBeNull();
+    expect(await count("SELECT count(*) AS n FROM users WHERE id = ?", ada.id)).toBe(0);
   });
 });
 

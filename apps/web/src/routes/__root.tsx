@@ -88,9 +88,11 @@ function RootLayout() {
             <Link to="/docs">Docs</Link>
             <GithubLink />
             <Link to="/terms">Terms</Link>
+            <Link to="/acceptable-use">Acceptable Use</Link>
             <Link to="/privacy">Privacy</Link>
-            <a href={LEGAL.x.url} target="_blank" rel="me noopener" aria-label={LEGAL.x.label}>
+            <a href={LEGAL.x.url} target="_blank" rel="me noopener">
               Made by {LEGAL.x.handle}
+              <span className="sr-only"> on X (opens in a new tab)</span>
             </a>
           </span>
           <small className="footer-company">
@@ -105,8 +107,10 @@ function RootLayout() {
 
 function RootDocument({ children }: { children: ReactNode }) {
   const { beaconToken } = Route.useLoaderData();
-  // The device page's URL carries the CLI's one-time code.
-  const analytics = useLocation({ select: (l) => !l.pathname.startsWith("/device") });
+  // The CLI's one-time code is in the device page's URL, and in `/welcome?next=` on the way there.
+  const analytics = useLocation({
+    select: (l) => !l.pathname.startsWith("/device") && !l.href.includes("user_code"),
+  });
   return (
     <html lang="en">
       <head>

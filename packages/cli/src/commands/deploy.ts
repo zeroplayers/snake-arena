@@ -16,6 +16,7 @@ import {
   passedLine,
   readSources,
   runLocalChecks,
+  slowSuiteWarning,
 } from "../artifact.ts";
 import { bundleBot } from "../bundle.ts";
 import { CliError, EXIT, UsageError } from "../errors.ts";
@@ -41,10 +42,11 @@ import { bold, cyan, dim, green, red, stderrHasColor, yellow } from "../term.ts"
 export const DEPLOY_HELP = `Usage: zerosnake deploy [options]
 
 Bundles your bot exactly like \`sim\`, runs the checks of \`zerosnake test\` here (the deploy
-limits and the server's check suite, a few seconds), uploads the bundle and your sources (public
-on your bot's page), and waits while the server checks the new version. A version that passes
-replaces the bot's active one in the arena. A bot that fails the checks here isn't uploaded, so
-it costs no deploy.
+limits and the server's check suite, usually a few seconds), uploads the bundle and your sources
+(public on your bot's page), and waits while the server checks the new version. A version that
+passes replaces the bot's active one in the arena. A bot that fails the checks here isn't
+uploaded, so it costs no deploy. A bot whose checks pass here but are slow (see
+\`zerosnake test --help\`) gets a warning: the server may not finish them.
 
 Options:
   --bot <slug>          Which of your bots to deploy to (default: "zerosnake": { "bot" } in
@@ -123,7 +125,7 @@ export async function deployCommand(
     assertWithinLimits(io, bundle, sources, me.limits, meta);
     io.out(dim("- skipped the check suite here (--skip-local-checks): the server runs it"));
   } else {
-    const report = await runLocalChecks(io, bundle, sources, me.limits, meta);
+    const { report, millis } = await runLocalChecks(io, bundle, sources, me.limits, meta);
     if (!report.passed) {
       io.err(`\n${formatCheckReport(report).trimEnd()}`);
       io.err(
@@ -134,6 +136,8 @@ export async function deployCommand(
     }
     io.out(passedLine(report));
     for (const warning of report.run.warnings) io.out(`  ${yellow("!")} ${warning}`);
+    const slow = slowSuiteWarning(millis);
+    if (slow) io.out(`  ${slow}`);
   }
 
   const bot = existing ?? (await createBot(api, botName(project), slug, io, remote));

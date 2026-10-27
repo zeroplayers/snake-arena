@@ -4,6 +4,7 @@ import {
   CHECK_SEED_COUNT,
   CHECK_TICKS,
   type CheckReport,
+  DEFAULT_MAX_MILLIS,
   formatReport as formatCheckReport,
   REPORT_VERSION,
   runChecks,
@@ -18,7 +19,7 @@ import type { BundledBot } from "./bundle.ts";
 import { CliError } from "./errors.ts";
 import type { Io } from "./io.ts";
 import { collectSources } from "./project.ts";
-import { dim, green, red } from "./term.ts";
+import { dim, green, red, yellow } from "./term.ts";
 
 /** A source file as `deploy` uploads it. */
 export interface SourceText {
@@ -183,6 +184,12 @@ export function assertWithinLimits(
   io.out(`${green("✓")} within the deploy limits ${dim(`(${sizes})`)}`);
 }
 
+/** What {@link runLocalChecks} found: the suite's report and how long the suite took here. */
+export interface LocalChecks {
+  report: CheckReport;
+  millis: number;
+}
+
 /**
  * The checks `test` and `deploy` run on this machine before anything is uploaded: the deploy
  * API's limits ({@link assertWithinLimits}, throws), then the server's check suite
@@ -194,9 +201,29 @@ export async function runLocalChecks(
   sources: SourceText[],
   limits?: DeployLimits,
   meta?: DeployMeta,
-): Promise<CheckReport> {
+): Promise<LocalChecks> {
   assertWithinLimits(io, bundle, sources, limits, meta);
-  return runCheckSuite(io, bundle, sources);
+  const started = performance.now();
+  const report = await runCheckSuite(io, bundle, sources);
+  return { report, millis: performance.now() - started };
+}
+
+/**
+ * Above this, a suite that passed here may not finish on the server. There the suite's wall
+ * clock (the 60 s cap) doesn't decide: the Worker's CPU time limit does, on hardware that can be
+ * slower than the author's. Honest bots take 2–5 s.
+ */
+export const SLOW_SUITE_MS = 20_000;
+
+/** A warning for a suite that took {@link SLOW_SUITE_MS} or more here, else `null`. */
+export function slowSuiteWarning(millis: number): string | null {
+  if (millis < SLOW_SUITE_MS) return null;
+  return (
+    `${yellow("!")} The checks took ${Math.round(millis / 1000)} s here (most bots take a few). ` +
+    "The server runs them under a CPU time limit instead of the " +
+    `${DEFAULT_MAX_MILLIS / 1000} s clock, possibly on a slower machine; if they don't finish ` +
+    "there, the version is rejected. Make the bot's ticks cheaper to be safe."
+  );
 }
 
 /** What the suite plays, for the progress line. */
@@ -263,18 +290,27 @@ function isSuiteReport(report: unknown): report is CheckReport {
 }
 
 /**
- * Lines for a stored version report (`versions.report`): `@zerosnake/checks`' report as
- * `zerosnake test` prints it, or the older `{ ok, checks, qualificationScore }` shape. Tolerant of
- * fields it doesn't know.
+ * Lines for a stored version report (`versions.report`), tolerant of fields it doesn't know:
+ * - the checks consumer's `{ ok, checks, suite, text, qualificationScore }`: its `suite` (a
+ *   `@zerosnake/checks` report) as `zerosnake test` prints it, else its `text`;
+ * - a bare `@zerosnake/checks` report, printed the same way;
+ * - else the `{ ok, checks, qualificationScore }` lines.
  */
 export function formatReport(report: unknown): string[] {
-  if (isSuiteReport(report)) {
-    return formatCheckReport(report)
+  const r = report as {
+    checks?: unknown;
+    qualificationScore?: unknown;
+    suite?: unknown;
+    text?: unknown;
+  } | null;
+  const suite = isSuiteReport(report) ? report : isSuiteReport(r?.suite) ? r.suite : null;
+  const text = suite ? formatCheckReport(suite) : typeof r?.text === "string" ? r.text : "";
+  if (text.trim()) {
+    return text
       .trimEnd()
       .split("\n")
       .map((line) => (line ? `  ${line}` : line));
   }
-  const r = report as { checks?: unknown; qualificationScore?: unknown } | null;
   if (!r || !Array.isArray(r.checks)) return [];
   const lines = r.checks.map((c: { name?: unknown; ok?: unknown; message?: unknown }) => {
     const mark = c.ok ? green("✓") : red("✗");

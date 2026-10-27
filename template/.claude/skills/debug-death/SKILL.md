@@ -10,7 +10,20 @@ Read the "Common causes of death" table in `CLAUDE.md` first; most deaths are on
 
 ## 1. Get deaths with context
 
-**Now (local):**
+**Local, with the CLI:**
+
+```sh
+npx zerosnake sim --headless --seed 1      # repeat with other seeds
+```
+
+The `deaths` column gives the mix of causes; the lives list says when each life ended and who it
+ran into (`ticks 154–1129, score 155, ran into hard#1`). Same seed, same opponents, same code: the
+same deaths. The headless summary has no per-tick context or `log()` lines: for those, ask the
+author to watch the match (`npx zerosnake sim --seed N`, the command the summary ends with: jump to
+a death, vision radius, logs; it opens the browser and waits, so don't run it yourself). A bot that
+times out or throws shows the error and its last logs in `npx zerosnake test`'s report.
+
+**Local, in the monorepo checkout:**
 
 ```sh
 npm run bench -- --deaths 5 --context 15
@@ -41,12 +54,11 @@ const death = result.lives.find((l) => l.tick === 483);
 
 Another lineup or tick count is a different match: the death will not be there.
 
-**Later (arena):** `npx zerosnake logs` lists recent arena lives with causes of death and their
-context; arena traces keep the last 100 ticks before each death. With the MCP server connected
-(`claude mcp add zerosnake https://<arena-domain>/mcp`), use `list_lives(version, filter: "deaths")`
-and then `get_death_context(life)` for what the snake saw, what the bot returned and its logs in the
-last ticks. `npx zerosnake sim --seed N` replays a local match in the viewer (jump to death, vision
-radius, logs). Use whichever exists; if a command is not available yet, say so and use the bench.
+**Arena:** `npx zerosnake logs` shows a version's check report and its recent lives; until the
+lives endpoint exists it points at the bot's page, which lists them. Later, with the MCP server
+connected (`claude mcp add zerosnake https://<arena-domain>/mcp`), `list_lives(version, filter:
+"deaths")` and `get_death_context(life)` will give what the snake saw, what the bot returned and
+its logs in the last ticks. If a command is not available yet, say so; don't invent its output.
 
 ## 2. Diagnose
 
@@ -73,10 +85,11 @@ Check it on more than one death: fix the most common cause first.
 
 ## 3. Fix and prove it
 
-1. Turn the fatal tick into a regression test: copy its `state` from the trace into a test in
-   `test/`, run the bot's `tick` on it (or replay the bench match as above) and assert the action
-   is safe (e.g. turns away from the wall).
+1. In the monorepo checkout, turn the fatal tick into a regression test: copy its `state` from the
+   trace into a test in `test/`, run the bot's `tick` on it (or replay the bench match as above)
+   and assert the action is safe (e.g. turns away from the wall). With the CLI only, note the seeds
+   and ticks of the deaths you are fixing and re-run those seeds after the fix.
 2. Fix the bot. Keep the change minimal and explain the mechanism in a comment if it is not obvious.
-3. `npm run typecheck && npm test`, then compare with the version before the fix (skill
+3. `npx tsc -p .` and `npx zerosnake test`, then compare with the version before the fix (skill
    `compare-with-previous`): that death cause should drop and the mean score should not get worse.
    Report the before/after numbers.

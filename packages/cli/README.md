@@ -51,8 +51,10 @@ zerosnake test [--bot src/bot.ts] [--json]
   path rules (`assertWithinLimits` in `src/artifact.ts`), then runs `runChecks` from
   `@zerosnake/checks` with the deploy configuration (`runCheckSuite`): the same suite, seeds
   (from the bundle's hash) and report as the server's checks, so a bot that passes here passes
-  there (the only exception is the suite's 60 s wall-clock cap, which only a bot far slower than
-  any honest one hits). See `packages/checks/README.md` for the checks.
+  there, except on time: here the suite's 60 s wall-clock cap stops a slow bot, while on the
+  server the Worker's CPU time limit does, possibly on slower hardware. So a pass that took
+  `SLOW_SUITE_MS` (20 s) or more prints a warning (`slowSuiteWarning`) in `test` and `deploy`; it
+  doesn't block. See `packages/checks/README.md` for the checks.
 - Prints `formatReport` (what to fix included), or the `CheckReport` JSON with `--json` (stdout
   carries only the JSON; the other lines go to stderr). Exit `0` passed, `1` failed.
 - The suite runs synchronously and has no progress callback. On a terminal the CLI shows a
@@ -89,9 +91,10 @@ allowed only for localhost.
   reused by every retry): network errors, 5xx, a gateway's 429 and `409 deploy_in_progress` are
   retried with backoff for up to 90 s, which outlasts the API's one-minute takeover of a deploy
   that died half way. Then it polls `GET /api/bots/:bot/versions/:n` every 2 s (up to 10 minutes)
-  until `ready` or `rejected`, and prints the check report (`formatReport` in `src/artifact.ts`: a
-  `@zerosnake/checks` report prints as `test` prints it; the older `{ ok, checks }` shape still
-  works). Still `validating` after that, it exits
+  until `ready` or `rejected`, and prints the check report (`formatReport` in `src/artifact.ts`:
+  the checks consumer's `{ ok, checks, suite, text, qualificationScore }` prints its `suite` as
+  `test` prints it, else its `text`; a bare `@zerosnake/checks` report prints the same way, and
+  `{ ok, checks }` alone, like the consumer's "checks didn't finish" report, as one line per check). Still `validating` after that, it exits
   1 and says the checks may not run on this server yet (#22; the API has no hint for that). The
   local upload-size check measures the exact body sent, `meta` included.
   The bot is `--bot <slug>`, else `"zerosnake": { "bot": "<slug>" }` in package.json, else the

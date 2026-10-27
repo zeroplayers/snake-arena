@@ -4,7 +4,7 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { runChecks } from "@zerosnake/checks";
+import { formatReport, runChecks } from "@zerosnake/checks";
 import type { DeployRequest, CheckReport as WebCheckReport } from "@zerosnake/web/shared";
 import { afterAll, describe, expect, it } from "vitest";
 import { main } from "./cli.ts";
@@ -261,6 +261,58 @@ describe("zerosnake deploy", () => {
     expect(r.err).toContain("  ✗ Loads     the bundle does not load");
     const logs = await run(["logs", "--version", "1"]);
     expect(logs.out).toContain("✗ Loads     the bundle does not load");
+  });
+
+  it("prints the checks consumer's stored report (#65): its suite, else its text", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("my-snake");
+    const suite = await runChecks(
+      { bundle: "export default {}", sources: [{ path: "src/bot.ts", bytes: 17 }] },
+      { seeds: [1], ticks: 10 },
+    );
+    // `versionReport` in apps/arena/src/checks/report.ts: the site's lines, plus the suite's report.
+    const stored = {
+      ok: false,
+      checks: [{ name: "loads", ok: false, message: "site line, not what `test` prints" }],
+      suite,
+      text: formatReport(suite),
+    };
+    arena.outcome = { status: "rejected", report: stored as WebCheckReport, polls: 1 };
+    const r = await run(["deploy", "--skip-local-checks"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("  Checks failed: this bot would be rejected.");
+    expect(r.err).toContain("  ✗ Loads     the bundle does not load");
+    expect(r.err).not.toContain("site line");
+    expect((await run(["logs", "--version", "1"])).out).toContain(
+      "✗ Loads     the bundle does not load",
+    );
+
+    // A suite report this CLI doesn't know (a newer version): the server's text.
+    arena.outcome = {
+      status: "rejected",
+      report: {
+        ...stored,
+        suite: { version: 999 },
+        text: "Checks failed: from the server.\n",
+      } as WebCheckReport,
+      polls: 1,
+    };
+    const newer = await run(["deploy", "--skip-local-checks"]);
+    expect(newer.err).toContain("  Checks failed: from the server.");
+    expect(newer.err).not.toContain("site line");
+
+    // `failureReport`: the consumer ended the version without a verdict from the suite.
+    arena.outcome = {
+      status: "rejected",
+      report: {
+        ok: false,
+        checks: [{ name: "deploy", ok: false, message: "The checks didn't finish." }],
+        reason: "checks_failed_to_complete",
+      } as WebCheckReport,
+      polls: 1,
+    };
+    const unfinished = await run(["deploy", "--skip-local-checks"]);
+    expect(unfinished.err).toContain("✗ deploy: The checks didn't finish.");
   });
 
   it("deploys to --bot, or the bot named in package.json", async () => {

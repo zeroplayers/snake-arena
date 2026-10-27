@@ -1,5 +1,5 @@
-import { formatReport } from "@zerosnake/checks";
-import { readSources, runLocalChecks } from "../artifact.ts";
+import { DEFAULT_MAX_MILLIS, formatReport } from "@zerosnake/checks";
+import { readSources, runLocalChecks, SLOW_SUITE_MS, slowSuiteWarning } from "../artifact.ts";
 import { bundleBot } from "../bundle.ts";
 import { EXIT, UsageError } from "../errors.ts";
 import { type Io, parse } from "../io.ts";
@@ -12,12 +12,16 @@ Bundles your bot exactly like \`sim\` and \`deploy\` and runs the checks the ser
 deploy: the deploy limits, loading in the sandbox, 5 matches × 1000 ticks against the house bots
 (no timeouts, exceptions or running out of memory, and on average at most half the per-tick
 budget), and qualification (a mean score per life at least that of the easy house bot in your
-seat). Takes a few seconds.
+seat).
+
+Usually takes a few seconds. Here the checks stop a bot at ${DEFAULT_MAX_MILLIS / 1000} s; the server
+runs them under a CPU time limit instead, possibly on a slower machine, so a slow bot can pass
+here and still be rejected there. \`test\` warns when the checks take ${SLOW_SUITE_MS / 1000} s or more.
 
 The seeds come from the bundle's hash: the server uses the same ones for the same bundle, so it
 reaches the same verdict, but any edit to the bot gives other seeds. A bot close to easy's score
-can pass on one version and fail on the next; compare versions with \`sim --headless\` on many
-seeds instead.
+can pass on one version and fail on the next: aim for a clear margin, and compare versions with
+\`sim --headless\` on many seeds rather than by one \`test\`.
 
 Options:
   --bot <file>   Your bot's entry file (default: src/bot.ts)
@@ -54,7 +58,8 @@ export async function testCommand(argv: string[], io: Io): Promise<number> {
   human.out(
     `${green("✓")} bundles ${dim(`(${(bundle.bytes / 1024).toFixed(1)} KB from ${sources.length} source files)`)}`,
   );
-  const report = await runLocalChecks(human, bundle, sources);
+  const { report, millis } = await runLocalChecks(human, bundle, sources);
+  const slow = report.passed ? slowSuiteWarning(millis) : null;
 
   if (values.json) {
     io.out(JSON.stringify(report, null, 2));
@@ -62,5 +67,6 @@ export async function testCommand(argv: string[], io: Io): Promise<number> {
     io.out(`\n${formatReport(report).trimEnd()}`);
     if (report.passed) io.out(`\nReady to deploy: ${dim("npx zerosnake deploy")}`);
   }
+  if (slow) human.out(`\n${slow}`);
   return report.passed ? EXIT.ok : EXIT.failure;
 }

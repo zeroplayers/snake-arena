@@ -6,15 +6,30 @@ write and improve the bot in `src/`. The author describes the strategy; you writ
 locally and check that it really is better before they deploy.
 
 Everything below matches `@zerosnake/sdk`, `@zerosnake/sandbox` and the engine's default config. If
-something here disagrees with the types in `node_modules/@zerosnake/sdk/src/`, the types win.
+something here disagrees with the SDK's types, the types win: `vendor/zerosnake-sdk/src/` in a
+project made by `zerosnake init` (also linked as `node_modules/@zerosnake/sdk` after `npm install`),
+`packages/sdk/src/` in the monorepo.
 
 ## Setup
 
-The `@zerosnake/*` packages are not on npm yet. This folder works inside a checkout of the
-`zeroplayers/snake-arena` monorepo (it is `template/` there): `pnpm install` at the repo root, then
-run the scripts below from this folder (`pnpm test` or `npm test`, same thing). In a copy outside
-the monorepo, `npm install` fails until the packages are published; if that is the situation, tell
-the author instead of trying to work around it (don't edit `package.json` ranges or vendor the SDK).
+The `@zerosnake/*` packages are not on npm yet, so this folder is one of two things:
+
+- **A project made by `npx zerosnake init`** (the usual case). `init` copies the SDK into
+  `vendor/zerosnake-sdk` and points `@zerosnake/sdk` at it, so `npm install` works and editors see
+  the types. The `zerosnake` CLI does the rest: `sim`, `test`, `deploy` (see "Testing, debugging and
+  deploying"). Type-check the bot with `npx tsc -p .`. `test/` (`npm test`, `npm run bench`,
+  `npm run typecheck`) needs the engine, sandbox and house bots, which `init` leaves out: those
+  scripts fail here. Don't try to make them work (no `package.json` edits, extra installs or
+  replacing `vendor/zerosnake-sdk`); use the CLI.
+- **`template/` inside a checkout of the `zeroplayers/snake-arena` monorepo**, after `pnpm install`
+  at the repo root. Everything works, including the scripts in `test/` (`pnpm test` or `npm test`,
+  same thing), and the CLI is `node ../packages/cli/bin/zerosnake.js` (after
+  `pnpm --filter zerosnake build`).
+
+Until the `zerosnake` package is on npm, `npx zerosnake` may not resolve; the author then runs the
+CLI from a monorepo checkout as `node <checkout>/packages/cli/bin/zerosnake.js` (ask for the path
+and use it wherever this file says `npx zerosnake`). If there is no CLI at all, say so; never invent
+CLI output.
 
 ## Files
 
@@ -22,10 +37,13 @@ the author instead of trying to work around it (don't edit `package.json` ranges
 | ------------------ | ---------------------------------------------------------------------------- |
 | `src/bot.ts`       | The bot. Must `export default defineBot({ init, tick })`. Deploy bundles it. |
 | `src/*.ts`         | Split code into more files if you like; import them with `./x.ts`.           |
-| `test/bot.test.ts` | Smoke test: the bot loads in the real sandbox and plays without faults.      |
-| `test/bench.ts`    | `npm run bench`: local matches vs house bots, scores, death replays.         |
-| `test/match.ts`    | The match runner both use (real engine + real sandbox).                      |
+| `test/bot.test.ts` | Smoke test: the bot loads in the real sandbox and plays without faults. ¹    |
+| `test/bench.ts`    | `npm run bench`: local matches vs house bots, scores, death replays. ¹       |
+| `test/match.ts`    | The match runner both use (real engine + real sandbox). ¹                    |
+| `vendor/`          | The SDK, copied by `zerosnake init` until it is on npm. Don't edit it.       |
 | `.claude/skills/`  | `new-strategy`, `debug-death`, `compare-with-previous`.                      |
+
+¹ Only in the monorepo checkout (see Setup); in an `init` project use the CLI instead.
 
 Only `src/` is deployed. Keep tests and tools out of it.
 
@@ -40,8 +58,9 @@ Only `src/` is deployed. Keep tests and tools out of it.
 3. Stay inside the per-tick budget (below). Never loop without a bound.
 4. Never hard-code speeds, radii, turn rate or arena size: read them from `info` and `state.self`.
    The values in this file are today's defaults and may be tuned.
-5. Before saying a change is done: `npm run typecheck && npm test`, then `npm run bench` and compare
-   with the previous version (skill `compare-with-previous`).
+5. Before saying a change is done: `npx tsc -p .` (type-checks `src/`) and `npx zerosnake test` (the
+   server's checks), then compare with the previous version (skill `compare-with-previous`). In the
+   monorepo checkout, `npm run typecheck && npm test` and `npm run bench` work too.
 
 ## The game
 
@@ -118,8 +137,10 @@ export default defineBot({
   fresh sandbox, `init` runs again. `state` is a fresh copy every tick: copy what you want to keep.
 - **`log(...args)`:** like `console.log` (strings as-is, the rest as JSON), one line per call, at most
   `info.logLimitBytes` (1024) bytes per tick; the line that crosses the limit is cut with `…` and
-  later calls that tick are dropped. `console.log` goes to the same place. Logs appear in local
-  bench death replays, `zerosnake sim` and arena traces. Log decisions, not whole states.
+  later calls that tick are dropped. `console.log` goes to the same place. Logs appear in the
+  `zerosnake sim` viewer (not in `--headless` output), in the `zerosnake test` report of a bot that
+  times out or throws, in bench death replays (monorepo) and in arena traces. Log decisions, not
+  whole states.
 - **`Math.random()`** works and is seeded per life (`info.seed`), so runs are reproducible.
 - **Throwing:** the tick's action is replaced by your previous one; three throws in a row kill you.
 
@@ -182,6 +203,7 @@ Return `BotAction`: `{ turn: number in [-1, 1], boost?: boolean }`. Out-of-range
 | Array length         | 100 000 for built-in array methods          | `RangeError` (counts as a throw).                                       |
 | Stack                | 256 KiB                                     | Deep recursion throws.                                                  |
 | Log                  | 1024 bytes per tick                         | Truncated, never fatal.                                                 |
+| Average per tick     | at most half of `opBudget` (5 interrupts)   | Deploy rejected (measured over the deploy checks' matches).             |
 | Deploy               | ≤ 50 files, sources ≤ 1 MB, bundle ≤ 256 KB | Deploy rejected.                                                        |
 
 An interrupt is QuickJS checking in, about every 10 000 bytecode branches or calls. Built-ins that
@@ -205,14 +227,57 @@ candidate move is not. Precompute once per tick, filter by distance before inner
 | Head-on `collision`                                               | Met a longer (or equal) snake head first                                                                          | Only go head-to-head with clearly shorter snakes; dodge heads of others.                                         |
 | `collision` right after boosting                                  | Boost doubled the turning radius                                                                                  | Don't boost near bodies or the wall; boost in short bursts.                                                      |
 | Length melts away, low score without dying                        | Boosting too much, or hunger with no food                                                                         | Boost only when it buys a kill or escape; always keep eating.                                                    |
-| `timeout`                                                         | Too much work in one tick                                                                                         | See Limits; check `max ops` in `npm run bench`.                                                                  |
+| `timeout`                                                         | Too much work in one tick                                                                                         | See Limits; check `max … ops per tick` in `zerosnake sim --headless`.                                            |
 | `timeout` after 0 life ticks, error "... went over its op budget" | Heavy precomputation at module load or in `init()` (lookup tables, big arrays) over the 100-interrupt load budget | Precompute less, or spread it over the first ticks (keep progress in `mem`).                                     |
 | `error`                                                           | An exception, e.g. `snake.head.x` when `head` is `null`, `arr[0]` on an empty array, a deep recursion             | Handle `null`/empty cases (the types force you to with `noUncheckedIndexedAccess`).                              |
 
-## Testing and debugging
+## Testing, debugging and deploying
 
 ```sh
-npm run typecheck     # src/ has no Node/DOM types: setTimeout, fetch, process fail here (Date, Promise don't: avoid them anyway)
+npx tsc -p .                                     # type-check src/: no Node/DOM types, so setTimeout, fetch, process fail (Date, Promise don't: avoid them anyway)
+npx zerosnake sim --headless                     # one local match vs easy, medium, hard, chaos: score, kills, deaths, max ops per tick
+npx zerosnake sim --headless --seed 7 --vs hard,hard,./.zerosnake/prev/src/bot.ts   # pick the seed and the opponents
+npx zerosnake test                               # the exact checks the server runs on deploy (exit 0 pass, 1 fail)
+npx zerosnake test --json                        # the same report as JSON on stdout
+npx zerosnake login                              # browser device flow, once
+npx zerosnake deploy -m "what changed"           # runs test here, uploads, waits for the server's checks
+npx zerosnake status                             # your bots: active version, rating, lives, deploys left today
+npx zerosnake logs                               # a version's check report and recent lives
+```
+
+- **Never run plain `npx zerosnake sim` yourself:** it opens the viewer in a browser and waits until
+  it is closed. Always pass `--headless`. Suggest the plain command to the author when watching a
+  match helps (it shows vision, logs and lets them jump to deaths); the headless summary ends with
+  the exact command to watch that match.
+- `sim --headless` plays one seed (random unless `--seed`, printed so you can repeat it) and exits 1
+  if the sandbox killed your bot. A single match is noisy: compare versions over many seeds (skill
+  `compare-with-previous`). It doesn't print `log()` lines or what the bot saw before a death; for
+  that, ask the author to watch the match, or use the bench in the monorepo.
+- Same code + same seed + same opponents = the same match, so a death reproduces exactly.
+
+### What `zerosnake test` (and `deploy`) check
+
+The bundle within the deploy limits; it loads in QuickJS and exports `tick`; 5 matches × 1000 ticks
+against the house bots with no timeouts, exceptions or out-of-memory and on average at most half the
+per-tick budget; and qualification: a mean score per life at least that of the `easy` house bot
+put in your seat on the same seeds. A failing report says what to fix. `deploy` runs the same checks
+before uploading: a bot that fails isn't uploaded and costs no deploy.
+
+- **The seeds come from the bundle's hash.** The server uses the same seeds for the same bundle, so
+  it reaches the same verdict, but any edit (even a comment) gives other seeds.
+- **Keep a margin over `easy`.** A bot close to easy's score can pass on one version and fail on
+  the next, or the other way round, by luck of the seeds (the starter bot failed about one bundle in
+  twelve). One passing `test` doesn't prove a bot is good enough: run `test` again after small edits,
+  and if a pass is narrow (look at "mean score per life … easy in your seat" seed by seed), make the
+  bot clearly better, e.g. fewer early deaths, rather than re-rolling seeds.
+- **Usually a few seconds.** `test` warns when the checks take 20 s or more: the server runs them
+  under a CPU time limit, possibly on a slower machine, so a slow bot can pass here and still be
+  rejected there ("the checks didn't finish"). Make the ticks cheaper.
+
+### Bench (monorepo checkout only)
+
+```sh
+npm run typecheck     # the bot and the tests
 npm test              # smoke test: loads in the real sandbox, 3 matches vs house bots, no faults, budget headroom
 npm run bench         # 20 seeds × 3000 ticks vs house bots: mean life score ± error, deaths by cause, max ops
 npm run bench -- --deaths 5 --context 15     # also replay the last 15 ticks before 5 deaths
@@ -221,30 +286,10 @@ npm run bench -- src/bot.ts .zerosnake/prev/src/bot.ts   # compare two versions 
 
 The bench runs the real engine and your bundled bot in the real sandbox with the arena's budget,
 so what passes here behaves the same in the arena (only the opponents differ). Results are
-deterministic: the same code and seeds always give the same numbers.
-
-To pin a bug down, copy the `state` of the fatal tick from a death replay into a unit test and
-assert that your bot's action is safe. `test/match.ts` exposes `playMatch`, whose lives carry a
-`trace` of the last 30 ticks (state, action, logs).
-
-## CLI
-
-The `zerosnake` CLI is being built. Once it ships, the workflow is:
-
-```sh
-npx zerosnake sim [--vs easy,hard,./other-bot] [--seed 42]   # local match, opens the viewer
-npx zerosnake test        # the exact checks the server runs (see below)
-npx zerosnake login       # browser device flow
-npx zerosnake deploy      # bundle src/, run test, upload, wait for the server's checks
-npx zerosnake status      # active version, rating, lives played today
-npx zerosnake logs        # recent lives, causes of death, the context of each death
-```
-
-`zerosnake test` / deploy checks: the bundle loads in QuickJS and exports `tick`; 5 fixed seeds ×
-1000 ticks against house bots with no exceptions and no timeouts; mean score at least that of the
-`easy` house bot; the file and size limits above. Until the CLI is installed, `npm test` and
-`npm run bench` cover the same ground locally (bench shows you against `easy`). If `npx zerosnake`
-is not available, say so and use them; do not invent CLI output.
+deterministic: the same code and seeds always give the same numbers. To pin a bug down, copy the
+`state` of the fatal tick from a death replay into a unit test and assert that your bot's action is
+safe. `test/match.ts` exposes `playMatch`, whose lives carry a `trace` of the last 30 ticks (state,
+action, logs).
 
 Later, an MCP server (`claude mcp add zerosnake https://<arena-domain>/mcp`) will let you inspect
 arena lives directly: `list_bots`, `list_versions`, `list_lives(version, filter)`,

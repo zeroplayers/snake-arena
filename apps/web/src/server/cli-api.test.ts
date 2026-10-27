@@ -339,7 +339,13 @@ describe("POST /api/bots", () => {
     const bot = await createBot(token, "  Sneaky Snake 2000!  ");
     expect(bot).toMatchObject({ name: "Sneaky Snake 2000!", slug: "sneaky-snake-2000" });
     expect((await me(token)).bots).toEqual([
-      { ...bot, archived: false, activeVersion: null, latestVersion: null },
+      {
+        ...bot,
+        archived: false,
+        activeVersion: null,
+        activeQuarantine: null,
+        latestVersion: null,
+      },
     ]);
   });
 
@@ -916,9 +922,24 @@ describe("GET /api/me", () => {
         ...bot,
         archived: false,
         activeVersion: 1,
+        activeQuarantine: null,
         latestVersion: { n: 2, status: "validating", createdAt: clock.toISOString() },
       },
     ]);
+
+    // The arena quarantined the active version (apps/arena's `recordQuarantine`).
+    const at = Date.parse("2026-10-26T13:00:00.000Z");
+    await env.DB.prepare(
+      "UPDATE versions SET quarantined_at = ?, quarantine_reason = 'kept hitting the CPU limit' WHERE n = 1",
+    )
+      .bind(at)
+      .run();
+    const quarantine = { at: new Date(at).toISOString(), reason: "kept hitting the CPU limit" };
+    expect((await me(token)).bots[0]?.activeQuarantine).toEqual(quarantine);
+    expect(await json<VersionInfo>(await getVersion(token, "ada-bot", "1"))).toMatchObject({
+      status: "ready",
+      quarantine,
+    });
     expect(res.quota).toMatchObject({ deploysToday: 2, deploysPerDay: 20 });
     expect(res.limits).toMatchObject({
       maxSourceFiles: 50,

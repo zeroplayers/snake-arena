@@ -321,8 +321,11 @@ describe("RoomDO backstop", () => {
     ]);
     // Short replay chunks, so the evicted life's chunk reaches R2 within the test.
     await startRoom("backstop", [evil, ...others], { limits: { ...limits, chunkTicks: 100 } });
-    // Its second life, for when the first is evicted.
-    await h.call("matchmaker", "offer", { ...evil, lifeId: "life-mallory-2" }, "backstop");
+    // Its next lives, for when the first is evicted (a third in case the second dies of something
+    // else before it burns).
+    for (const n of [2, 3]) {
+      await h.call("matchmaker", "offer", { ...evil, lifeId: `life-mallory-${n}` }, "backstop");
+    }
     await spares("backstop", 3);
 
     // A normal batch dies (nobody to name), then every watched rerun dies in its call.
@@ -340,7 +343,9 @@ describe("RoomDO backstop", () => {
     // Its second life does it again (still watched): evicted at once, and quarantined.
     const second = await drive("backstop", (s) => s.quarantined.length > 0, { max: 200 });
     expect(second.kills).toBe(KILLS_TO_EVICT);
-    expect(second.s.evictions.map((x) => x.lifeId)).toEqual([evil.lifeId, "life-mallory-2"]);
+    const [, again] = second.s.evictions.map((x) => x.lifeId);
+    expect(second.s.evictions).toHaveLength(2);
+    expect(["life-mallory-2", "life-mallory-3"]).toContain(again);
     expect(second.s.quarantined).toEqual([evil.versionId]);
     expect(
       await h.room("backstop", "join", { ...evil, lifeId: "evil-3", author: "mallory2" }),
@@ -348,7 +353,7 @@ describe("RoomDO backstop", () => {
 
     // The room goes on with the others.
     let s = await advance("backstop", 50);
-    expect(s.snakes.map((x) => x.lifeId)).not.toContain("life-mallory-2");
+    expect(s.snakes.map((x) => x.lifeId)).not.toContain(again);
     expect(s.incidents).toHaveLength(1 + 2 * KILLS_TO_EVICT);
 
     // Like any life, the matchmaker hears of it once its replay chunk is in R2; D1 gets no row.
@@ -388,7 +393,7 @@ describe("RoomDO backstop", () => {
     const quarantine = (await events()).find((e) => e.kind === "versionQuarantined");
     expect(quarantine?.body as QuarantineRecord).toMatchObject({
       versionId: evil.versionId,
-      lifeId: "life-mallory-2",
+      lifeId: again,
       evictions: 2,
     });
   }, 240_000);

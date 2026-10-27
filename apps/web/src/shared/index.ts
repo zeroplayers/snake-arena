@@ -5,3 +5,4 @@
 export * from "./arena";
 export * from "./checks";
 export * from "./deploy";
+export * from "./trace";

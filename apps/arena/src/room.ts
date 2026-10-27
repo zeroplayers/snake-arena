@@ -10,7 +10,7 @@ import {
   type World,
 } from "@zerosnake/engine";
 import { createSandbox, type InstrumentResult, instrument } from "@zerosnake/sandbox";
-import { ARENA_CONTROL_POLL_MS } from "@zerosnake/web/shared";
+import { ARENA_CONTROL_POLL_MS, traceKey } from "@zerosnake/web/shared";
 // Wrangler only treats specifiers ending in .wasm as compiled modules; the package's "./wasm"
 // export doesn't, so the file is imported by path.
 import wasmModule from "../node_modules/@jitl/quickjs-wasmfile-release-sync/dist/emscripten-module.wasm";
@@ -91,6 +91,7 @@ import {
   RoomStore,
   type RosterEntry,
 } from "./room/store.ts";
+import { gzip, type TraceState } from "./room/trace.ts";
 
 const TICK_MS = 1000 / TICK_RATE;
 
@@ -104,8 +105,9 @@ const TICK_MS = 1000 / TICK_RATE;
  *  2. write a marker with the invocation's start time and `sync()` it, so a batch that dies is
  *     noticed by the next alarm;
  *  3. run it (engine + one QuickJS life per snake, recorded by `ReplayRecorder`);
- *  4. in one transaction: save the world, the open replay chunk and the roster, queue the side
- *     effects (replay chunks for R2, finished lives for D1 and the matchmaker), clear the marker;
+ *  4. in one transaction: save the world, the open replay chunk, the roster and the lives' traces
+ *     (`room/trace.ts`), queue the side effects (replay chunks and finished lives' traces for R2,
+ *     finished lives for D1 and the matchmaker), clear the marker;
  *  5. deliver the outbox, ask the matchmaker for replacements, schedule the next alarm.
  *
  * Backstop (`room/backstop.ts`): a marker left over means the batch died. If too little wall time
@@ -547,7 +549,12 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
           startedAt: now,
           endedAt: now,
         };
-        this.store.enqueue({ kind: "life", json: JSON.stringify(result), chunkTick });
+        this.store.enqueue({
+          kind: "life",
+          json: JSON.stringify(result),
+          chunkTick,
+          traceKey: null,
+        });
       }
     }
     const versionId = life.versionId;
@@ -634,15 +641,26 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       const pending = sim.recorder.pending;
       this.store.putJson("world", sim.world);
       this.store.putBlob("chunk", pending ? encodeReplayChunk(pending) : null);
+      this.store.putJson("traces", sim.traceStates());
       for (const s of result.spawned) this.store.addToRoster(s);
       this.store.removePending(maxPendingSeq);
       // Chunks first: a life is delivered only after the chunk it points to.
       for (const c of result.chunks) this.store.enqueue({ kind: "chunk", ...c });
       let real = 0;
-      for (const { entry, death, killer, chunkTick } of result.ended) {
+      for (const { entry, death, killer, chunkTick, trace } of result.ended) {
         this.store.removeFromRoster(entry.lifeId);
         if (!entry.versionId) continue;
         real++;
+        const deathCause = entry.evicted ? "evicted" : entry.leaving ? "retired" : death.cause;
+        const killerKey = killer ? (killer.versionId ?? `house:${killer.house}`) : null;
+        // Evicted lives get no row (`db.ts`), so nothing would point at their trace.
+        let key: string | null = null;
+        if (trace && deathCause !== "evicted") {
+          key = traceKey(entry.lifeId, now);
+          const bytes = trace.finish({ endTick: death.tick, cause: deathCause, killer: killerKey });
+          // Before the life: it is delivered only after its trace.
+          this.store.enqueue({ kind: "trace", key, bytes });
+        }
         const life: LifeResult = {
           lifeId: entry.lifeId,
           versionId: entry.versionId,
@@ -653,13 +671,14 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
           score: death.score,
           lengthMax: death.maxMass,
           kills: death.kills,
-          deathCause: entry.evicted ? "evicted" : entry.leaving ? "retired" : death.cause,
-          killer: killer ? (killer.versionId ?? `house:${killer.house}`) : null,
+          deathCause,
+          killer: killerKey,
           replayKey: chunkKey(meta.roomId, chunkTick),
+          traceKey: key,
           startedAt: entry.startedAt,
           endedAt: now,
         };
-        this.store.enqueue({ kind: "life", json: JSON.stringify(life), chunkTick });
+        this.store.enqueue({ kind: "life", json: JSON.stringify(life), chunkTick, traceKey: key });
       }
       meta.livesEnded += result.ended.length;
       meta.lastBatchTicks = result.ticks;
@@ -680,9 +699,9 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   // --- Side effects ------------------------------------------------------------------------
 
   /**
-   * Delivers what committed batches queued: replay chunks to R2, lives (once their chunk is in
-   * R2) and quarantines to D1 and the matchmaker. Failures retry with exponential backoff;
-   * nothing is dropped.
+   * Delivers what committed batches queued: replay chunks and life traces to R2, lives (once their
+   * chunk and trace are in R2) and quarantines to D1 and the matchmaker. Failures retry with
+   * exponential backoff; nothing is dropped.
    */
   private async drain(): Promise<void> {
     for (let pass = 0; pass < 2; pass++) {
@@ -695,6 +714,9 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
           switch (item.kind) {
             case "chunk":
               await this.env.REPLAYS.put(item.key, item.bytes);
+              break;
+            case "trace":
+              await this.putTrace(item.key, item.bytes);
               break;
             case "life": {
               const life = JSON.parse(item.json) as LifeResult;
@@ -811,6 +833,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     this.store.transaction(() => {
       this.store.putJson("world", sim.world);
       this.store.putBlob("chunk", null);
+      this.store.putBlob("traces", null);
       for (const c of chunks) this.store.enqueue({ kind: "chunk", ...c });
       this.store.enqueue({ kind: "closed" });
       meta.state = "closed";
@@ -875,6 +898,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       sandbox,
       this.store.roster(),
       meta.limits.chunkTicks,
+      this.store.getJson<Record<string, TraceState>>("traces") ?? {},
     );
     return this.sim;
   }
@@ -882,6 +906,13 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   /** A fresh sandbox per loaded `sim`, with the room's bundles. Tests wrap it. */
   protected async newLifeStarter(): Promise<LifeStarter> {
     return lifeStarter(await createSandbox({ wasmModule }), this.bundles);
+  }
+
+  /** Writes a finished life trace (JSON) to R2 `TRACES`, gzipped. Tests make it fail. */
+  protected async putTrace(key: string, json: Uint8Array): Promise<void> {
+    await this.env.TRACES.put(key, await gzip(json), {
+      httpMetadata: { contentType: "application/json", contentEncoding: "gzip" },
+    });
   }
 
   /** Instruments a bot bundle (`room/bundles.ts`). Tests slow it down. */

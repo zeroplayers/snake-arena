@@ -259,7 +259,8 @@ describe("the CLI against the real API", () => {
     expect(logs.code, logs.err).toBe(0);
     expect(logs.out).toContain("my-snake v1 · ready (active)");
     expect(logs.out).toContain("✓ loads");
-    expect(logs.out).toContain("The CLI can't list lives yet");
+    // Neither life has ended.
+    expect(logs.out).toContain("No lives yet.");
 
     const logout = await run(["logout"]);
     expect(logout.code).toBe(0);

@@ -12,10 +12,11 @@ import {
   ReplayRecorder,
   type World,
 } from "@zerosnake/engine";
-import { type BotLife, DEFAULT_OP_BUDGET } from "@zerosnake/sandbox";
-import { type BotInfo, LOG_LIMIT_BYTES } from "@zerosnake/sdk";
+import { type BotLife, DEFAULT_OP_BUDGET, type TickReport, WORK_PER_OP } from "@zerosnake/sandbox";
+import { type BotInfo, type BotState, LOG_LIMIT_BYTES } from "@zerosnake/sdk";
 import { HOUSE_BUNDLES } from "../house-bundles.gen.ts";
 import type { LifeEntry, RosterEntry } from "./store.ts";
+import { TraceRecorder, type TraceState } from "./trace.ts";
 
 /** R2 key (REPLAYS) of a room's replay chunk that starts at `tick`. */
 export function chunkKey(roomId: string, tick: number): string {
@@ -34,6 +35,8 @@ export interface EndedLife {
   killer: RosterEntry | null;
   /** Start tick of the replay chunk that recorded the death. */
   chunkTick: number;
+  /** The life's trace (`trace.ts`); null for house bots. */
+  trace: TraceRecorder | null;
 }
 
 /** Watch mode's hooks (see `backstop.ts`). Normal batches pass none and never await. */
@@ -87,6 +90,8 @@ export interface BatchResult {
 interface Running {
   entry: RosterEntry;
   life: BotLife | null;
+  /** Real lives only (house bots aren't traced). */
+  trace: TraceRecorder | null;
 }
 
 export class RoomSim {
@@ -97,6 +102,7 @@ export class RoomSim {
   /**
    * Resumes a room: `world` and `pending` as saved, `roster` the lives in it. Every bot starts a
    * fresh sandbox life (`init` again, empty memory): QuickJS heaps don't survive an eviction.
+   * `traces` are the saved states of the roster's traces (`traceStates`).
    */
   constructor(
     readonly roomId: string,
@@ -105,6 +111,7 @@ export class RoomSim {
     private readonly sandbox: LifeStarter,
     roster: RosterEntry[],
     chunkTicks?: number,
+    traces: Record<string, TraceState> = {},
   ) {
     this.recorder = new ReplayRecorder(world, {
       onChunk: (bytes, chunk) => {
@@ -114,7 +121,11 @@ export class RoomSim {
       ...(pending ? { pending } : {}),
       ...(chunkTicks ? { chunkTicks } : {}),
     });
-    for (const entry of roster) this.running.set(entry.lifeId, { entry, life: null });
+    for (const entry of roster) {
+      const state = traces[entry.lifeId];
+      const trace = state ? new TraceRecorder(state) : null;
+      this.running.set(entry.lifeId, { entry, life: null, trace });
+    }
   }
 
   /** Lives in the room, spawn order. */
@@ -137,6 +148,13 @@ export class RoomSim {
   /** Start tick of the open replay chunk, or null. */
   get openChunkTick(): number | null {
     return this.recorder.pending?.snapshot.tick ?? null;
+  }
+
+  /** What the room saves of the running lives' traces. */
+  traceStates(): Record<string, TraceState> {
+    const out: Record<string, TraceState> = {};
+    for (const r of this.running.values()) if (r.trace) out[r.entry.lifeId] = r.trace.state;
+    return out;
   }
 
   markLeaving(lifeId: string): void {
@@ -176,6 +194,8 @@ export class RoomSim {
       if (beforeBot) await beforeBot(r.entry.lifeId, "init", world.tick);
       r.life = this.startLife(r.entry);
       if (afterBot) await afterBot();
+      if (r.trace) r.trace.restart(world.tick, r.life);
+      else r.trace = this.startTrace(r.entry, r.life);
     }
     for (const entry of plan.spawns) {
       this.recorder.spawn({ id: entry.lifeId, author: entry.author });
@@ -186,12 +206,13 @@ export class RoomSim {
         leaving: false,
         evicted: false,
       };
-      const r: Running = { entry: spawned, life: null };
+      const r: Running = { entry: spawned, life: null, trace: null };
       this.running.set(entry.lifeId, r);
       result.spawned.push(spawned);
       if (beforeBot) await beforeBot(entry.lifeId, "init", world.tick);
       r.life = this.startLife(spawned);
       if (afterBot) await afterBot();
+      r.trace = this.startTrace(spawned, r.life);
     }
 
     const ended = new Map<string, Running>();
@@ -199,6 +220,8 @@ export class RoomSim {
       if (k > 0 && continueBatch && !continueBatch()) break;
       const actions: Record<string, Action> = {};
       const faults: Record<string, Fault> = {};
+      // Traced once the world steps: an abandoned tick never happened.
+      const calls: { trace: TraceRecorder; seen: BotState; report: TickReport }[] = [];
       for (const snake of world.snakes) {
         const id = snake.id;
         const forced = k === 0 ? plan.faults.get(id) : undefined;
@@ -211,14 +234,17 @@ export class RoomSim {
           result.aborted = true;
           return finish();
         }
-        const report = r.life.tick(buildBotState(world, snake));
+        const seen = buildBotState(world, snake);
+        const report = r.life.tick(seen);
         if (afterBot) await afterBot();
         result.botTicks++;
+        if (r.trace) calls.push({ trace: r.trace, seen, report });
         actions[id] = report.action;
         if (report.death) faults[id] = report.death.fault;
       }
       this.recorder.step(actions, faults);
       result.ticks++;
+      for (const c of calls) c.trace.record(c.seen, c.report);
       const chunkTick = this.recorder.pending?.snapshot.tick ?? world.tick;
       for (const death of world.deaths) {
         const r = this.running.get(death.id);
@@ -229,7 +255,13 @@ export class RoomSim {
         ended.set(death.id, r);
         const killerId = death.killerId;
         const killer = killerId ? (this.running.get(killerId) ?? ended.get(killerId)) : undefined;
-        result.ended.push({ entry: r.entry, death, killer: killer?.entry ?? null, chunkTick });
+        result.ended.push({
+          entry: r.entry,
+          death,
+          killer: killer?.entry ?? null,
+          chunkTick,
+          trace: r.trace,
+        });
       }
     }
     return finish();
@@ -256,6 +288,24 @@ export class RoomSim {
       logLimitBytes: LOG_LIMIT_BYTES,
     });
     return this.sandbox.startLife(botSource(entry), info);
+  }
+
+  private startTrace(entry: RosterEntry, life: BotLife): TraceRecorder | null {
+    if (!entry.versionId) return null;
+    return TraceRecorder.start(
+      {
+        lifeId: entry.lifeId,
+        versionId: entry.versionId,
+        roomId: this.roomId,
+        startTick: entry.startTick,
+        budget: {
+          ops: DEFAULT_OP_BUDGET,
+          work: DEFAULT_OP_BUDGET * WORK_PER_OP,
+          logBytes: LOG_LIMIT_BYTES,
+        },
+      },
+      life,
+    );
   }
 }
 

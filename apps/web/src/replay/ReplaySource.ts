@@ -35,6 +35,7 @@ import type {
   SnakeTick,
   TickSnapshot,
 } from "@zerosnake/viewer";
+import type { TraceTick } from "../shared/trace";
 
 export const KEYFRAME_INTERVAL = 100;
 /** Used when the recorded config has no `visionRadius`. Same as the viewer's default. */
@@ -84,6 +85,8 @@ export class ReplaySource implements MatchSource {
   private readonly cache = new Map<number, TickSnapshot>();
   private readonly foodCache = new Map<number, RenderFood>();
   private cursor: { world: World; tick: number } | undefined;
+  /** Recorded traces by life, then room tick (`setTrace`). */
+  private readonly traces = new Map<string, Map<number, TraceTick>>();
 
   constructor(chunks: readonly Uint8Array[], options: ReplaySourceOptions = {}) {
     let desync: ReplayDesyncError | undefined;
@@ -133,7 +136,22 @@ export class ReplaySource implements MatchSource {
     const i = this.ids[k]?.indexOf(id) ?? -1;
     const input = this.inputs[k];
     if (i < 0 || !input) return undefined;
-    return { action: actionAt(input, i) };
+    const recorded = this.traces.get(id)?.get(tick);
+    if (!recorded) return { action: actionAt(input, i) };
+    return {
+      action: actionAt(input, i),
+      logs: recorded.log,
+      ops: recorded.ops,
+      ...(recorded.logCut && { logTruncated: true }),
+    };
+  }
+
+  /**
+   * Adds what a life's bot logged and spent (its trace, which only its owner gets), so the
+   * viewer's log panel shows it. Ticks the trace downsampled away have no logs.
+   */
+  setTrace(lifeId: string, ticks: readonly TraceTick[]): void {
+    this.traces.set(lifeId, new Map(ticks.map((t) => [t.tick, t])));
   }
 
   lives(): readonly LifeInfo[] {

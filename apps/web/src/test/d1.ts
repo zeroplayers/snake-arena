@@ -33,6 +33,7 @@ export interface TestPlatformEnv {
   DB: D1Database;
   BUNDLES: R2Bucket;
   SOURCES: R2Bucket;
+  TRACES: R2Bucket;
   CHECKS_QUEUE: Queue;
   RATE_LIMIT_IP: RateLimitBinding;
   RATE_LIMIT_AUTH: RateLimitBinding;
@@ -66,6 +67,7 @@ export async function createTestPlatform({
       r2_buckets: [
         { binding: "BUNDLES", bucket_name: "test-bundles" },
         { binding: "SOURCES", bucket_name: "test-sources" },
+        { binding: "TRACES", bucket_name: "test-traces" },
       ],
       queues: { producers: [{ binding: "CHECKS_QUEUE", queue: "test-checks" }] },
       ratelimits: Object.entries(RATE_LIMITS).map(([rule, { binding, limit, period }], i) => ({

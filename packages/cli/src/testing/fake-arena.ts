@@ -54,6 +54,8 @@ export class FakeArena {
   /** `false` = the server has no lives endpoint yet (the site's HTML 404). */
   livesEndpoint = false;
   lives: unknown[] = [];
+  /** Traces by life id (`GET /api/lives/:id/trace`), or an error to answer with. */
+  traces: Record<string, unknown> = {};
   ratings: Record<string, { rating: number; ratingCi: number; ratedLives: number; lives: number }> =
     {};
   requests: { method: string; path: string; headers: Headers; body: unknown }[] = [];
@@ -168,7 +170,8 @@ export class FakeArena {
       });
     }
 
-    if (!path.startsWith("/api/") || !/^\/api\/(me|bots)(\/|$)/.test(path)) return htmlNotFound();
+    if (!path.startsWith("/api/") || !/^\/api\/(me|bots|lives)(\/|$)/.test(path))
+      return htmlNotFound();
     if (!authed) return apiError(401, "unauthorized", "Missing, expired or revoked CLI token.");
 
     if (route === "GET /api/me") {
@@ -198,6 +201,16 @@ export class FakeArena {
       const bot = this.addBot(slug);
       bot.name = name;
       return Response.json(bot, { status: 201 });
+    }
+
+    const trace = /^\/api\/lives\/([^/]+)\/trace$/.exec(path);
+    if (trace && method === "GET") {
+      const id = decodeURIComponent(trace[1] ?? "");
+      const found = this.traces[id];
+      if (found instanceof Response) return found;
+      return found
+        ? Response.json(found)
+        : apiError(404, "life_not_found", `There is no life "${id}".`);
     }
 
     const versions = /^\/api\/bots\/([^/]+)\/versions(?:\/(\d+))?(\/lives)?$/.exec(path);

@@ -38,7 +38,7 @@ export function lifeRow(r: LifeResult): LifeRow | null {
     death_cause: r.deathCause,
     killer: r.killer,
     replay_key: r.replayKey,
-    trace_key: null,
+    trace_key: r.traceKey ?? null,
     started_at: r.startedAt,
     ended_at: r.endedAt,
   };

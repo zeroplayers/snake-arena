@@ -1207,3 +1207,36 @@ button.link-card:hover {
   text-decoration-color: #00ffdd66;
   text-underline-offset: 2px;
 }
+
+/* Replay: the life's trace (death context) */
+
+.trace {
+  padding-top: 24px;
+}
+
+.table.trace-table tr td {
+  vertical-align: top;
+}
+
+.trace-log {
+  margin: 0;
+  max-width: 48ch;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--link);
+  font: inherit;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}

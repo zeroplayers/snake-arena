@@ -34,6 +34,7 @@ export interface Harness {
   restart(): Promise<void>;
   d1(): Promise<D1Database>;
   r2(): Promise<R2Bucket>;
+  traces(): Promise<R2Bucket>;
   dispose(): Promise<void>;
 }
 
@@ -73,6 +74,7 @@ export async function createHarness(): Promise<Harness> {
           env: {
             DB: { type: "d1", id: "test" },
             REPLAYS: { type: "r2", name: "replays" },
+            TRACES: { type: "r2", name: "traces" },
             ROOMS: { type: "durable-object", worker: "arena", exportName: "RoomDO" },
             MATCHMAKER: { type: "durable-object", worker: "arena", exportName: "TestMatchmaker" },
           },
@@ -117,6 +119,7 @@ export async function createHarness(): Promise<Harness> {
     },
     d1: async () => (await mf.getD1Database("DB")) as unknown as D1Database,
     r2: async () => (await mf.getR2Bucket("REPLAYS")) as unknown as R2Bucket,
+    traces: async () => (await mf.getR2Bucket("TRACES")) as unknown as R2Bucket,
     async dispose() {
       await mf.dispose();
       rmSync(dir, { recursive: true, force: true });

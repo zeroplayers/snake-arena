@@ -43,7 +43,7 @@ npx zerosnake status         # active version, rating, lives, deploys left today
 | `npx zerosnake sim --headless`   | The same match as a summary: scores, kills, deaths, ops per tick.    |
 | `npx zerosnake test`             | The server's deploy checks, here. Exit 0 pass, 1 fail.               |
 | `npx zerosnake deploy -m "note"` | Check, upload and wait for the server; a failing bot isn't uploaded. |
-| `npx zerosnake logs`             | A version's check report and recent lives.                           |
+| `npx zerosnake logs [--deaths]`  | Check report, recent lives; with --deaths, why the latest died.      |
 | `npx zerosnake <command> --help` | All the options.                                                     |
 
 About `test`: the seeds of its 5 matches come from your bundle's hash, so every edit plays other

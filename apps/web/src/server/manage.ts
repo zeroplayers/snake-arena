@@ -15,6 +15,16 @@ export const getManagePage = createServerFn({ method: "GET" }).handler(() =>
   getBotAdmin().overview(getRequest()),
 );
 
+export const getOlderVersions = createServerFn({ method: "GET" })
+  .validator(
+    z.object({
+      botId: id,
+      before: z.number().int().min(1),
+      limit: z.number().int().min(1).max(500).optional(),
+    }),
+  )
+  .handler(({ data }) => getBotAdmin().olderVersions(getRequest(), data));
+
 export const createBot = createServerFn({ method: "POST" })
   .validator(z.object({ name, slug: z.string().max(64).optional() }))
   .handler(({ data }) => getBotAdmin().createBot(getRequest(), data));

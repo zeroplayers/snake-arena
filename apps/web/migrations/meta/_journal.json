@@ -29,6 +29,13 @@
       "when": 1793059626313,
       "tag": "0003_bot_management",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1793061971198,
+      "tag": "0004_ratings_stint_change_seq",
+      "breakpoints": true
     }
   ]
 }

@@ -377,7 +377,8 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
   /**
    * Makes the `validating` version, not yet queued. Next `n` and the daily quota in one
    * statement: D1 runs statements one at a time, so concurrent deploys can't take the same `n`
-   * or squeeze past the quota. `undefined` if the quota is used up or the key is taken.
+   * or squeeze past the quota. `undefined` if the quota is used up, the key is taken or the bot
+   * was archived meanwhile (the owner may archive it while the body is still uploading).
    */
   async function insertVersion(
     bot: BotRow,
@@ -397,6 +398,7 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
         'validating', ${keys.bundleKey}, ${keys.sourceKey}, ${meta && JSON.stringify(meta)},
         ${idempotencyKey}, ${createdAt}, ${createdAt}
       WHERE ${quotaUsedSql(ownerId, utcDayStart(now()))} < ${limits.deploysPerDay}
+        AND EXISTS (SELECT 1 FROM ${bots} WHERE id = ${bot.id} AND archived_at IS NULL)
       ON CONFLICT DO NOTHING
       RETURNING n`);
     const n = inserted[0]?.n;
@@ -579,13 +581,15 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
     deploy: (request: Request, botParam: string) =>
       withCli(request, async ({ user }) => {
         const bot = await ownBot(user.id, botParam);
-        if (bot.archivedAt) {
+        const refuseArchived = (row: BotRow) => {
+          if (!row.archivedAt) return;
           fail(409, {
             error: "bot_archived",
-            message: `Bot "${bot.slug}" is archived. Restore it on the site before deploying.`,
-            bot: botInfo(bot),
+            message: `Bot "${row.slug}" is archived. Restore it on the site before deploying.`,
+            bot: botInfo(row),
           });
-        }
+        };
+        refuseArchived(bot);
         const idempotencyKey = request.headers.get("idempotency-key");
         if (idempotencyKey !== null && !IDEMPOTENCY_KEY.test(idempotencyKey)) {
           fail(400, {
@@ -635,7 +639,10 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
           if (settled) return settled;
           const version = await insertVersion(bot, user.id, keys, body.meta, idempotencyKey);
           if (version) return finishDeploy(bot, version, upload, idempotencyKey);
-          // Nothing inserted: the quota is used up, or a concurrent retry took the key.
+          // Nothing inserted: the bot was archived during the upload, the quota is used up, or
+          // a concurrent retry took the key.
+          const [current] = await db.select().from(bots).where(eq(bots.id, bot.id)).limit(1);
+          if (current) refuseArchived(current);
           if (!idempotencyKey || !(await versionByKey(bot.id, idempotencyKey))) {
             quotaExceeded(await quota(user.id));
           }

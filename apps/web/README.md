@@ -144,13 +144,20 @@ also come from the site's origin (`Origin`, or `Sec-Fetch-Site: same-origin`).
 Defined in `src/shared/arena.ts` (`@zerosnake/web/shared`):
 
 - **D1 is the source of truth.** A bot plays its `ready` version, and an archived bot has none.
-  The matchmaker reconciles from D1 at start-up and periodically. Every status change sets
-  `versions.updated_at`, so `WHERE updated_at > ?` is a cheap incremental poll. Before starting
-  a life, check that its version is still `ready`.
+  The matchmaker reconciles from D1 at start-up and periodically. Triggers set
+  `versions.change_seq` to one more than the largest so far on every insert and status change,
+  so `WHERE change_seq > ? ORDER BY change_seq` is a cheap incremental poll that never skips a
+  commit (`updated_at` is the writer's clock before commit, so it can). Before starting a life,
+  check that its version is still `ready`. A trigger aborts any write that would make an archived
+  bot's version `ready`, and the leaderboard leaves archived bots out.
 - **The RPC is a hint.** After each commit the site calls
   `MATCHMAKER.get(idFromName("global")).activeVersionChanged(change)`, a typed
   `ActiveVersionChange` with the bot, new and previous version, and reason. It is best effort:
   2 s timeout, and errors are only logged. `MatchmakerDO` doesn't implement the method yet (#23),
   so for now it only logs.
 - **Ratings** count only lives started at or after `versions.activated_at`, including when a
-  rating is rebuilt from `lives`.
+  rating is rebuilt from `lives`. Writers store that `activated_at` in `ratings.activated_at`; a
+  trigger ignores writes for any other stint, so a rating computed before a rollback can't bring
+  the deleted row back.
+- **Checks consumer** (`src/shared/checks.ts`): when a version passes, it sets
+  `versions.activated_at` and refuses if the bot is archived.

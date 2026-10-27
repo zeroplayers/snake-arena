@@ -13,6 +13,33 @@
  * after which the API marks that version `rejected` ("couldn't be queued"). So the consumer must
  * load the `versions` row first and skip the job if the row is missing or no longer `validating`,
  * and write its result with `WHERE status = 'validating'`.
+ *
+ * Making a version `ready` (checks passed):
+ * - Set `versions.activated_at` to the time it becomes `ready`. Its rating covers lives started
+ *   since then (`src/shared/arena.ts`).
+ * - Refuse if the bot is archived (`bots.archived_at` set): an archived bot never has a `ready`
+ *   version. Archiving rejects the bot's `validating` versions, so the `status = 'validating'`
+ *   guard usually catches it, but check `archived_at` in the same statement too. A trigger
+ *   (`versions_ready_unarchived`) aborts any write that would make an archived bot's version
+ *   `ready`.
+ * - Archive the bot's current `ready` version first, in the same D1 batch (the partial unique
+ *   index `versions_bot_ready_idx` allows one per bot). For example, with `?1` the version id,
+ *   `?2` the bot id and `?3` now (Unix ms):
+ *
+ *   ```sql
+ *   UPDATE versions SET status = 'archived', updated_at = ?3
+ *   WHERE bot_id = ?2 AND status = 'ready'
+ *     AND EXISTS (SELECT 1 FROM versions WHERE id = ?1 AND status = 'validating')
+ *     AND (SELECT archived_at FROM bots WHERE id = ?2) IS NULL;
+ *   UPDATE versions SET status = 'ready', activated_at = ?3, report = ?4, updated_at = ?3
+ *   WHERE id = ?1 AND status = 'validating'
+ *     AND (SELECT archived_at FROM bots WHERE id = ?2) IS NULL
+ *   RETURNING id;
+ *   ```
+ *
+ *   If the second statement returns no row, the version is no longer `validating` or the bot is
+ *   archived: the job is done either way. Use `RETURNING`, not `meta.changes`: D1 also counts the
+ *   rows triggers change (`versions.change_seq`, migration 0004).
  */
 export interface CheckJob {
   /** Message shape version; bumped on incompatible changes. */

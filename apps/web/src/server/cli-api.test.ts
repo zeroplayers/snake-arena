@@ -15,6 +15,7 @@ import {
 import { createTestPlatform, type TestPlatformEnv } from "../test/d1";
 import { CookieJar, mockGithub } from "../test/github";
 import { createAuth } from "./auth";
+import { createBotAdmin } from "./bot-admin";
 import { type CliApiOptions, createCliApi, sourcePathProblem } from "./cli-api";
 import { hashToken } from "./cli-auth";
 
@@ -425,6 +426,50 @@ describe("POST /api/bots", () => {
     expect((await me(token)).bots.find((b) => b.id === archived.id)).toMatchObject({
       archived: true,
     });
+  });
+
+  it("refuses a deploy whose bot is archived while the body is still uploading", async () => {
+    const { token, userId } = await cliUser();
+    const bot = await createBot(token, "a");
+    const site = createBotAdmin(
+      { DB: env.DB, BETTER_AUTH_URL: BASE },
+      { getSession: async () => ({ user: { id: userId } }), now: () => clock },
+    );
+    const bytes = new TextEncoder().encode(JSON.stringify(deployBody()));
+    let archived: Awaited<ReturnType<typeof site.archiveBot>> | undefined;
+    // Pulled only when the handler reads the body, after its own `archived_at` check: the
+    // owner archives the bot on the site mid-upload.
+    const body = new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          archived = await site.archiveBot(
+            new Request(`${BASE}/_serverFn/archiveBot`, {
+              method: "POST",
+              headers: { origin: BASE },
+            }),
+            { botId: bot.id },
+          );
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const res = await api().deploy(
+      new Request(`${BASE}/api/bots/a/versions`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body,
+        duplex: "half",
+      } as RequestInit),
+      "a",
+    );
+
+    expect(archived).toMatchObject({ ok: true });
+    await expectError(res, 409, "bot_archived");
+    expect(await versionCount()).toBe(0);
+    expect(sent).toEqual([]);
+    expect((await me(token)).quota.deploysToday).toBe(0);
   });
 });
 

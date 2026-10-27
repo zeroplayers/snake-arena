@@ -473,7 +473,7 @@ describe("rollback", () => {
     expect(activated).toEqual({ activated_at: clock.getTime(), updated_at: clock.getTime() });
 
     const bot = await managed(ada, botId);
-    expect(bot.activeVersion).toEqual({ id: v1, n: 1 });
+    expect(bot.activeVersion).toMatchObject({ id: v1, n: 1, status: "ready", rating: null });
     expect(bot.versions.find((v) => v.n === 1)).toMatchObject({ rating: null, canActivate: false });
     expect(bot.versions.find((v) => v.n === 2)).toMatchObject({ canActivate: true });
   });
@@ -574,6 +574,148 @@ describe("archiving the active version", () => {
   });
 });
 
+// ─── Arena writers (src/shared/checks.ts, src/shared/arena.ts) ──────────────────────────────────
+
+describe("arena writers", () => {
+  /** The upsert `src/shared/arena.ts` tells rating writers to use. */
+  async function writeRating(versionId: string, activatedAt: number | null, mean: number) {
+    const { results } = await d1.db
+      .prepare(
+        `INSERT INTO ratings (version_id, activated_at, mean, ci, n_lives, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT (version_id) DO UPDATE SET activated_at = excluded.activated_at,
+           mean = excluded.mean, ci = excluded.ci, n_lives = excluded.n_lives,
+           updated_at = excluded.updated_at
+         RETURNING version_id`,
+      )
+      .bind(versionId, activatedAt, mean, 3, 40, clock.getTime())
+      .all();
+    return results.length > 0;
+  }
+
+  const rating = (versionId: string) =>
+    d1.db
+      .prepare("SELECT mean, activated_at FROM ratings WHERE version_id = ?")
+      .bind(versionId)
+      .first<{ mean: number; activated_at: number | null }>();
+
+  it("can't bring back a rating computed before a rollback", async () => {
+    const ada = await signUp("ada");
+    const botId = (await createBot(ada, "a")).id;
+    const v1 = await addVersion(botId, 1, "archived");
+    await addVersion(botId, 2, "ready");
+    // v1's first stint, rated by a writer that read `activated_at` = `firstStint`.
+    const firstStint = clock.getTime() - 3_600_000;
+    await d1.db
+      .prepare("UPDATE versions SET activated_at = ? WHERE id = ?")
+      .bind(firstStint, v1)
+      .run();
+    expect(await writeRating(v1, firstStint, 90)).toBe(true);
+
+    ok(await admin().activateVersion(req(ada), { versionId: v1 }));
+    expect(await rating(v1)).toBeNull();
+    // A late write from the first stint, even without `activated_at`, changes nothing.
+    expect(await writeRating(v1, firstStint, 95)).toBe(false);
+    expect(await writeRating(v1, null, 95)).toBe(false);
+    expect(await rating(v1)).toBeNull();
+
+    // The new stint's writes land, and a stale one can't overwrite them either.
+    expect(await writeRating(v1, clock.getTime(), 50)).toBe(true);
+    expect(await writeRating(v1, firstStint, 95)).toBe(false);
+    await d1.db
+      .prepare("UPDATE ratings SET activated_at = ? WHERE version_id = ?")
+      .bind(firstStint, v1)
+      .run();
+    expect(await rating(v1)).toEqual({ mean: 50, activated_at: clock.getTime() });
+  });
+
+  it("numbers inserts and status changes in commit order for the matchmaker's poll", async () => {
+    const ada = await signUp("ada");
+    const botId = (await createBot(ada, "a")).id;
+    const poll = async (cursor: number) =>
+      (
+        await d1.db
+          .prepare(
+            `SELECT id, bot_id, status, change_seq FROM versions
+             WHERE change_seq > ?1 ORDER BY change_seq LIMIT 500`,
+          )
+          .bind(cursor)
+          .all<{ id: string; status: Status; change_seq: number }>()
+      ).results;
+
+    const v1 = await addVersion(botId, 1, "archived");
+    const v2 = await addVersion(botId, 2, "ready");
+    const first = await poll(0);
+    expect(first.map((r) => [r.id, r.status])).toEqual([
+      [v1, "archived"],
+      [v2, "ready"],
+    ]);
+    const cursor = first.at(-1)?.change_seq ?? 0;
+
+    // Other columns don't count as changes.
+    await d1.db.prepare("UPDATE versions SET enqueued_at = 1 WHERE id = ?").bind(v1).run();
+    expect(await poll(cursor)).toEqual([]);
+
+    ok(await admin().activateVersion(req(ada), { versionId: v1 }));
+    // The rollback archives v2, then readies v1, in one batch.
+    const next = await poll(cursor);
+    expect(next.map((r) => [r.id, r.status])).toEqual([
+      [v2, "archived"],
+      [v1, "ready"],
+    ]);
+    expect(next.map((r) => r.change_seq)).toEqual([cursor + 1, cursor + 2]);
+  });
+
+  /** The checks consumer's "make it `ready`" batch from `src/shared/checks.ts`. */
+  async function passChecks(versionId: string, botId: string) {
+    const at = clock.getTime();
+    const [, readied] = await d1.db.batch([
+      d1.db
+        .prepare(
+          `UPDATE versions SET status = 'archived', updated_at = ?3
+           WHERE bot_id = ?2 AND status = 'ready'
+             AND EXISTS (SELECT 1 FROM versions WHERE id = ?1 AND status = 'validating')
+             AND (SELECT archived_at FROM bots WHERE id = ?2) IS NULL`,
+        )
+        .bind(versionId, botId, at),
+      d1.db
+        .prepare(
+          `UPDATE versions SET status = 'ready', activated_at = ?3, report = ?4, updated_at = ?3
+           WHERE id = ?1 AND status = 'validating'
+             AND (SELECT archived_at FROM bots WHERE id = ?2) IS NULL
+           RETURNING id`,
+        )
+        .bind(versionId, botId, at, JSON.stringify({ ok: true, checks: [] })),
+    ]);
+    return (readied?.results.length ?? 0) > 0;
+  }
+
+  it("lets the checks consumer ready a version, with activated_at, but never on an archived bot", async () => {
+    const ada = await signUp("ada");
+    const botId = (await createBot(ada, "a")).id;
+    await addVersion(botId, 1, "ready");
+    const v2 = await addVersion(botId, 2, "validating");
+    expect(await passChecks(v2, botId)).toBe(true);
+    expect(await statuses(botId)).toEqual({ 1: "archived", 2: "ready" });
+    expect(
+      await d1.db.prepare("SELECT activated_at FROM versions WHERE id = ?").bind(v2).first(),
+    ).toEqual({ activated_at: clock.getTime() });
+
+    const v3 = await addVersion(botId, 3, "validating");
+    // An archived bot with a version still `validating` (archiving rejects them; this one
+    // slipped past, say an older deploy path).
+    await d1.db.prepare("UPDATE bots SET archived_at = 1 WHERE id = ?").bind(botId).run();
+    await d1.db.prepare("UPDATE versions SET status = 'archived' WHERE id = ?").bind(v2).run();
+    expect(await passChecks(v3, botId)).toBe(false);
+    expect(await statuses(botId)).toEqual({ 1: "archived", 2: "archived", 3: "validating" });
+    // And a writer that forgets the guard is stopped by the trigger.
+    await expect(
+      d1.db.prepare("UPDATE versions SET status = 'ready' WHERE id = ?").bind(v3).run(),
+    ).rejects.toThrow(/bot is archived/);
+    expect(await readyVersions(botId)).toEqual([]);
+  });
+});
+
 // ─── Overview ────────────────────────────────────────────────────────────────────────────────────
 
 describe("overview", () => {
@@ -621,6 +763,52 @@ describe("overview", () => {
         problems: ["Fixed seeds: seed 3: exceeded the op budget at tick 412"],
       },
     ]);
+  });
+
+  it("keeps an old active version in reach and pages through older versions", async () => {
+    const ada = await signUp("ada");
+    const botId = (await createBot(ada, "a")).id;
+    const ids: string[] = [];
+    // v3 is active, with 22 newer versions (checks failed or still running) after it.
+    for (let n = 1; n <= 25; n++) {
+      const status: Status =
+        n === 3 ? "ready" : n < 3 ? "archived" : n % 2 ? "rejected" : "validating";
+      ids.push(await addVersion(botId, n, status, n === 3 ? { rating: { mean: 70, ci: 6 } } : {}));
+    }
+
+    const page = await overview(ada);
+    expect(page.versionsPerPage).toBe(20);
+    const bot = await managed(ada, botId);
+    expect(bot.versionCount).toBe(25);
+    expect(bot.versions.map((v) => v.n)).toEqual(Array.from({ length: 20 }, (_, i) => 25 - i));
+    expect(bot.activeVersion).toMatchObject({
+      id: ids[2],
+      n: 3,
+      status: "ready",
+      rating: { mean: 70, ci: 6, nLives: 40 },
+      canActivate: false,
+    });
+
+    const older = ok(await admin().olderVersions(req(ada), { botId, before: 6 }));
+    expect(older.versions.map((v) => [v.n, v.status, v.canActivate])).toEqual([
+      [5, "rejected", false],
+      [4, "validating", false],
+      [3, "ready", false],
+      [2, "archived", true],
+      [1, "archived", true],
+    ]);
+    expect(older.hasMore).toBe(false);
+    const first = ok(await admin().olderVersions(req(ada), { botId, before: 6, limit: 2 }));
+    expect(first).toMatchObject({ hasMore: true, versions: [{ n: 5 }, { n: 4 }] });
+
+    // An old version can still be made active, and the new active one shows up.
+    ok(await admin().activateVersion(req(ada), { versionId: ids[0] as string }));
+    expect((await managed(ada, botId)).activeVersion).toMatchObject({ n: 1, status: "ready" });
+
+    // Only the owner's bots.
+    const bob = await signUp("bob");
+    expectError(await admin().olderVersions(req(bob), { botId, before: 6 }), "bot_not_found");
+    expectError(await admin().olderVersions(req(null), { botId, before: 6 }), "unauthorized");
   });
 });
 

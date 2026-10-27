@@ -79,6 +79,9 @@ export function leaderboardQuery(db: Db, { limit = 50, offset = 0 }: Leaderboard
       and(
         eq(versions.id, ratings.versionId),
         eq(versions.status, "ready"),
+        // Never true together with `ready` (archiving a bot archives its versions), but the
+        // leaderboard must not depend on every writer keeping that up.
+        isNull(bots.archivedAt),
         gte(ratings.nLives, RANKED_MIN_LIVES),
       ),
     )

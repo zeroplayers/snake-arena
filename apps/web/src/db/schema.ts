@@ -216,10 +216,19 @@ export const versions = sqliteTable(
      * `src/server/bot-admin.ts`). `null` if it hasn't been `ready` since migration 0003.
      */
     activatedAt: integer("activated_at", { mode: "timestamp_ms" }),
+    /**
+     * Position in the order of status changes, for the matchmaker's incremental poll
+     * (`src/shared/arena.ts`): set to one more than the largest so far when a row is inserted or
+     * its `status` changes. Kept by triggers (migration `0004_ratings_stint_change_seq`); writers
+     * need do nothing. D1 runs one write transaction at a time, so it grows in commit order,
+     * unlike `updated_at`.
+     */
+    changeSeq: integer("change_seq").notNull().default(0),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [
+    index("versions_change_seq_idx").on(t.changeSeq),
     // Bot page: versions newest first. No index on `status` alone: it would steer the
     // leaderboard query away from `ratings_rank_idx`.
     uniqueIndex("versions_bot_n_idx").on(t.botId, t.n),
@@ -313,6 +322,13 @@ export const ratings = sqliteTable(
     /** Half-width of the 95% confidence interval around `mean`. */
     ci: real("ci").notNull(),
     nLives: integer("n_lives").notNull(),
+    /**
+     * The `versions.activated_at` of the stint this rating covers. A trigger (migration
+     * `0004_ratings_stint_change_seq`) ignores inserts and updates whose `activated_at` isn't the
+     * version's current one, so a writer that read the version before a rollback can't bring the
+     * old rating back (`src/shared/arena.ts`).
+     */
+    activatedAt: integer("activated_at", { mode: "timestamp_ms" }),
     /**
      * `mean - ci`, the leaderboard's sort key (as in `@zerosnake/rating`'s `leaderboard()`): a
      * lucky 30-life mean doesn't outrank a better bot with a tighter interval. Generated, so

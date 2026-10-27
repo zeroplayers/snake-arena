@@ -27,7 +27,7 @@
  *
  * After each change of the active version the matchmaker is told (`src/shared/arena.ts`).
  */
-import { and, desc, eq, inArray, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, type SQL, sql } from "drizzle-orm";
 import { SQLiteAsyncDialect } from "drizzle-orm/sqlite-core";
 import { createDb, type Db } from "../db";
 import { activations, bots, ratings, versions } from "../db/schema";
@@ -71,8 +71,10 @@ export interface BotAdminLimits {
   livesPerBotPerDay: number;
 }
 
-/** Versions listed per bot, newest first. */
+/** Versions listed per bot, newest first, and per page of older ones (`olderVersions`). */
 export const MANAGED_VERSIONS = 20;
+/** The most older versions one `olderVersions` call returns. */
+export const MAX_VERSIONS_PAGE = 500;
 /** Rejected versions listed with their reports. */
 export const RECENT_REJECTED = 10;
 
@@ -137,12 +139,20 @@ export interface ManagedBot {
   slug: string;
   createdAt: string;
   archivedAt: string | null;
-  activeVersion: { id: string; n: number } | null;
+  /** The `ready` version, however old (it may not be among `versions`). */
+  activeVersion: ManagedVersion | null;
   /** Lives started since 00:00 UTC, all versions. */
   livesToday: number;
   versionCount: number;
-  /** The latest `MANAGED_VERSIONS`. */
+  /** The latest `MANAGED_VERSIONS`; `olderVersions` pages through the rest. */
   versions: ManagedVersion[];
+}
+
+export interface VersionsPage {
+  /** Newest first, all older than the `before` asked for. */
+  versions: ManagedVersion[];
+  /** Whether there are older ones still. */
+  hasMore: boolean;
 }
 
 export interface RejectedVersion {
@@ -162,6 +172,8 @@ export interface ManagePage {
   activeBots: number;
   quota: QuotaInfo;
   limits: BotAdminLimits;
+  /** `MANAGED_VERSIONS`: versions per bot on the page, and per `olderVersions` page. */
+  versionsPerPage: number;
   rejected: RejectedVersion[];
 }
 
@@ -212,6 +224,27 @@ const positiveInt = (value: string | undefined) => {
 };
 
 type BotRow = typeof bots.$inferSelect;
+type VersionRow = typeof versions.$inferSelect;
+type RatingRow = typeof ratings.$inferSelect;
+
+function managedVersion(
+  bot: Pick<BotRow, "archivedAt">,
+  v: VersionRow,
+  rating: RatingRow | null,
+): ManagedVersion {
+  return {
+    id: v.id,
+    n: v.n,
+    status: v.status,
+    createdAt: v.createdAt.toISOString(),
+    activatedAt: v.activatedAt?.toISOString() ?? null,
+    lives: v.livesCount,
+    rating: rating && { mean: rating.mean, ci: rating.ci, nLives: rating.nLives },
+    message: v.meta?.message ?? null,
+    problems: v.status === "rejected" ? checkReportLines(v.report) : [],
+    canActivate: v.status === "archived" && bot.archivedAt === null,
+  };
+}
 
 /**
  * Creates a bot if the owner has fewer than `limit` active bots. One statement, so concurrent
@@ -392,31 +425,29 @@ export function createBotAdmin(env: BotAdminEnv, options: BotAdminOptions) {
               )
               .orderBy(desc(versions.n))
           : [];
+        // Separately, since the active version may be older than the latest `MANAGED_VERSIONS`.
+        const activeRows = botIds.length
+          ? await db
+              .select({ version: versions, rating: ratings })
+              .from(versions)
+              .leftJoin(ratings, eq(ratings.versionId, versions.id))
+              .where(and(inArray(versions.botId, botIds), eq(versions.status, "ready")))
+          : [];
 
         const managedBots = botRows.map(({ bot, livesToday, versionCount }): ManagedBot => {
-          const own = versionRows.filter((r) => r.version.botId === bot.id);
-          const active = own.find((r) => r.version.status === "ready")?.version;
+          const active = activeRows.find((r) => r.version.botId === bot.id);
           return {
             id: bot.id,
             name: bot.name,
             slug: bot.slug,
             createdAt: bot.createdAt.toISOString(),
             archivedAt: bot.archivedAt?.toISOString() ?? null,
-            activeVersion: active ? { id: active.id, n: active.n } : null,
+            activeVersion: active ? managedVersion(bot, active.version, active.rating) : null,
             livesToday,
             versionCount,
-            versions: own.map(({ version: v, rating }) => ({
-              id: v.id,
-              n: v.n,
-              status: v.status,
-              createdAt: v.createdAt.toISOString(),
-              activatedAt: v.activatedAt?.toISOString() ?? null,
-              lives: v.livesCount,
-              rating: rating && { mean: rating.mean, ci: rating.ci, nLives: rating.nLives },
-              message: v.meta?.message ?? null,
-              problems: v.status === "rejected" ? checkReportLines(v.report) : [],
-              canActivate: v.status === "archived" && bot.archivedAt === null,
-            })),
+            versions: versionRows
+              .filter((r) => r.version.botId === bot.id)
+              .map((r) => managedVersion(bot, r.version, r.rating)),
           };
         });
 
@@ -444,6 +475,7 @@ export function createBotAdmin(env: BotAdminEnv, options: BotAdminOptions) {
           activeBots: botRows.filter((r) => r.bot.archivedAt === null).length,
           quota: await quota(userId),
           limits,
+          versionsPerPage: MANAGED_VERSIONS,
           rejected: rejectedRows.map(({ bot, version }) => ({
             botId: bot.id,
             botName: bot.name,
@@ -453,6 +485,27 @@ export function createBotAdmin(env: BotAdminEnv, options: BotAdminOptions) {
             createdAt: version.createdAt.toISOString(),
             problems: checkReportLines(version.report),
           })),
+        };
+      }),
+
+    /** A bot's versions older than `before` (a version number), newest first. */
+    olderVersions: (
+      request: Request,
+      input: { botId: string; before: number; limit?: number | undefined },
+    ) =>
+      run(request, { mutation: false }, async (userId): Promise<VersionsPage> => {
+        const bot = await ownBot(userId, input.botId);
+        const limit = Math.min(Math.max(1, input.limit ?? MANAGED_VERSIONS), MAX_VERSIONS_PAGE);
+        const rows = await db
+          .select({ version: versions, rating: ratings })
+          .from(versions)
+          .leftJoin(ratings, eq(ratings.versionId, versions.id))
+          .where(and(eq(versions.botId, bot.id), lt(versions.n, input.before)))
+          .orderBy(desc(versions.n))
+          .limit(limit + 1);
+        return {
+          versions: rows.slice(0, limit).map((r) => managedVersion(bot, r.version, r.rating)),
+          hasMore: rows.length > limit,
         };
       }),
 

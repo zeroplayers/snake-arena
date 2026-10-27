@@ -1,5 +1,5 @@
 import { createFileRoute, Link, redirect, useRouter } from "@tanstack/react-router";
-import { type FormEvent, Fragment, useState } from "react";
+import { type FormEvent, Fragment, useCallback, useEffect, useState } from "react";
 import { formatDate, formatDateTime, formatRating } from "../components/format";
 import { Empty, PageError, PagePending } from "../components/PageState";
 import type { AdminResult, ManagedBot, ManagedVersion, ManagePage } from "../server/bot-admin";
@@ -9,6 +9,7 @@ import {
   archiveVersion,
   createBot,
   getManagePage,
+  getOlderVersions,
   renameBot,
   restoreBot,
 } from "../server/manage";
@@ -63,7 +64,9 @@ function useAction() {
     }
   }
 
-  return { act, busy, notice };
+  const report = useCallback((text: string) => setNotice({ kind: "error", text }), []);
+
+  return { act, busy, notice, report };
 }
 
 type Action = ReturnType<typeof useAction>;
@@ -244,6 +247,10 @@ function BotPanel({ bot, page, action }: { bot: ManagedBot; page: ManagePage; ac
   const [name, setName] = useState(bot.name);
   const left = page.quota.deploysPerDay - page.quota.deploysToday;
   const current = bot.activeVersion;
+  const older = useOlderVersions(bot, page.versionsPerPage, action);
+  const listed = [...bot.versions, ...older.versions];
+  // The active version stays in reach however many versions came after it.
+  const rows = current && !listed.some((v) => v.id === current.id) ? [current, ...listed] : listed;
 
   async function rename(event: FormEvent) {
     event.preventDefault();
@@ -381,7 +388,7 @@ function BotPanel({ bot, page, action }: { bot: ManagedBot; page: ManagePage; ac
         </span>
       </p>
 
-      {bot.versions.length === 0 ? (
+      {rows.length === 0 ? (
         <Empty>
           No versions yet. <code>npx zerosnake deploy</code> uploads the first one.
         </Empty>
@@ -399,7 +406,7 @@ function BotPanel({ bot, page, action }: { bot: ManagedBot; page: ManagePage; ac
               </tr>
             </thead>
             <tbody>
-              {bot.versions.map((v) => {
+              {rows.map((v) => {
                 const details = v.message !== null || v.problems.length > 0;
                 const rowClass = [v.status === "ready" && "selected", details && "has-details"]
                   .filter(Boolean)
@@ -438,13 +445,65 @@ function BotPanel({ bot, page, action }: { bot: ManagedBot; page: ManagePage; ac
           </table>
         </div>
       )}
-      {bot.versionCount > bot.versions.length && (
+      {older.hasMore && (
         <p className="muted small">
-          The latest {bot.versions.length} of {bot.versionCount} versions.
+          The latest {listed.length} of {bot.versionCount} versions.{" "}
+          <button
+            type="button"
+            className="button ghost small"
+            disabled={older.loading}
+            onClick={older.more}
+          >
+            Show older
+          </button>
         </p>
       )}
     </section>
   );
+}
+
+/**
+ * Older versions than the first page, loaded on demand, `perPage` at a time. Reloaded
+ * (as many as were shown) whenever the page data is, so statuses stay current after an action.
+ */
+function useOlderVersions(bot: ManagedBot, perPage: number, action: Action) {
+  const [wanted, setWanted] = useState(0);
+  const [versions, setVersions] = useState<ManagedVersion[]>([]);
+  const [hasMore, setHasMore] = useState(bot.versionCount > bot.versions.length);
+  const [loading, setLoading] = useState(false);
+  const before = bot.versions.at(-1)?.n;
+
+  useEffect(() => {
+    if (wanted === 0 || before === undefined) {
+      setVersions([]);
+      setHasMore(bot.versionCount > bot.versions.length);
+      return;
+    }
+    let live = true;
+    setLoading(true);
+    getOlderVersions({ data: { botId: bot.id, before, limit: wanted } })
+      .then((result) => {
+        if (!live) return;
+        if (result.ok) {
+          setVersions(result.value.versions);
+          setHasMore(result.value.hasMore);
+        } else {
+          action.report(result.message);
+        }
+      })
+      .catch(() => live && action.report("Couldn't load older versions. Try again."))
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [bot, before, wanted, action.report]);
+
+  return {
+    versions,
+    hasMore,
+    loading,
+    more: () => setWanted((n) => n + perPage),
+  };
 }
 
 function RejectedReports({ page }: { page: ManagePage }) {

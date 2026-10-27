@@ -75,13 +75,19 @@ export class TestMatchmaker extends DurableObject<Env> implements MatchmakerRpc 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL,
+        room TEXT);
       CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, json TEXT);
     `);
   }
 
-  async offer(ticket: LifeTicket): Promise<void> {
-    this.ctx.storage.sql.exec("INSERT INTO tickets (json) VALUES (?)", JSON.stringify(ticket));
+  /** Queues a ticket for any room, or only for `roomId`. */
+  async offer(ticket: LifeTicket, roomId: string | null = null): Promise<void> {
+    this.ctx.storage.sql.exec(
+      "INSERT INTO tickets (json, room) VALUES (?, ?)",
+      JSON.stringify(ticket),
+      roomId,
+    );
   }
 
   async events(): Promise<MatchmakerEvent[]> {
@@ -97,7 +103,10 @@ export class TestMatchmaker extends DurableObject<Env> implements MatchmakerRpc 
   }): Promise<LifeTicket | null> {
     this.record("nextLife", request);
     const rows = this.ctx.storage.sql
-      .exec<{ seq: number; json: string }>("SELECT seq, json FROM tickets ORDER BY seq")
+      .exec<{ seq: number; json: string }>(
+        "SELECT seq, json FROM tickets WHERE room IS NULL OR room = ? ORDER BY seq",
+        request.roomId,
+      )
       .toArray();
     for (const row of rows) {
       const ticket = JSON.parse(row.json) as LifeTicket;

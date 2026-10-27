@@ -271,6 +271,34 @@ describe("RoomDO", () => {
   }, 60_000);
 });
 
+/**
+ * Runs batches until the room is `ticks` past where it is (it stays open: tests keep honest lives
+ * queued for it). Fails instead of spinning if it doesn't get there.
+ */
+async function advance(name: string, ticks: number, max = 100): Promise<RoomStatus> {
+  let s = await h.room<RoomStatus>(name, "runBatch");
+  const target = s.tick + ticks;
+  for (let i = 0; s.tick < target; i++) {
+    if (s.state !== "running" || i >= max) {
+      throw new Error(`room ${name} stopped at tick ${s.tick} (${s.state}), wanted ${target}`);
+    }
+    s = await h.room<RoomStatus>(name, "runBatch");
+  }
+  return s;
+}
+
+/** Honest lives queued for room `name` only, so it never runs out of real lives and closes. */
+async function spares(name: string, n: number): Promise<void> {
+  for (let i = 0; i < n; i++) {
+    await h.call(
+      "matchmaker",
+      "offer",
+      await ticket(`${name}-spare${i}`, house.medium as string),
+      name,
+    );
+  }
+}
+
 /** Lives the room reported to the matchmaker as `evicted`. */
 async function evictedLives(): Promise<LifeResult[]> {
   return (await events())
@@ -294,7 +322,8 @@ describe("RoomDO backstop", () => {
     // Short replay chunks, so the evicted life's chunk reaches R2 within the test.
     await startRoom("backstop", [evil, ...others], { limits: { ...limits, chunkTicks: 100 } });
     // Its second life, for when the first is evicted.
-    await h.call("matchmaker", "offer", { ...evil, lifeId: "life-mallory-2" });
+    await h.call("matchmaker", "offer", { ...evil, lifeId: "life-mallory-2" }, "backstop");
+    await spares("backstop", 3);
 
     // A normal batch dies (nobody to name), then every watched rerun dies in its call.
     const first = await drive("backstop", (s) => s.evictions.length > 0, { max: 200 });
@@ -318,9 +347,7 @@ describe("RoomDO backstop", () => {
     ).toEqual({ ok: false, reason: "quarantined" });
 
     // The room goes on with the others.
-    let s = await h.room<RoomStatus>("backstop", "runBatch");
-    const from = s.tick;
-    while (s.tick < from + 50) s = await h.room<RoomStatus>("backstop", "runBatch");
+    let s = await advance("backstop", 50);
     expect(s.snakes.map((x) => x.lifeId)).not.toContain("life-mallory-2");
     expect(s.incidents).toHaveLength(1 + 2 * KILLS_TO_EVICT);
 
@@ -360,7 +387,8 @@ describe("RoomDO backstop", () => {
       ticket("wes", house.medium as string),
     ]);
     await startRoom("neighbours", [fickle, ...others], { limits });
-    await h.call("matchmaker", "offer", { ...fickle, lifeId: "life-uma-2" });
+    await h.call("matchmaker", "offer", { ...fickle, lifeId: "life-uma-2" }, "neighbours");
+    await spares("neighbours", 3);
 
     const { kills, s } = await drive("neighbours", (s) => s.quarantined.length > 0, { max: 300 });
     expect(kills).toBe(1 + 2 * KILLS_TO_EVICT);
@@ -368,9 +396,7 @@ describe("RoomDO backstop", () => {
     expect(s.quarantined).toEqual([fickle.versionId]);
 
     // And the room makes progress.
-    let after = await h.room<RoomStatus>("neighbours", "runBatch");
-    const from = after.tick;
-    while (after.tick < from + 100) after = await h.room<RoomStatus>("neighbours", "runBatch");
+    const after = await advance("neighbours", 100);
     expect(after.incidents).toHaveLength(kills);
     expect(after.snakes.map((x) => x.lifeId)).not.toContain("life-uma-2");
   }, 240_000);
@@ -405,15 +431,15 @@ describe("RoomDO backstop", () => {
       await h.restart();
       await sleep(1500);
     }
-    let s = await h.room<RoomStatus>("storm", "runBatch");
+    const s = await h.room<RoomStatus>("storm", "runBatch");
     expect(s.incidents.filter((i) => i.outcome !== "restart").length).toBeGreaterThan(20);
     expect(s.evictions).toEqual([]);
     expect(s.quarantined).toEqual([]);
     const evicted = await evictedLives();
     expect(evicted.filter((l) => honest.some((t) => t.lifeId === l.lifeId))).toEqual([]);
     // The room goes on.
-    const from = s.tick;
-    while (s.tick < from + 100) s = await h.room<RoomStatus>("storm", "runBatch");
+    await spares("storm", 2);
+    await advance("storm", 100);
   }, 300_000);
 
   it("counts nothing when the room is restarted twice in a row (no CPU-limit evidence)", async () => {

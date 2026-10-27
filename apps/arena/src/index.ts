@@ -1,4 +1,4 @@
-import { type CheckJob, handleChecks } from "./checks";
+import { type CheckJob, handleChecks, reapStaleVersions } from "./checks";
 
 export { MatchmakerDO } from "./matchmaker";
 export { RoomDO } from "./room";
@@ -18,4 +18,8 @@ export default {
   },
 
   queue: handleChecks,
+
+  async scheduled(_controller, env) {
+    await reapStaleVersions(env);
+  },
 } satisfies ExportedHandler<Env, CheckJob>;

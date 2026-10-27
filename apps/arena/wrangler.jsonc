@@ -27,6 +27,8 @@
     { "binding": "REPLAYS", "bucket_name": "zerosnake-dev-replays" },
     { "binding": "TRACES", "bucket_name": "zerosnake-dev-traces" }
   ],
+  // Checks consumer (src/checks.ts): one job per batch, as each holds a sandbox of up to 64 MiB.
+  // After the last retry a job goes to the DLQ, whose consumer rejects the version.
   "queues": {
     "producers": [{ "binding": "CHECKS_QUEUE", "queue": "zerosnake-dev-checks" }],
     "consumers": [
@@ -34,8 +36,11 @@
         "queue": "zerosnake-dev-checks",
         "max_batch_size": 1,
         "max_retries": 3,
+        "retry_delay": 10,
         "dead_letter_queue": "zerosnake-dev-checks-dlq"
-      }
+      },
+      // Jobs out of retries (CPU limit, or R2/D1 errors): their versions are rejected.
+      { "queue": "zerosnake-dev-checks-dlq", "max_batch_size": 10 }
     ]
   },
   "durable_objects": {
@@ -44,6 +49,8 @@
       { "name": "ROOMS", "class_name": "RoomDO" }
     ]
   },
+  // Rejects versions whose check job was lost (`reapStaleVersions`). Inherited by environments.
+  "triggers": { "crons": ["*/30 * * * *"] },
 
   "env": {
     "staging": {
@@ -70,8 +77,11 @@
             "queue": "zerosnake-staging-checks",
             "max_batch_size": 1,
             "max_retries": 3,
+            "retry_delay": 10,
             "dead_letter_queue": "zerosnake-staging-checks-dlq"
-          }
+          },
+          // Jobs out of retries (CPU limit, or R2/D1 errors): their versions are rejected.
+          { "queue": "zerosnake-staging-checks-dlq", "max_batch_size": 10 }
         ]
       },
       "durable_objects": {

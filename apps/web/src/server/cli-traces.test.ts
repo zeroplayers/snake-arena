@@ -127,7 +127,7 @@ describe("GET /api/lives/:id/trace", () => {
     const res = await trace("life-ada-1", ada);
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
-    expect(await res.json()).toEqual({ ...TRACE, killerName: "@bob/snake v1" });
+    expect(await res.json()).toEqual({ ...TRACE, killerName: "@bob/snake v1", hasReplay: true });
   });
 
   it("refuses everyone else", async () => {
@@ -147,6 +147,23 @@ describe("GET /api/lives/:id/trace", () => {
     expect(await codes("nope")).toEqual([404, "life_not_found"]);
     expect(await codes("life-ada-2")).toEqual([404, "trace_not_found"]);
     expect(await codes("life-ada-3")).toEqual([410, "trace_expired"]);
+  });
+
+  it("says when the life's replay expired (replays are kept 2 days, traces 7)", async () => {
+    const expire = (at: number | null) =>
+      env.DB.prepare("UPDATE lives SET replay_expired_at = ? WHERE id = 'life-ada-1'")
+        .bind(at)
+        .run();
+    await expire(1);
+    try {
+      expect(await (await trace("life-ada-1", ada)).json()).toMatchObject({ hasReplay: false });
+      const res = await api().listLives(get("/api/bots/snake/versions/1/lives", ada), "snake", "1");
+      const { lives } = (await res.json()) as LivesResponse;
+      expect(lives.find((l) => l.id === "life-ada-1")?.hasReplay).toBe(false);
+      expect(lives.find((l) => l.id === "life-ada-2")?.hasReplay).toBe(true);
+    } finally {
+      await expire(null);
+    }
   });
 });
 

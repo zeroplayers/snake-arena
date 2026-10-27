@@ -221,7 +221,7 @@ export function formatDeathContext(trace: TraceResponse, ticks: number, server: 
   const shown = trace.full.slice(-ticks);
   out.push(dim(`  Last ${shown.length} ticks (life tick, then what it saw | returned | cost):`));
   for (const tick of shown) out.push(...formatTick(tick, trace.budget.work));
-  out.push(dim(`  replay: ${server}/replay/${trace.lifeId}`));
+  if (trace.hasReplay !== false) out.push(dim(`  replay: ${server}/replay/${trace.lifeId}`));
   return out;
 }
 
@@ -290,7 +290,11 @@ export function describeLife(life: LifeEntry, server: string): string {
   });
   const stats = `score ${String(life.score).padStart(5)}  length ${String(life.lengthMax).padStart(4)}  kills ${life.kills}`;
   const end = life.endedAt === null ? green("alive") : lifeEnding(life);
-  const replay = life.endedAt === null ? "" : `\n    ${dim(`replay: ${server}/replay/${life.id}`)}`;
+  // Replays are kept 2 days (except the best lives'); servers before #78 don't say.
+  const replay =
+    life.endedAt === null || life.hasReplay === false
+      ? ""
+      : `\n    ${dim(`replay: ${server}/replay/${life.id}`)}`;
   return `  ${when}  ${stats}  ${end}${replay}`;
 }
 

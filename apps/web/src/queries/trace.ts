@@ -35,6 +35,8 @@ export async function readLifeTrace(
     .select({
       ownerId: bots.ownerId,
       traceKey: lives.traceKey,
+      replayKey: lives.replayKey,
+      replayExpiredAt: lives.replayExpiredAt,
       killer: lives.killer,
       killerAuthor: killerUser.username,
       killerBotName: killerBot.name,
@@ -56,7 +58,14 @@ export async function readLifeTrace(
   if (!object) return { status: "expired" };
   const text = await new Response(object.body.pipeThrough(new DecompressionStream("gzip"))).text();
   const trace = JSON.parse(text) as LifeTrace;
-  return { status: "ok", trace: { ...trace, killerName: killerName(killer(row)) } };
+  return {
+    status: "ok",
+    trace: {
+      ...trace,
+      killerName: killerName(killer(row)),
+      hasReplay: row.replayKey !== null && row.replayExpiredAt === null,
+    },
+  };
 }
 
 /** What the replay page's trace panel gets (`getReplayTrace`). */
@@ -113,5 +122,6 @@ export function lifeSummary(life: LifeRow): LifeSummary {
     deathCause: life.deathCause,
     killer: killerName(life.killer),
     hasTrace: life.hasTrace,
+    hasReplay: life.hasReplay,
   };
 }

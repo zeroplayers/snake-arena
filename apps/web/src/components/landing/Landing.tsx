@@ -16,7 +16,7 @@ const HOW = [
   },
   {
     title: "Watch it fight",
-    body: "Your snake plays everyone else's around the clock in persistent rooms. It earns a rating, and every life leaves a replay.",
+    body: "Your snake plays everyone else's around the clock in persistent rooms. It earns a rating, and every life leaves a replay (kept two days, longer for the best).",
   },
 ] as const;
 

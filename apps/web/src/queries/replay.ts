@@ -1,14 +1,18 @@
 /**
  * Read-only queries behind `/replay/{lifeId}`: the life, the replay chunk recorded at its death
  * (`lives.replay_key` in `REPLAYS`), and who else played in the room during that chunk, so the
- * viewer can name every snake.
+ * viewer can name every snake. Chunks older than two days are deleted unless a pinned life needs
+ * them (`src/shared/replay.ts`); `lives.replay_expired_at` marks the lives whose chunk is gone.
  *
  * Assumes the room spawns each life with the engine snake id equal to `lives.id`. Snakes that
  * match no life (house bots) keep the author the replay recorded.
  */
+import { Buffer } from "node:buffer";
+import { replayChunkInfo } from "@zerosnake/engine";
 import { and, eq, gte, isNull, lte, or } from "drizzle-orm";
 import type { Db } from "../db";
 import { bots, type DeathCauseColumn, lives, users, versions } from "../db/schema";
+import type { ReplayParticipant, ReplayResponse } from "../shared/replay";
 
 export interface ReplayLife {
   id: string;
@@ -23,18 +27,14 @@ export interface ReplayLife {
   botName: string;
   botSlug: string;
   version: number;
-  /** Whether a replay chunk was recorded for this life. */
-  hasReplay: boolean;
+  /** Whether a replay chunk was recorded for this life (it may have expired since). */
+  replayRecorded: boolean;
+  /** Recorded, but deleted by the replay retention since. */
+  replayExpired: boolean;
 }
 
 /** A life in the room, by engine snake id (= `lives.id`). */
-export interface Participant {
-  id: string;
-  author: string;
-  botName: string;
-  botSlug: string;
-  version: number;
-}
+export type Participant = ReplayParticipant;
 
 const lifeColumns = {
   id: lives.id,
@@ -56,6 +56,7 @@ export async function getReplayLife(db: Db, lifeId: string): Promise<ReplayLife 
       deathCause: lives.deathCause,
       endedAt: lives.endedAt,
       replayKey: lives.replayKey,
+      replayExpiredAt: lives.replayExpiredAt,
     })
     .from(lives)
     .innerJoin(versions, eq(versions.id, lives.versionId))
@@ -64,12 +65,13 @@ export async function getReplayLife(db: Db, lifeId: string): Promise<ReplayLife 
     .where(eq(lives.id, lifeId))
     .limit(1);
   if (!row?.author) return null;
-  const { replayKey, endedAt, ...life } = row;
+  const { replayKey, replayExpiredAt, endedAt, ...life } = row;
   return {
     ...life,
     author: row.author,
     endedAt: endedAt?.toISOString() ?? null,
-    hasReplay: replayKey !== null,
+    replayRecorded: replayKey !== null,
+    replayExpired: replayKey !== null && replayExpiredAt !== null,
   };
 }
 
@@ -81,6 +83,51 @@ export async function getReplayKey(db: Db, lifeId: string): Promise<string | nul
     .where(eq(lives.id, lifeId))
     .limit(1);
   return row?.key ?? null;
+}
+
+export type ReplayRead =
+  | { status: "ok"; replay: ReplayResponse }
+  /** No such life. */
+  | { status: "not_found" }
+  /** No chunk was recorded for it (or it can't be read). */
+  | { status: "none" }
+  /**
+   * Recorded, but deleted by the replay retention. `marked`: `lives.replay_expired_at` says so;
+   * otherwise the chunk is just gone from R2 and the caller should mark it.
+   */
+  | { status: "expired"; marked: boolean };
+
+/**
+ * The chunk `lifeId` died in, and who played in it (`GET /api/lives/:id/replay`). A chunk missing
+ * from R2 counts as expired, marked or not: a life's row is written only once its chunk is in R2.
+ * Read-only: `src/server/replay-api.ts` marks such a life.
+ */
+export async function readLifeReplay(
+  db: Db,
+  bucket: R2Bucket,
+  lifeId: string,
+): Promise<ReplayRead> {
+  const life = await getReplayLife(db, lifeId);
+  if (!life) return { status: "not_found" };
+  if (!life.replayRecorded) return { status: "none" };
+  if (life.replayExpired) return { status: "expired", marked: true };
+  const key = await getReplayKey(db, lifeId);
+  const object = key ? await bucket.get(key) : null;
+  if (!object) return { status: "expired", marked: false };
+  const bytes = new Uint8Array(await object.arrayBuffer());
+  let range: { startTick: number; endTick: number };
+  try {
+    range = replayChunkInfo(bytes);
+  } catch {
+    return { status: "none" };
+  }
+  return {
+    status: "ok",
+    replay: {
+      chunk: Buffer.from(bytes).toString("base64"),
+      participants: await getParticipants(db, life.room, range.startTick, range.endTick),
+    },
+  };
 }
 
 /** Lives in `room` that overlap ticks `[from, to]` (`lives_room_idx`). */

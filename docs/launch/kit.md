@@ -21,12 +21,12 @@ before pasting where line breaks survive (Product Hunt, X).
 2. `Vibe-code a snake bot with AI. Watch it fight 24/7.` (51) — the PH/X crowd's word.
 3. `slither.io-style arena where every snake is code` (48)
 
-**Description** (≤ 260 characters, 255):
+**Description** (≤ 260 characters, 260):
 
 ```text
 Describe a strategy to Claude, Cursor or any agent, or write it yourself: a bot is one
 TypeScript function. npx zerosnake deploy puts it in an arena that never closes, where it
-plays everyone else's bots, earns a rating and leaves a replay of every death.
+plays everyone else's bots, earns a rating and leaves replays of its recent deaths.
 ```
 
 **Topics:** Developer Tools, Artificial Intelligence, Games, Open Source.

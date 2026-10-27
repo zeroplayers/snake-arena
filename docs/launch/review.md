@@ -22,7 +22,11 @@ What they agreed on, nearly unanimously: the page and the docs said the product 
 shared link had no preview, and the hero sold a workflow rather than a reason to care. The live
 arena itself was everyone's favourite thing on the page.
 
-Before/after screenshots are in [`screenshots/`](screenshots).
+Before/after screenshots are in [`screenshots/`](screenshots): `before-*` is staging at
+`d8071c1`; `after-*` is this branch's head with the launch flags off (desktop with headless
+Chrome; phone in the app's browser pane, so the arena is still loading); `at-ed8c91f-*` is an
+earlier commit of this PR, kept for the launch-day "Copy prompt for Claude" state and the
+clipboard fallback (the prompt text and hero steps changed slightly since).
 
 Status: **done** = changed in this PR; **owner** = needs a decision or an action outside the code
 (accounts, ops, money); **later** = a proposal, deferred with the reason given.

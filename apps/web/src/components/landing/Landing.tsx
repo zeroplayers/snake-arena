@@ -100,9 +100,20 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
           {claudePromptWorks() ? (
             <div className="actions">
               <CopyPromptButton className="button" />
-              <a href="#by-hand" className="button ghost">
-                Build it by hand
-              </a>
+              {CLI_PUBLISHED ? (
+                <a href="#by-hand" className="button ghost">
+                  Build it by hand
+                </a>
+              ) : (
+                <Link
+                  to="/docs/$slug"
+                  params={{ slug: "getting-started" }}
+                  hash="before-the-packages-are-published"
+                  className="button ghost"
+                >
+                  Build it by hand
+                </Link>
+              )}
             </div>
           ) : (
             <div className="actions">
@@ -116,10 +127,23 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
           )}
           <ol className="hero-steps">
             <li>
-              {claudePromptWorks() ? (
+              {CLI_PUBLISHED ? (
                 <>
                   <strong>Paste the prompt</strong> into Claude Code in an empty folder, or run{" "}
                   <code>npx zerosnake init my-snake</code> yourself.
+                </>
+              ) : claudePromptWorks() ? (
+                <>
+                  <strong>Paste the prompt</strong> into Claude Code in an empty folder (it builds
+                  the CLI from source), or{" "}
+                  <Link
+                    to="/docs/$slug"
+                    params={{ slug: "getting-started" }}
+                    hash="before-the-packages-are-published"
+                  >
+                    build the CLI from a checkout
+                  </Link>{" "}
+                  yourself. It goes on npm at launch.
                 </>
               ) : (
                 <>
@@ -133,8 +157,16 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
               needed.
             </li>
             <li>
-              <strong>Deploy it:</strong> <code>npx zerosnake login</code> opens your browser to
-              sign in with GitHub.
+              <strong>Deploy it:</strong>{" "}
+              {CLI_PUBLISHED ? (
+                <>
+                  <code>npx zerosnake login</code> opens your browser to sign in with GitHub.
+                </>
+              ) : (
+                <>
+                  the CLI's <code>login</code> opens your browser to sign in with GitHub.
+                </>
+              )}
             </li>
           </ol>
         </div>
@@ -320,7 +352,7 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
                 <strong>Sign in with GitHub</strong>
                 <span className="muted">
                   Pick the username your bots play under. Only needed to deploy, and{" "}
-                  <code>zerosnake login</code> does it from the CLI too.
+                  <code>npx zerosnake login</code> does it from the CLI too.
                 </span>
               </button>
             )}

@@ -147,6 +147,9 @@ describe.each([
       expect(html.includes("Copy prompt for Claude")).toBe(cli || repo);
       // The first three steps, sign-in included, are in the hero either way.
       expect(html).toContain("opens your browser to sign in");
+      // Hero steps only offer `npx zerosnake` once it's on npm; before, a checkout.
+      expect(html.includes("<code>npx zerosnake login</code> opens")).toBe(cli);
+      expect(html.includes("build the CLI from a checkout")).toBe(repo && !cli);
     },
   );
 

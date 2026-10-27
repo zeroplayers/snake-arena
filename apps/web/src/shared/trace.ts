@@ -200,6 +200,11 @@ export function traceTicks(trace: LifeTrace): TraceTick[] {
 export interface TraceResponse extends LifeTrace {
   /** `@user/bot v3`, `house bot hard`, or null. */
   killerName: string | null;
+  /**
+   * Whether `/replay/<lifeId>` still plays (replays are kept 2 days, `src/shared/replay.ts`).
+   * Missing from servers before #78.
+   */
+  hasReplay?: boolean;
 }
 
 /** One life, as `GET /api/bots/:bot/versions/:n/lives` returns it (latest first). */
@@ -216,6 +221,11 @@ export interface LifeSummary {
   killer: string | null;
   /** Whether a trace was recorded (it may have expired since: 7 days). */
   hasTrace: boolean;
+  /**
+   * Whether `/replay/<id>` still plays (replays are kept 2 days, `src/shared/replay.ts`).
+   * Missing from servers before #78.
+   */
+  hasReplay?: boolean;
 }
 
 export interface LivesResponse {

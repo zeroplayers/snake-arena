@@ -1,16 +1,15 @@
 /**
  * Server functions for the public pages (leaderboard, bot page, replay). Read-only; each
- * validates its input and goes through a query module.
+ * validates its input and goes through a query module. The replay player's chunk comes from
+ * `GET /api/lives/:id/replay` (`src/server/replay-api.ts`), which can answer 410.
  */
 
 import { env } from "cloudflare:workers";
-import { Buffer } from "node:buffer";
 import { createServerFn } from "@tanstack/react-start";
-import { replayChunkInfo } from "@zerosnake/engine";
 import { z } from "zod";
 import { getLeaderboard, RANKED_MIN_LIVES } from "../db/queries";
 import { getBotPage } from "../queries/bot";
-import { getParticipants, getReplayKey, getReplayLife, type Participant } from "../queries/replay";
+import { getReplayLife } from "../queries/replay";
 import { readVersionSources } from "../queries/sources";
 import { getDb } from "./env";
 
@@ -56,35 +55,3 @@ export const getVersionSources = createServerFn({ method: "GET" })
 export const getReplayPage = createServerFn({ method: "GET" })
   .validator(id)
   .handler(({ data }) => getReplayLife(getDb(), data));
-
-export type ReplayData =
-  | {
-      status: "ok";
-      /** Encoded `ReplayChunk`, base64. */
-      chunk: string;
-      participants: Participant[];
-    }
-  | { status: "missing" };
-
-/** The recorded chunk of a life and who played in it. Fetched by the page after it loads. */
-export const getReplayData = createServerFn({ method: "GET" })
-  .validator(id)
-  .handler(async ({ data }): Promise<ReplayData> => {
-    const db = getDb();
-    const [life, key] = await Promise.all([getReplayLife(db, data), getReplayKey(db, data)]);
-    if (!life || !key) return { status: "missing" };
-    const object = await env.REPLAYS.get(key);
-    if (!object) return { status: "missing" };
-    const bytes = new Uint8Array(await object.arrayBuffer());
-    let range: { startTick: number; endTick: number };
-    try {
-      range = replayChunkInfo(bytes);
-    } catch {
-      return { status: "missing" };
-    }
-    return {
-      status: "ok",
-      chunk: Buffer.from(bytes).toString("base64"),
-      participants: await getParticipants(db, life.room, range.startTick, range.endTick),
-    };
-  });

@@ -562,6 +562,102 @@ describe("purgeDeletedAccounts at scale", () => {
   });
 });
 
+describe("purgeDeletedAccounts edge cases", () => {
+  it("leaves alone a key that was missing at the read and lands for someone else", async () => {
+    const ada = await signUp(auth, env.DB, BASE, "ada", 1);
+    const bob = await signUp(auth, env.DB, BASE, "bob", 2);
+    await seedBot(ada.id, "viper", 0);
+    await seedBot(bob.id, "cobra", 0);
+    // An earlier, interrupted run already deleted ada's v2 bundle.
+    await env.BUNDLES.delete("bundles/viper-v2.js");
+    await account().deleteAccount(deleteRequest(ada, "ada"));
+    // Right after the purge finds it missing, bob deploys the same bundle (row, then object).
+    const bundles: R2Bucket = Object.create(env.BUNDLES);
+    bundles.get = (async (key: string) => {
+      const object = await env.BUNDLES.get(key);
+      if (key === "bundles/viper-v2.js") {
+        await env.DB.prepare(
+          `INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key)
+           VALUES ('cobra-v3', 'cobra-bot', 3, 'validating', 'bundles/viper-v2.js', 's')`,
+        ).run();
+        await env.BUNDLES.put(key, "bob's bundle");
+      }
+      return object;
+    }) as R2Bucket["get"];
+    const later = new Date(clock.getTime() + ACCOUNT_PURGE_AFTER_MS);
+    await purgeDeletedAccounts({ ...env, BUNDLES: bundles }, later);
+    expect(await (await env.BUNDLES.get("bundles/viper-v2.js"))?.text()).toBe("bob's bundle");
+    expect(await env.BUNDLES.get("bundles/viper-v1.js")).toBeNull();
+  });
+
+  it("counts every call, failed ones too, and stays within the budget", async () => {
+    const names = ["a1", "a2", "a3", "a4", "a5", "a6"];
+    for (const [i, name] of names.entries()) {
+      const who = await signUp(auth, env.DB, BASE, name, 10 + i);
+      await seedBot(who.id, `bot${name}`, 2);
+      await account().deleteAccount(deleteRequest(who, name));
+    }
+    // Every trace delete fails, after the calls before it went out.
+    let real = 0;
+    const count = <T extends object>(target: T, methods: (keyof T)[]): T => {
+      const wrapped: T = Object.create(target);
+      for (const m of methods) {
+        const fn = target[m] as (...args: unknown[]) => unknown;
+        (wrapped[m] as unknown) = (...args: unknown[]) => {
+          real++;
+          return fn.apply(target, args);
+        };
+      }
+      return wrapped;
+    };
+    const traces = count(env.TRACES, ["get", "put"]);
+    traces.delete = async () => {
+      real++;
+      throw new Error("R2 is down");
+    };
+    const db = count(env.DB, ["prepare"]);
+    const budget = { users: 6, livesPage: 500, versionsPage: 2, subrequests: 50 };
+    const later = new Date(clock.getTime() + ACCOUNT_PURGE_AFTER_MS);
+    const run = await purgeDeletedAccounts(
+      {
+        DB: db,
+        TRACES: traces,
+        BUNDLES: count(env.BUNDLES, ["get", "put", "delete"]),
+        SOURCES: count(env.SOURCES, ["get", "put", "delete"]),
+      },
+      later,
+      budget,
+    );
+    expect(run.failed).toBeGreaterThan(0);
+    expect(run.subrequests).toBe(real);
+    expect(real).toBeLessThanOrEqual(budget.subrequests);
+  });
+
+  it("counts only failures in a row", async () => {
+    const ada = await signUp(auth, env.DB, BASE, "ada", 1);
+    await seedBot(ada.id, "viper", 3);
+    await account().deleteAccount(deleteRequest(ada, "ada"));
+    const failures = async () =>
+      (
+        await env.DB.prepare("SELECT purge_failures AS n FROM users WHERE id = ?")
+          .bind(ada.id)
+          .first<{ n: number }>()
+      )?.n;
+    const broken: R2Bucket = Object.create(env.TRACES);
+    broken.delete = async () => {
+      throw new Error("R2 is down");
+    };
+    const later = new Date(clock.getTime() + ACCOUNT_PURGE_AFTER_MS);
+    await purgeDeletedAccounts({ ...env, TRACES: broken }, later);
+    await purgeDeletedAccounts({ ...env, TRACES: broken }, later);
+    expect(await failures()).toBe(2);
+    // One page goes through (the budget stops the run there): the count starts over.
+    const budget = { users: 5, livesPage: 2, versionsPage: 2, subrequests: 20 };
+    expect(await purgeDeletedAccounts(env, later, budget)).toMatchObject({ more: true });
+    expect(await failures()).toBe(0);
+  });
+});
+
 describe("pruneExpiredCredentials", () => {
   it("deletes expired CLI tokens, and device codes and sign-in state an hour after expiry", async () => {
     const ada = await signUp(auth, env.DB, BASE, "ada", 1);

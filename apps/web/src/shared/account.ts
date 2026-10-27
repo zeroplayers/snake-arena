@@ -84,11 +84,14 @@ export const PURGE_SQL = {
    * failed runs after which one is left to a person. The ones that failed least go first, so a
    * stuck one can't hold up the others.
    */
-  dueUsers: `SELECT id FROM users WHERE deleted_at IS NOT NULL AND deleted_at <= ?1
-             AND purge_failures < ?3 ORDER BY purge_failures, deleted_at LIMIT ?2`,
+  dueUsers: `SELECT id, purge_failures AS failures FROM users
+             WHERE deleted_at IS NOT NULL AND deleted_at <= ?1 AND purge_failures < ?3
+             ORDER BY purge_failures, deleted_at LIMIT ?2`,
   /** A failed run for tombstone `?1`; returns the new count. */
   purgeFailed: `UPDATE users SET purge_failures = purge_failures + 1 WHERE id = ?1
                 RETURNING purge_failures AS failures`,
+  /** A page of tombstone `?1` went through: only failures in a row count. */
+  purgeSucceeded: "UPDATE users SET purge_failures = 0 WHERE id = ?1",
   selectLives: `SELECT id, trace_key AS traceKey FROM lives WHERE version_id IN (${OWN_VERSIONS})
                 LIMIT ?2`,
   deleteLives: "DELETE FROM lives WHERE id IN (SELECT value FROM json_each(?1))",

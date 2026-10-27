@@ -23,12 +23,12 @@ the sources, it doesn't read them.
 
 They run in order. After a failure the remaining checks are `skip`.
 
-| id        | passes when                                                                                                                                     |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `limits`  | ≤ 50 source files, ≤ 1 MiB of sources, bundle ≤ 256 KiB in UTF-8 (`LIMITS`; the deploy API should import these)                                 |
-| `load`    | the first life of the first match loads: the bundle evaluates, default-exports an object with `tick()`, and `init()` returns                    |
-| `run`     | `CHECK_SEED_COUNT` (5) matches of `CHECK_TICKS` (1000) ticks against easy, medium, hard and chaos end with no sandbox death and within the caps |
-| `qualify` | mean score per life ≥ that of `easy` in the same seat on the same seeds                                                                         |
+| id        | passes when                                                                                                                                                                           |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `limits`  | ≤ 50 source files, ≤ 1 MiB of sources, bundle ≤ 256 KiB in UTF-8 (`LIMITS`; the deploy API should import these)                                                                       |
+| `load`    | the first life of the first match loads: the bundle evaluates, default-exports an object with `tick()`, and `init()` returns                                                          |
+| `run`     | `CHECK_SEED_COUNT` (5) arena-style rooms with house bots, each watched for `CHECK_TICKS` (1000) ticks from the candidate's first spawn, end with no sandbox death and within the caps |
+| `qualify` | mean score per life ≥ that of `easy` in the same seat on the same seeds                                                                                                               |
 
 `run` follows the sandbox's strike rules. A timeout or an exception on its own costs one tick:
 the snake repeats its previous action. These ticks show up as warnings. A death by `timeout`
@@ -38,40 +38,70 @@ event and reports its seed, tick, life, the sandbox's message and the bot's last
 
 ### Matches
 
-- Default engine config. The lineup is the candidate plus `OPPONENTS` (easy, medium, hard,
-  chaos). Every seat respawns as soon as it dies, except on the last tick.
+Each match is one arena room, run by RoomDO's own rules (`src/room-rules.ts`, a verbatim port
+of `houseFill` and `batchTicks` from `apps/arena`, PR #56):
+
+- The room opens at a tick between 50 000 and 5 000 000 and runs in batches. A batch lasts
+  `batchTicks(bots, starts)` ticks, the arena's worst-case sizing (~65–100 ticks for these
+  rooms).
+- Snakes join only at batch boundaries:
+  - first the tickets: deployed bots, in arrival order;
+  - then `houseFill` tops the room up to 5 authors, in fill order (medium, easy, hard, chaos,
+    then `house:medium#2`, …), with ids `house-<kind>-<tick>-<index in that fill>`.
+  - Nobody respawns in the middle of a batch.
+- 0–3 of the house bots play as tickets under user names: UUID authors, a fresh UUID life id per
+  life. After a death they rejoin at the next batch, as a deployed bot's next life would.
+- The candidate's ticket arrives after a 100–600-tick pre-roll, so it joins a room in progress.
+  After each death it rejoins at the next batch. The match is the 1000 ticks from its first
+  spawn.
 - Only the candidate runs in the sandbox, with a fresh `Sandbox` for every `runChecks` call. The
   house bots run natively: they are our own deterministic code. With the candidate alone in the
   sandbox, an OOM can't depend on what other bots do with the shared heap (the sandbox README
   explains how that can happen in a room).
-- The bar comes from the same matches with `easy` in the candidate's seat. That makes it a paired
-  comparison: same seeds, same opponents, same spawn order.
+- The bar comes from the same rooms with `easy` in the candidate's seat: same seeds, same rules.
+  The opponents then react to a different bot, so the rooms drift apart, but no run is favoured.
+
+`src/room.test.ts` replays each room's trace against RoomDO's planning rules: batch sizes,
+batch boundaries, tickets before the fill, exactly `houseFill`'s output at each boundary, and one
+snake per author.
 
 ### Not recognisable as a check
 
 A bot that knew it was being checked could play like `easy` there and do anything in the arena.
-So nothing it can observe is specific to the check (`src/disguise.ts`):
+So nothing it can observe is specific to the check (`src/disguise.ts`, `src/room-rules.ts`):
 
 - **Seeds** are the first five 32-bit words of SHA-256(bundle) (`checkSeeds`). Local and server
   agree because the bundle is the same. A bot can't know them, because they depend on its own
   text, so it can't recognise the check by `info.seed` or by its first world. Any edit, even to
   a comment, gives other seeds.
-- **Names** follow the arena (#24, RoomDO). Each of the candidate's lives gets a fresh UUID as
-  its snake id, and its author is a UUID like a user id. Each opponent is shown either as a
-  house bot (`house-<kind>-<tick>-0` by `house:<kind>`) or as some author's deployed bot
-  (UUIDs). Which one is decided per match from the seed.
-- **Time**: the world starts at a tick between 50 000 and 5 000 000, as in a long-running room,
-  and the opponents play 100–600 ticks alone before the candidate spawns. The candidate never
-  sees tick 0 or a fresh world.
+- **Names** are the arena's: UUID life ids and user ids for deployed bots (the candidate
+  included). House bots get whatever RoomDO's house fill would give them in that room.
+- **Time**: no tick near 0, joins only at batch boundaries of the arena's size, a room already in
+  progress when the candidate joins.
 - **Load**: there is no separate probe life (it used to get `seed: 0`). The load check is the
   candidate's first life in the first match.
 
-Two things still differ from a busy room. A check room always has 5 snakes, which rooms do have
-when few bots are queued. The room radius and limits match every room's. With seeds that move on
-every edit, a bot close to the bar can "re-roll" its luck by redeploying. The paired baseline
-keeps each roll fair, but a borderline bot may pass one version and fail the next. The real
-protection against a bot that games the gate is re-qualification from arena ratings (#26): a
-version whose rating falls below `easy`'s should lose its place.
+`checks.test.ts` runs a bot that checks every invariant of a real room it can see
+(`src/testing/invariants.ts`):
+- id and author shapes;
+- the house kind matching the fill order at its index;
+- one author per snake;
+- no spawn in the future;
+- no tick near 0.
+
+It runs clean. `invariants.test.ts` shows the same detector catches each tell the check used to
+have, including several house bots of one tick all numbered `-0`.
+
+Still different from a busy room:
+- **Room size**: a check room holds 5–6 snakes. Rooms that small exist when few bots are queued.
+- **Re-rolling**: since seeds move on every edit, a bot close to the bar can re-roll by
+  redeploying. With the full settings, medium and hard passed 8 of 8 bundle variants each, by 2×
+  or more, while chaos, near the bar, passed 6 of 8.
+- **The ports**: `room-rules.ts` must follow RoomDO. `room-rules.test.ts` pins the current
+  output, and moving both into a shared package would remove the copy (see the PR).
+
+The real protection against a bot that games the gate is re-qualification from arena ratings
+(#26): a version whose rating falls below `easy`'s should lose its place.
 
 ### The qualification metric: mean score per life
 
@@ -90,8 +120,8 @@ So the check measures the number the bot will be ranked by. A per-slot metric wo
 that die often but score quickly between deaths, because a respawn costs nothing within a fixed
 window. Those bots rank badly per life.
 
-The numbers below are from the first version of this suite, on fixed seeds 101–505 without the
-pre-roll. Deploys now get per-bundle seeds, so exact scores differ, but the picture is the same.
+The numbers below are from the first version of this suite, on fixed seeds 101–505 in a
+simpler room (instant respawns, no pre-roll). Deploys now get per-bundle seeds, so exact scores differ, but the picture is the same.
 Per slot, `easy` collects ~470 over the five seeds (16 lives) and `chaos` ~170 (6 lives). Per
 life, `chaos` comes close to `easy` (27.7 vs 29.5).
 

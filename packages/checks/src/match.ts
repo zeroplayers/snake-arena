@@ -10,14 +10,18 @@ import {
   step,
   type World,
 } from "@zerosnake/engine";
-import { type HouseBotName, houseBots } from "@zerosnake/house-bots";
+import { houseBots } from "@zerosnake/house-bots";
 import type { BotLife, Death, Sandbox } from "@zerosnake/sandbox";
 import { type Bot, type BotInfo, createTickLog, LOG_LIMIT_BYTES } from "@zerosnake/sdk";
 import type { CostMeter, Overrun } from "./cost.ts";
-import { disguiseFor, type Identity } from "./disguise.ts";
-
-/** Opponents in every check match, in spawn order. */
-export const OPPONENTS: readonly HouseBotName[] = ["easy", "medium", "hard", "chaos"];
+import { type Disguise, disguiseFor } from "./disguise.ts";
+import {
+  batchTicks,
+  DEFAULT_MAX_SNAKES,
+  DEFAULT_MIN_AUTHORS,
+  type HouseKind,
+  houseFill,
+} from "./room-rules.ts";
 
 /** What drives the candidate's seat: the uploaded bundle in the sandbox, or a house bot. */
 export type Seat =
@@ -26,7 +30,7 @@ export type Seat =
 
 export interface MatchOptions {
   seed: number;
-  /** Ticks after the candidate joins. */
+  /** Ticks from the candidate's first spawn. */
   ticks: number;
   opBudget: number;
 }
@@ -73,7 +77,7 @@ export interface TickStats {
 
 export interface MatchResult {
   seed: number;
-  /** Candidate ticks simulated (fewer than asked when it faulted or a suite cap was hit). */
+  /** Ticks of the match window played (fewer than asked when it faulted or a cap was hit). */
   ticks: number;
   lives: LifeResult[];
   fault: FaultDetails | null;
@@ -81,9 +85,26 @@ export interface MatchResult {
   stats: TickStats;
 }
 
+/** What a test can watch of the room process (to check it against the arena's rules). */
+export interface RoomTrace {
+  batch?(e: { tick: number; ticks: number; bots: number; starts: number }): void;
+  spawn?(e: { tick: number; id: string; author: string }): void;
+  death?(e: { tick: number; id: string }): void;
+}
+
 const KEEP_LOG_LINES = 20;
-const CANDIDATE = "candidate";
-type SeatKey = HouseBotName | typeof CANDIDATE;
+
+/** Who plays a seat: the candidate, a "user" (a house bot under a user name), or the house fill. */
+type SeatRef =
+  | { kind: "candidate" }
+  | { kind: "user"; index: number }
+  | { kind: "house"; bot: HouseKind };
+
+interface Member {
+  ref: SeatRef;
+  author: string;
+  life: SeatLife;
+}
 
 interface SeatLife {
   tick(world: World, snake: Snake): Action;
@@ -102,17 +123,24 @@ export function emptyStats(): TickStats {
 }
 
 /**
- * Plays one check match on the default engine config. The opponents spawn first at a start tick
- * far from 0 and play a pre-roll alone; then the candidate joins and plays `ticks` ticks. Every
- * seat respawns as soon as it dies. Names, start tick and pre-roll come from {@link disguiseFor},
- * so nothing the bot sees says "check".
+ * Plays one check match: an arena room run by RoomDO's rules (`room-rules.ts`), on the default
+ * engine config. The room opens at a start tick far from 0. Snakes join only at batch
+ * boundaries, tickets first (the candidate and the "users", house bots under user names), then
+ * the house fill tops the room up to 5 authors. A batch lasts `batchTicks(bots, starts)` ticks.
+ * The candidate's ticket arrives after a pre-roll, and after each death it rejoins at the next
+ * batch, like the users. The match lasts `ticks` ticks from the candidate's first spawn. Names,
+ * start tick and pre-roll come from {@link disguiseFor}, so nothing the bot sees says "check".
  *
  * House bots run natively (they are trusted and deterministic); only the candidate runs in the
  * sandbox, alone, so its OOM behaviour doesn't depend on anyone else. Stops early on the
  * candidate's first sandbox death or when the suite's cost meter runs out.
  */
-export function playMatch(seat: Seat, { seed, ticks, opBudget }: MatchOptions): MatchResult {
-  const disguise = disguiseFor(seed, OPPONENTS);
+export function playMatch(
+  seat: Seat,
+  { seed, ticks, opBudget }: MatchOptions,
+  trace: RoomTrace = {},
+): MatchResult {
+  const disguise = disguiseFor(seed);
   const world = createWorld({ seed });
   world.tick = disguise.startTick;
   const limits = { opBudget, logLimitBytes: LOG_LIMIT_BYTES };
@@ -126,15 +154,17 @@ export function playMatch(seat: Seat, { seed, ticks, opBudget }: MatchOptions): 
   const stopped = () => stop.fault !== null || stop.overrun !== null;
   let recentLog: string[] = [];
 
-  const identities = new Map<SeatKey, Identity>([
-    [CANDIDATE, disguise.candidate],
-    ...OPPONENTS.map((k) => [k, disguise.opponents[k]] as const),
-  ]);
-  const spawns = new Map<SeatKey, number>();
-  /** Seat of every snake id ever spawned, and the bot of each living one. */
-  const seatOf = new Map<string, SeatKey>();
-  const running = new Map<string, SeatLife>();
+  /** Living snakes by id, in spawn order. */
+  const members = new Map<string, Member>();
+  /** Tickets waiting for the next batch, in arrival order. */
+  let pending: SeatRef[] = disguise.users.map((_, index) => ({ kind: "user", index }));
+  const livesStarted = new Map<string, number>();
   let candidateId: string | null = null;
+  /** World tick of the candidate's first spawn: the match window starts there. */
+  let windowStart: number | null = null;
+  let ticketSent = false;
+
+  const userOf = (index: number) => disguise.users[index] as Disguise["users"][number];
 
   const overrun = (o: Omit<Overrun, "seed" | "tick"> | null) => {
     if (o) stop.overrun = { ...o, seed, tick: world.tick };
@@ -185,60 +215,94 @@ export function playMatch(seat: Seat, { seed, ticks, opBudget }: MatchOptions): 
     };
   };
 
-  const spawn = (key: SeatKey): void => {
-    const identity = identities.get(key) as Identity;
-    const n = spawns.get(key) ?? 0;
-    spawns.set(key, n + 1);
-    const id = identity.lifeId(world.tick, n);
-    const snake = spawnSnake(world, { id, author: identity.author });
-    seatOf.set(id, key);
-    const info = buildBotInfo(world, snake, limits);
-    if (key !== CANDIDATE) {
-      running.set(id, nativeLife(houseBots[key], info));
-      return;
-    }
-    candidateId = id;
-    if (seat.kind === "house") {
-      running.set(id, nativeLife(seat.bot, info));
-    } else {
-      const life = seat.sandbox.startLife(seat.bundle, info);
-      recentLog = life.loadLog.lines.slice(-KEEP_LOG_LINES);
-      running.set(id, sandboxLife(life, seat.meter));
-      overrun(seat.meter.checkClock());
-    }
+  /** A ticket's next life: id and author as the arena would give them. */
+  const ticketEntry = (ref: SeatRef) => {
+    const identity = ref.kind === "user" ? userOf(ref.index).identity : disguise.candidate;
+    const n = livesStarted.get(identity.author) ?? 0;
+    livesStarted.set(identity.author, n + 1);
+    return { lifeId: identity.lifeId(n), author: identity.author, ref };
   };
 
-  const playTick = (last: boolean): void => {
+  const start = (e: { lifeId: string; author: string; ref: SeatRef }): void => {
+    const snake = spawnSnake(world, { id: e.lifeId, author: e.author });
+    trace.spawn?.({ tick: world.tick, id: e.lifeId, author: e.author });
+    const info = buildBotInfo(world, snake, limits);
+    const { ref } = e;
+    let life: SeatLife;
+    if (ref.kind === "house") {
+      life = nativeLife(houseBots[ref.bot], info);
+    } else if (ref.kind === "user") {
+      life = nativeLife(houseBots[userOf(ref.index).kind], info);
+    } else {
+      candidateId = e.lifeId;
+      windowStart ??= world.tick;
+      if (seat.kind === "house") {
+        life = nativeLife(seat.bot, info);
+      } else {
+        const sandboxed = seat.sandbox.startLife(seat.bundle, info);
+        recentLog = sandboxed.loadLog.lines.slice(-KEEP_LOG_LINES);
+        life = sandboxLife(sandboxed, seat.meter);
+        overrun(seat.meter.checkClock());
+      }
+    }
+    members.set(e.lifeId, { ref, author: e.author, life });
+  };
+
+  const windowOver = () => windowStart !== null && world.tick >= windowStart + ticks;
+
+  const playTick = (): void => {
     const actions: Record<string, Action> = {};
     for (const snake of world.snakes) {
-      actions[snake.id] = (running.get(snake.id) as SeatLife).tick(world, snake);
+      actions[snake.id] = (members.get(snake.id) as Member).life.tick(world, snake);
     }
     const faults = stop.fault && candidateId ? { [candidateId]: stop.fault.fault } : {};
     step(world, actions, faults);
     for (const d of world.deaths) {
-      running.get(d.id)?.dispose();
-      running.delete(d.id);
-      const key = seatOf.get(d.id) as SeatKey;
-      if (key === CANDIDATE) {
+      const m = members.get(d.id);
+      if (!m) continue;
+      trace.death?.({ tick: world.tick, id: d.id });
+      m.life.dispose();
+      members.delete(d.id);
+      // Tickets come back for the next batch; house seats are refilled by the house fill.
+      if (m.ref.kind === "candidate") {
         candidateId = null;
         lives.push({ ticks: d.lifeTicks, score: d.score, end: d.cause });
       }
-      // Nobody respawns after the last tick: a life of 0 ticks would only dilute the mean.
-      if (!last && !stopped()) spawn(key);
+      if (m.ref.kind !== "house") pending.push(m.ref);
     }
   };
 
-  for (const kind of OPPONENTS) spawn(kind);
-  for (let t = 0; t < disguise.preroll; t++) playTick(false);
-  spawn(CANDIDATE);
-
-  let t = 0;
-  for (; t < ticks && !stopped(); t++) playTick(t === ticks - 1);
+  while (!stopped() && !windowOver()) {
+    if (!ticketSent && world.tick >= disguise.startTick + disguise.preroll) {
+      pending.push({ kind: "candidate" });
+      ticketSent = true;
+    }
+    // Plan the batch the way RoomDO does: tickets, then the house fill, then the batch size.
+    const spawns: { lifeId: string; author: string; ref: SeatRef }[] = [];
+    for (const ref of pending) {
+      if (members.size + spawns.length < DEFAULT_MAX_SNAKES) spawns.push(ticketEntry(ref));
+    }
+    pending = [];
+    for (const h of houseFill(
+      [...members.values(), ...spawns],
+      DEFAULT_MAX_SNAKES,
+      DEFAULT_MIN_AUTHORS,
+      world.tick,
+    )) {
+      spawns.push({ lifeId: h.lifeId, author: h.author, ref: { kind: "house", bot: h.house } });
+    }
+    const bots = members.size + spawns.length;
+    const batch = batchTicks(bots, spawns.length);
+    trace.batch?.({ tick: world.tick, ticks: batch, bots, starts: spawns.length });
+    for (const e of spawns) if (!stopped()) start(e);
+    for (let k = 0; k < batch && !stopped() && !windowOver(); k++) playTick();
+  }
 
   const alive = world.snakes.find((s) => s.id === candidateId);
   if (alive) lives.push({ ticks: alive.lifeTick, score: alive.score, end: "window" });
-  for (const life of running.values()) life.dispose();
-  return { seed, ticks: t, lives, fault: stop.fault, overrun: stop.overrun, stats };
+  for (const m of members.values()) m.life.dispose();
+  const played = windowStart === null ? 0 : world.tick - windowStart;
+  return { seed, ticks: played, lives, fault: stop.fault, overrun: stop.overrun, stats };
 }
 
 function nativeLife(bot: Bot<object>, info: BotInfo): SeatLife {

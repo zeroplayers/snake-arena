@@ -28,12 +28,12 @@ export {
   type LimitsDetails,
   type SourceFile,
 } from "./limits.ts";
-export {
-  type FaultDetails,
-  type LifeEnd,
-  type LifeResult,
-  OPPONENTS,
-  type TickStats,
+export type {
+  FaultDetails,
+  LifeEnd,
+  LifeResult,
+  RoomTrace,
+  TickStats,
 } from "./match.ts";
 export type {
   CheckId,
@@ -47,6 +47,7 @@ export type {
   SeedScore,
 } from "./report.ts";
 export { REPORT_VERSION } from "./report.ts";
+export { batchTicks, HOUSE_FILL_ORDER, houseFill } from "./room-rules.ts";
 export {
   CHECK_SEED_COUNT,
   CHECK_TICKS,

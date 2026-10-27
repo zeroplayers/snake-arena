@@ -8,6 +8,7 @@ import {
   input,
   longBody,
 } from "./testing/fixtures.ts";
+import { ARENA_INVARIANTS } from "./testing/invariants.ts";
 
 // A full run (5 seeds × 1000 ticks) takes a few seconds; most tests use shorter matches so the
 // suite doesn't starve the timing tests of other packages running in parallel.
@@ -217,14 +218,14 @@ describe("formatReport", () => {
 
       ✓ Limits    1 source file, 131 B of source, bundle 131 B
       ✓ Loads     the bundle loads and default-exports a bot with tick()
-      ✗ Runs      killed on seed 443573865 at tick 1232152 (life 1): 3 ticks in a row over budget
+      ✗ Runs      killed on seed 443573865 at tick 1232234 (life 1): 3 ticks in a row over budget
                   What to fix: tick() ran longer than its budget (10 ops, a few milliseconds) 3 ticks in a
                   row. Look for a loop that never ends, or work that grows with the game: nested loops
                   over every food × every segment, path searches without a limit. Keep the search small
                   (only the nearest things), cache results in mem and spread big jobs over several ticks.
       - Qualifies skipped: fix the problems above first
 
-      Last log lines before it died (seed 443573865, tick 1232152):
+      Last log lines before it died (seed 443573865, tick 1232234):
           tick 0
           tick 1
           tick 2
@@ -241,18 +242,9 @@ describe("formatReport", () => {
 });
 
 describe("the check can't be told apart from the arena", () => {
-  it("names, ticks and seeds look like a room's", async () => {
-    // Throws (and so logs a warning) whenever it sees something only a check would show.
-    const detector = await easyWith(`
-      const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-      if (!mem.info) mem.info = { tick: state.tick };
-      if (!uuid.test(state.self.id)) throw new Error("tell: own id " + state.self.id);
-      if (state.tick < 50000) throw new Error("tell: tick " + state.tick);
-      for (const s of state.snakes) {
-        const house = /^house-(easy|medium|hard|chaos)-\\d+-0$/.test(s.id) && s.author === "house:" + s.id.split("-")[1];
-        const user = uuid.test(s.id) && uuid.test(s.author);
-        if (!house && !user) throw new Error("tell: snake " + s.id + " by " + s.author);
-      }`);
+  it("a bot checking the arena's invariants finds nothing wrong", async () => {
+    // Throws (and so logs a warning) whenever what it sees breaks a rule a real room keeps.
+    const detector = await easyWith(`${ARENA_INVARIANTS}; checkArena(state)`);
     const report = await runChecks(input(detector), QUICK);
     expect(report.run.warnings).toEqual([]);
     expect(report.run.stats.errorTicks).toBe(0);

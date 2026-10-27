@@ -49,7 +49,7 @@ and the empty cases `/@newbie`, `/@linus/draft`, `/@grace/wip`.
 | `/leaderboard`       | `leaderboardQuery` (`src/db/queries.ts`): stored `ratings`, ≥ 30 lives                                                                                              |
 | `/@{username}`       | `getProfile`: bots, active version, its rating                                                                                                                      |
 | `/@{username}/{bot}` | `src/queries/bot.ts`: versions, rating chart, recent lives; `?v=N` picks the version. Sources from `SOURCES` (`src/queries/sources.ts`), shown as escaped text only |
-| `/replay/{lifeId}`   | `src/queries/replay.ts` + the life's chunk from `REPLAYS`, played by `ReplaySource`                                                                                 |
+| `/replay/{lifeId}`   | `src/queries/replay.ts` + the life's chunk from `REPLAYS` (`GET /api/lives/:id/replay`, 410 once expired), played by `ReplaySource`                                 |
 
 Pages only read `ratings`; the rating job below writes it. `ratings.lower_bound` is a generated
 column (`mean - ci`), the leaderboard's sort key.
@@ -89,6 +89,36 @@ a world copy every 100 ticks and at each chunk start, and rebuilds any tick from
 it. The page loads the chunk, `@zerosnake/viewer` and three.js only in the browser, after
 hydration. It assumes the room spawns each life with the engine snake id equal to `lives.id`, and
 that `lives.replay_key` is the chunk holding the death.
+
+## Replay retention
+
+Replays are kept 2 days, plus every chunk a pinned life needs (`src/shared/replay.ts`: the 100
+best lives of all time, leaving out banned authors' and bots' lives and scores over
+`MAX_LIFE_SCORE`, and the 5 best of each top-20 leaderboard bot over all its versions; by score,
+ties to the earlier life, among lives whose replay is still there). The sweep
+(`src/server/replays.ts`, Cron Trigger every 30 minutes):
+
+1. settles the pinned lives: the fresh set (`leaderboardQuery`, and `lives` through the partial
+   indexes `lives_replay_score_idx` / `lives_version_replay_score_idx`, which hold only lives whose
+   replay is still there) gets `lives.replay_pinned_at = now`, and every life pinned in the last
+   2 days stays pinned (`lives_replay_pinned_idx`), so a bot that leaves the top 20 for a while
+   keeps its best replays. If a query fails, or the fresh set is less than half of the last run's
+   (a query that silently returns too little), it deletes nothing;
+2. lists the rooms (`<roomId>/` prefixes), starting from a random one, and each room's chunks
+   oldest first, until the first one younger than 2 days (by R2 upload time). A chunk is pinned if
+   a pinned life was born before the next chunk of the same room starts and died in it or a later
+   one;
+3. sets `lives.replay_expired_at` on the lives that died in the chunks it deletes, then deletes
+   them, 1,000 at a time. At most 300 list calls, 50,000 deletions and 60 s of listing per run;
+   the next run carries on. An accelerated room writes ~5,800 chunks a day (~120 per run), so
+   that keeps up with a few hundred rooms.
+
+`GET /api/lives/:id/replay` also marks a life whose chunk is gone from R2 without the sweep, so it
+stops being linked and stops holding a pinned slot. An expired replay's page says so instead of
+loading the player (and its trace rows don't seek); the bot page shows "Expired" instead of a
+link, and `zerosnake logs` prints no replay URL. Each run logs `replays.swept` or
+`replays.sweep_failed` and writes the `replays.swept` metric (alerts below). Locally:
+`curl "http://localhost:3000/cdn-cgi/handler/scheduled?cron=*/30+*+*+*+*"`.
 
 ## Database
 
@@ -307,7 +337,7 @@ for 3 days. If traffic outgrows that, set `observability.logs.head_sampling_rate
 
 Counters go to Workers Analytics Engine (`METRICS` binding, dataset `zerosnake_staging` on
 staging). The site writes deploys accepted and rejected (with the reason), 429s by rule and route,
-authentication failures, 5xx, admin actions and the liveness check. Event names, column layout,
+authentication failures, 5xx, admin actions, the liveness check and the replay sweep. Event names, column layout,
 the events `apps/arena` should write (rooms, ticks/s, lives/h, rejected versions) and example
 queries are in [`packages/observability/README.md`](../../packages/observability/README.md). The
 dataset is created by the first write; Analytics Engine has to be available on the account
@@ -326,6 +356,8 @@ saving.
 | Site errors             | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'http.error'`                                                                                             | `> 0`     |
 | No lives recorded       | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'arena.liveness' AND blob3 = 'stalled'`                                                                   | `> 0`     |
 | Room crashed            | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'room.crashed' AND blob4 != 'restart'`                                                                    | `> 0`     |
+| Replay sweep failing    | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'replays.swept' AND blob3 IN ('no_pins', 'failed')`                                                       | `> 0`     |
+| Replay sweep behind     | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'replays.swept' AND blob3 = 'more' AND timestamp > NOW() - INTERVAL '3' HOUR`                             | `> 5`     |
 | Auth failures spike     | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'auth.failure'`                                                                                           | `> 50`    |
 | Arena worker exceptions | the Workers logs dataset (`logs.workersLogs`) in the visual builder: script `zerosnake-arena-staging`, error-level logs or exception outcomes. Field names are listed by `cf sql datasets --include-columns` | `> 0`     |
 
@@ -344,6 +376,23 @@ ones whose bot hasn't used its `livesPerBotPerDay` lives today. With no `ready` 
 `arena.liveness`, at level `error` with `alert: "no_lives"` when stalled, so a Workers Logs alert
 works as well. Locally, trigger it with
 `curl "http://localhost:3000/cdn-cgi/handler/scheduled?cron=*/5+*+*+*+*"`.
+
+**Replay sweep failing / behind** come from the replay retention sweep (`*/30 * * * *`,
+[Replay retention](#replay-retention)). Behind is `outcome: "more"` in all 6 runs of 3 hours: more
+rooms or chunks than a run's budget. `oldestDeletedHours` isn't an alert: a chunk whose pin
+lapsed is deleted 2 days after its last pin, however old it is. Failing with `no_pins` is a
+pinned-lives query that failed, or the shrink guard: the fresh pinned set was less than half of
+the last run's (`replays.sweep_failed` logs both counts in its error). The guard keeps refusing
+until someone looks. If the shrink is expected (a mass ban, say), let the next run through by
+clearing the last run's marks, from `apps/web`:
+
+```bash
+pnpm exec wrangler d1 execute DB --env staging --remote --command "UPDATE lives SET replay_pinned_at = NULL WHERE replay_pinned_at = (SELECT max(replay_pinned_at) FROM lives WHERE replay_expired_at IS NULL)"
+```
+
+Lives that are still pinned get marked again by the next run; the others lose the rest of their
+2-day grace. If the shrink isn't expected, find out why the queries return too little first
+(`selectPinnedLives` in `src/server/replays.ts`): while the guard holds, nothing is deleted.
 
 ## Legal pages and data rights
 

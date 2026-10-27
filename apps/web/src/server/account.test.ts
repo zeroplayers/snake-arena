@@ -161,6 +161,9 @@ describe("Download my data", () => {
     await seedBot(ada.id, "viper");
     await seedBot(bob.id, "cobra");
     await addCliToken(ada.id);
+    await env.DB.prepare(
+      "UPDATE lives SET replay_expired_at = 1 WHERE id = 'viper-v1-life1'",
+    ).run();
 
     const response = await account().exportData(req(ada, "/api/account/export"));
     expect(response.status).toBe(200);
@@ -195,6 +198,7 @@ describe("Download my data", () => {
       replay: `${BASE}/replay/viper-v1-life0`,
       traceKept: true,
     });
+    expect(data.lives[1]).toMatchObject({ id: "viper-v1-life1", replay: null });
     // Only ada's: none of bob's rows, and no token, hash or storage key.
     expect(text).not.toContain("cobra");
     expect(text).not.toContain(await hashToken("zsk_secret_token"));

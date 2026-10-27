@@ -232,6 +232,7 @@ export function createAccount(env: AccountEnv, options: AccountOptions) {
     deathCause: lives.deathCause,
     killer: lives.killer,
     hasReplay: lives.replayKey,
+    replayExpiredAt: lives.replayExpiredAt,
     hasTrace: lives.traceKey,
     startedAt: lives.startedAt,
     endedAt: lives.endedAt,
@@ -277,10 +278,11 @@ export function createAccount(env: AccountEnv, options: AccountOptions) {
           let first = true;
           for (const versionId of versionIds) {
             for await (const page of versionLives(versionId)) {
-              for (const { hasReplay, hasTrace, seq: _, ...life } of page) {
+              for (const { hasReplay, replayExpiredAt, hasTrace, seq: _, ...life } of page) {
                 const row = {
                   ...life,
-                  replay: hasReplay ? `${siteOrigin}/replay/${life.id}` : null,
+                  // Expired replays (`src/server/replays.ts`) have nothing left to link to.
+                  replay: hasReplay && !replayExpiredAt ? `${siteOrigin}/replay/${life.id}` : null,
                   traceKept: hasTrace !== null,
                 };
                 controller.enqueue(encoder.encode((first ? "" : ",") + JSON.stringify(row)));

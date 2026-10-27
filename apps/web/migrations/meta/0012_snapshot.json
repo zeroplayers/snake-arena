@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "a2fa4a7c-cf67-4b3e-be7d-36e3677dfe87",
+  "id": "21e44eba-66b7-4bfb-a32e-8853938677ca",
   "prevId": "2e49bd40-1693-40e4-b085-160024f9fca6",
   "tables": {
     "accounts": {
@@ -731,6 +731,20 @@
           "notNull": false,
           "autoincrement": false
         },
+        "replay_expired_at": {
+          "name": "replay_expired_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "replay_pinned_at": {
+          "name": "replay_pinned_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "started_at": {
           "name": "started_at",
           "type": "integer",
@@ -785,6 +799,39 @@
             "seq"
           ],
           "isUnique": false
+        },
+        "lives_replay_score_idx": {
+          "name": "lives_replay_score_idx",
+          "columns": [
+            "score"
+          ],
+          "isUnique": false,
+          "where": "replay_key IS NOT NULL AND replay_expired_at IS NULL"
+        },
+        "lives_version_replay_score_idx": {
+          "name": "lives_version_replay_score_idx",
+          "columns": [
+            "version_id",
+            "score"
+          ],
+          "isUnique": false,
+          "where": "replay_key IS NOT NULL AND replay_expired_at IS NULL"
+        },
+        "lives_replay_key_idx": {
+          "name": "lives_replay_key_idx",
+          "columns": [
+            "replay_key"
+          ],
+          "isUnique": false,
+          "where": "replay_expired_at IS NULL"
+        },
+        "lives_replay_pinned_idx": {
+          "name": "lives_replay_pinned_idx",
+          "columns": [
+            "replay_pinned_at"
+          ],
+          "isUnique": false,
+          "where": "replay_pinned_at IS NOT NULL AND replay_expired_at IS NULL"
         }
       },
       "foreignKeys": {
@@ -1273,13 +1320,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "deleted_at": {
-          "name": "deleted_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "integer",
@@ -1311,14 +1351,6 @@
             "username"
           ],
           "isUnique": true
-        },
-        "users_deleted_at_idx": {
-          "name": "users_deleted_at_idx",
-          "columns": [
-            "deleted_at"
-          ],
-          "isUnique": false,
-          "where": "deleted_at IS NOT NULL"
         }
       },
       "foreignKeys": {},

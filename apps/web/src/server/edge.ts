@@ -61,6 +61,7 @@ export function classify(method: string, pathname: string): { route: string; kin
     [/^\/api\/bots\/[^/]+\/versions\/[^/]+$/, "/api/bots/:bot/versions/:n"],
     [/^\/api\/bots\/[^/]+\/versions$/, "/api/bots/:bot/versions"],
     [/^\/api\/users\/[^/]+$/, "/api/users/:username"],
+    [/^\/api\/lives\/[^/]+\/replay$/, "/api/lives/:id/replay"],
     [/^\/api\/account\/files\/[^/]+\/[^/]+$/, "/api/account/files/:version/:kind"],
     [/^\/api\/account\/(export|delete)$/, pathname],
     [/^\/api\/(me|bots|health)$/, pathname],

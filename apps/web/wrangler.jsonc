@@ -22,10 +22,11 @@
   // Workers Logs: structured request logs (src/server/edge.ts) and invocation logs.
   "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": true } },
   // Rating job every minute (src/server/ratings.ts), arena liveness check and revoked session
-  // pruning every five (src/server/liveness.ts, session-store.ts); src/server.ts dispatches on the
-  // expression. Locally:
-  // curl "http://localhost:3000/cdn-cgi/handler/scheduled?cron=*+*+*+*+*" (or ?cron=*/5+*+*+*+*).
-  "triggers": { "crons": ["* * * * *", "*/5 * * * *"] },
+  // pruning every five (src/server/liveness.ts, session-store.ts), replay retention sweep every
+  // thirty (src/server/replays.ts); src/server.ts dispatches on the expression. Locally:
+  // curl "http://localhost:3000/cdn-cgi/handler/scheduled?cron=*+*+*+*+*" (or ?cron=*/5+*+*+*+*,
+  // ?cron=*/30+*+*+*+*).
+  "triggers": { "crons": ["* * * * *", "*/5 * * * *", "*/30 * * * *"] },
 
   // DEPLOYS_PER_DAY and BOTS_PER_AUTHOR override the CLI API's defaults (src/shared/deploy.ts).
   // ADMIN_USER_IDS / ADMIN_GITHUB_IDS: comma-separated admins for /admin (src/server/moderation.ts);
@@ -93,7 +94,7 @@
       // Deployed as `zerosnake-web-staging`.
       "routes": [{ "pattern": "arena.surninsynergy.dev", "custom_domain": true }],
       "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": true } },
-      "triggers": { "crons": ["* * * * *", "*/5 * * * *"] },
+      "triggers": { "crons": ["* * * * *", "*/5 * * * *", "*/30 * * * *"] },
       "vars": {
         "ENVIRONMENT": "staging",
         "BETTER_AUTH_URL": "https://arena.surninsynergy.dev",

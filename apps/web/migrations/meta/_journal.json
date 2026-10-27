@@ -89,8 +89,15 @@
     {
       "idx": 12,
       "version": "6",
-      "when": 1793131268632,
-      "tag": "0012_account_deletion",
+      "when": 1793130015549,
+      "tag": "0012_replay_retention",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1793134116904,
+      "tag": "0013_account_deletion",
       "breakpoints": true
     }
   ]

@@ -33,6 +33,7 @@ import { Route as ApiAccountExportRouteImport } from './routes/api/account/expor
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiUsersUsernameRouteImport } from './routes/api/users/$username'
 import { Route as ApiBotsBotVersionsRouteImport } from './routes/api/bots/$bot/versions'
+import { Route as ApiLivesIdReplayRouteImport } from './routes/api/lives/$id/replay'
 import { Route as ApiLivesIdTraceRouteImport } from './routes/api/lives/$id/trace'
 import { Route as ApiAccountFilesVersionIdKindRouteImport } from './routes/api/account/files/$versionId/$kind'
 import { Route as ApiBotsBotVersionsNRouteImport } from './routes/api/bots/$bot/versions/$n'
@@ -160,6 +161,11 @@ const ApiBotsBotVersionsRoute = ApiBotsBotVersionsRouteImport.update({
   path: '/$bot/versions',
   getParentRoute: () => ApiBotsRoute,
 } as any)
+const ApiLivesIdReplayRoute = ApiLivesIdReplayRouteImport.update({
+  id: '/api/lives/$id/replay',
+  path: '/api/lives/$id/replay',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiLivesIdTraceRoute = ApiLivesIdTraceRouteImport.update({
   id: '/api/lives/$id/trace',
   path: '/api/lives/$id/trace',
@@ -208,6 +214,7 @@ export interface FileRoutesByFullPath {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
   '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
+  '/api/lives/$id/replay': typeof ApiLivesIdReplayRoute
   '/api/lives/$id/trace': typeof ApiLivesIdTraceRoute
   '/api/account/files/$versionId/$kind': typeof ApiAccountFilesVersionIdKindRoute
   '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRouteWithChildren
@@ -237,6 +244,7 @@ export interface FileRoutesByTo {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
   '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
+  '/api/lives/$id/replay': typeof ApiLivesIdReplayRoute
   '/api/lives/$id/trace': typeof ApiLivesIdTraceRoute
   '/api/account/files/$versionId/$kind': typeof ApiAccountFilesVersionIdKindRoute
   '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRouteWithChildren
@@ -268,6 +276,7 @@ export interface FileRoutesById {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
   '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
+  '/api/lives/$id/replay': typeof ApiLivesIdReplayRoute
   '/api/lives/$id/trace': typeof ApiLivesIdTraceRoute
   '/api/account/files/$versionId/$kind': typeof ApiAccountFilesVersionIdKindRoute
   '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRouteWithChildren
@@ -300,6 +309,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/users/$username'
     | '/api/bots/$bot/versions'
+    | '/api/lives/$id/replay'
     | '/api/lives/$id/trace'
     | '/api/account/files/$versionId/$kind'
     | '/api/bots/$bot/versions/$n'
@@ -329,6 +339,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/users/$username'
     | '/api/bots/$bot/versions'
+    | '/api/lives/$id/replay'
     | '/api/lives/$id/trace'
     | '/api/account/files/$versionId/$kind'
     | '/api/bots/$bot/versions/$n'
@@ -359,6 +370,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/users/$username'
     | '/api/bots/$bot/versions'
+    | '/api/lives/$id/replay'
     | '/api/lives/$id/trace'
     | '/api/account/files/$versionId/$kind'
     | '/api/bots/$bot/versions/$n'
@@ -387,6 +399,7 @@ export interface RootRouteChildren {
   ApiAccountExportRoute: typeof ApiAccountExportRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiUsersUsernameRoute: typeof ApiUsersUsernameRoute
+  ApiLivesIdReplayRoute: typeof ApiLivesIdReplayRoute
   ApiLivesIdTraceRoute: typeof ApiLivesIdTraceRoute
   ApiAccountFilesVersionIdKindRoute: typeof ApiAccountFilesVersionIdKindRoute
 }
@@ -561,6 +574,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiBotsBotVersionsRouteImport
       parentRoute: typeof ApiBotsRoute
     }
+    '/api/lives/$id/replay': {
+      id: '/api/lives/$id/replay'
+      path: '/api/lives/$id/replay'
+      fullPath: '/api/lives/$id/replay'
+      preLoaderRoute: typeof ApiLivesIdReplayRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/lives/$id/trace': {
       id: '/api/lives/$id/trace'
       path: '/api/lives/$id/trace'
@@ -659,6 +679,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAccountExportRoute: ApiAccountExportRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiUsersUsernameRoute: ApiUsersUsernameRoute,
+  ApiLivesIdReplayRoute: ApiLivesIdReplayRoute,
   ApiLivesIdTraceRoute: ApiLivesIdTraceRoute,
   ApiAccountFilesVersionIdKindRoute: ApiAccountFilesVersionIdKindRoute,
 }

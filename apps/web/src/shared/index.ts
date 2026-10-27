@@ -6,4 +6,5 @@ export * from "./account";
 export * from "./arena";
 export * from "./checks";
 export * from "./deploy";
+export * from "./replay";
 export * from "./trace";

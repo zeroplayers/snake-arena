@@ -149,7 +149,8 @@ describe("replay queries", () => {
       botSlug: "greedy",
       version: 2,
       room: REPLAY_ROOM,
-      hasReplay: true,
+      replayRecorded: true,
+      replayExpired: false,
     });
     expect(life).not.toHaveProperty("replayKey");
     expect(await getReplayKey(db, "seed-replay-greedy-1")).toMatch(/\.bin$/);

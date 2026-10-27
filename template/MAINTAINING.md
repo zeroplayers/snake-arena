@@ -74,18 +74,18 @@ pnpm --filter zerosnake margin --sets 1000    # the real checks on 1000 seed set
 ```
 
 It prints the distribution of the margin (mean score per life / easy's in the same seat) and the
-budget used. Use `--from` for seed sets nobody tuned on. The current bot on the square arena
-(#76, October 2026), with the real checks: no failures on 600 seed sets (`--from 100000`: lowest
-1.06×, 1% 1.54×, 5% 2.08×, median 4.20×) and one on 600 more minified (`--from 200000 --minify`:
-set 200310 at 0.85×, easy 93.9 per life against 79.4; 1% 1.48×, 5% 2.15×, median 4.43×), so 1
-failure and 12 sets below 1.5× in 1200; at most 0.7× of the per-tick budget on its costliest tick
-and 0.2× of the suite's average allowance. (On the round arena it had 1 failure in 3600 sets, 1%
-about 1.55×, median about 4.7×.) `easy`'s own mean score per life ranges from under 10 to over
-150 between seed sets (median about 30), and its best sets come from long lucky lives and kills,
-which a bot that avoids everyone can't always match. Watch the 1% figure and the failures. `cli.test.ts` checks three fixed seed sets at ≥ 1.5×; the CLI's other tests use
-a bot whose seeds never change (`packages/cli/src/testing/passing-bot.ts`), so a change here
-doesn't put them at risk. When the numbers change, update "Keep a margin over `easy`" in
-`CLAUDE.md`.
+budget used. Use `--from` for seed sets nobody tuned on. The current bot on the square arena (#76,
+October 2026; corners rounded off to 3 turning radii), with the real checks: no failures on 600 seed
+sets (`--from 100000`: lowest 1.06×, 1% 1.54×, 5% 2.08×, median 4.20×) and one on 600 more minified
+(`--from 200000 --minify`: set 200310 at 0.84×, easy 93.9 per life against 79.4; 1% 1.48×, 5% 2.15×,
+median 4.43×), so 1 failure and 12 sets below 1.5× in 1200; at most 0.7× of the per-tick budget on
+its costliest tick and 0.2× of the suite's average allowance. (On the round arena it had 1 failure
+in 3600 sets, 1% about 1.55×, median about 4.7×.) `easy`'s own mean score per life ranges from under
+10 to over 150 between seed sets (median about 30), and its best sets come from long lucky lives and
+kills, which a bot that avoids everyone can't always match. Watch the 1% figure and the failures.
+`cli.test.ts` checks three fixed seed sets at ≥ 1.5×; the CLI's other tests use a bot whose seeds
+never change (`packages/cli/src/testing/passing-bot.ts`), so a change here doesn't put them at risk.
+When the numbers change, update "Keep a margin over `easy`" in `CLAUDE.md`.
 
 The bot must also stay well inside the per-tick budget (the smoke test wants at most half of it
 on its seeds). QuickJS counts interrupts per ~10 000 branches or calls, and the sandbox's metering

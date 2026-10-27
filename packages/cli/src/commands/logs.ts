@@ -2,6 +2,7 @@ import {
   type LifeSummary,
   type LivesResponse,
   type MeResponse,
+  printable,
   TRACE_RETENTION_DAYS,
   type TraceResponse,
   type TraceTick,
@@ -213,8 +214,10 @@ export function formatDeathContext(trace: TraceResponse, ticks: number, server: 
       ),
     );
   }
-  for (const line of trace.load.log) out.push(`  ${dim("init log:")} ${line}`);
-  if (trace.load.error) out.push(`  ${red("init error:")} ${trace.load.error}`);
+  // Logs and errors are the bot's own text: printed only once nothing in them can drive the
+  // terminal (the room cleans them too; this doesn't trust the server to).
+  for (const line of trace.load.log) out.push(`  ${dim("init log:")} ${printable(line)}`);
+  if (trace.load.error) out.push(`  ${red("init error:")} ${printable(trace.load.error)}`);
   const shown = trace.full.slice(-ticks);
   out.push(dim(`  Last ${shown.length} ticks (life tick, then what it saw | returned | cost):`));
   for (const tick of shown) out.push(...formatTick(tick, trace.budget.work));
@@ -237,9 +240,9 @@ function formatTick(t: TraceTick, budget: number): string[] {
   const lines = [
     `  [${t.lifeTick}] head (${s.x}, ${s.y}) angle ${s.angle} length ${s.length} wall ${s.wall} | ${near} | ${food} | ${act} | ${cost}${outcome}`,
   ];
-  for (const line of t.log) lines.push(`      ${dim("log:")} ${line}`);
+  for (const line of t.log) lines.push(`      ${dim("log:")} ${printable(line)}`);
   if (t.logCut) lines.push(`      ${dim("log: … (cut at the per-tick limit)")}`);
-  if (t.error) lines.push(`      ${red("error:")} ${t.error}`);
+  if (t.error) lines.push(`      ${red("error:")} ${printable(t.error)}`);
   return lines;
 }
 

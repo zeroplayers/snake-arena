@@ -5,11 +5,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatReport, runChecks } from "@zerosnake/checks";
-import type {
-  DeployRequest,
-  TraceResponse,
-  TraceTick,
-  CheckReport as WebCheckReport,
+import {
+  type DeployRequest,
+  printable,
+  type TraceResponse,
+  type TraceTick,
+  type CheckReport as WebCheckReport,
 } from "@zerosnake/web/shared";
 import { afterAll, describe, expect, it } from "vitest";
 import { main } from "./cli.ts";
@@ -725,6 +726,22 @@ describe("zerosnake logs", () => {
     // Three deaths with a trace at most, never one without.
     const asked = arena.calls("GET", /\/api\/lives\//).map((c) => c.path);
     expect(asked).toEqual(["/api/lives/l4/trace", "/api/lives/l3/trace", "/api/lives/l1/trace"]);
+  });
+
+  it("prints no control or bidi characters from a trace's logs", async () => {
+    const { arena, run } = setUp();
+    const trace = traceFixture();
+    const nasty = "a\x1b[2Jb\x9b31mc\x7fd\u202ee\u2066f\ud800g\r\nh";
+    trace.load = { log: [nasty], error: nasty };
+    trace.full[59] = { ...(trace.full[59] as TraceTick), log: [nasty], error: nasty };
+    arena.traces = { l3: trace };
+    const r = await run(["logs", "--life", "l3"]);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("init log: a?[2Jb?31mc?d?e?f?g??h");
+    expect(r.out).toContain("init error: a?[2Jb");
+    expect(r.out).toContain("log: a?[2Jb?31mc?d?e?f?g??h");
+    expect(r.out).toContain("error: a?[2Jb");
+    for (const line of r.out.split("\n")) expect(printable(line)).toBe(line);
   });
 
   it("--life shows one life's death context, and why it can't", async () => {

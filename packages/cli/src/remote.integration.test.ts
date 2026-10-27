@@ -30,9 +30,22 @@ interface D1 {
 }
 type Handle = (request: Request, ...params: string[]) => Promise<Response>;
 interface Web {
-  platform: { env: { DB: D1 } & Record<string, unknown>; dispose(): Promise<void> };
+  platform: {
+    env: { DB: D1; TRACES: { put(key: string, body: Uint8Array): Promise<unknown> } } & Record<
+      string,
+      unknown
+    >;
+    dispose(): Promise<void>;
+  };
   auth: { handler(request: Request): Promise<Response> };
-  cliApi: { me: Handle; createBot: Handle; deploy: Handle; getVersion: Handle };
+  cliApi: {
+    me: Handle;
+    createBot: Handle;
+    deploy: Handle;
+    getVersion: Handle;
+    listLives: Handle;
+    getTrace: Handle;
+  };
   profile(username: string): Promise<unknown>;
 }
 

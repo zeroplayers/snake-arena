@@ -59,6 +59,40 @@ export async function readLifeTrace(
   return { status: "ok", trace: { ...trace, killerName: killerName(killer(row)) } };
 }
 
+/** What the replay page's trace panel gets (`getReplayTrace`). */
+export type ReplayTrace =
+  | { status: "ok"; trace: OwnTrace }
+  /** Not signed in, or not the bot's owner: traces are private. */
+  | { status: "private"; signedIn: boolean }
+  | { status: "none" }
+  | { status: "expired" };
+
+/**
+ * The replay page's read of `lifeId`'s trace: for the web session behind `headers` (Better Auth's
+ * `api.getSession`; a CLI token is no session), and only if it owns the life's bot.
+ */
+export async function replayTrace(
+  deps: {
+    getSession: (input: { headers: Headers }) => Promise<{ user: { id: string } } | null>;
+    db: Db;
+    bucket: R2Bucket;
+  },
+  headers: Headers,
+  lifeId: string,
+): Promise<ReplayTrace> {
+  const session = await deps.getSession({ headers });
+  if (!session) return { status: "private", signedIn: false };
+  const read = await readLifeTrace(deps.db, deps.bucket, lifeId, session.user.id);
+  switch (read.status) {
+    case "forbidden":
+      return { status: "private", signedIn: true };
+    case "not_found":
+      return { status: "none" };
+    default:
+      return read;
+  }
+}
+
 /** How the CLI names a killer. */
 export function killerName(k: Killer | null): string | null {
   if (!k) return null;

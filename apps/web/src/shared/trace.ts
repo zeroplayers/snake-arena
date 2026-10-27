@@ -22,19 +22,31 @@ export const TRACE_FORMAT = 1;
 export const TRACE_FULL_TICKS = 100;
 /** Most downsampled ticks kept from before the full window. */
 export const TRACE_SAMPLED_MAX = 200;
-/** `log()` bytes (and error bytes) kept per downsampled tick. */
+/**
+ * Log sizes below are JSON bytes, as the trace stores them: each line's UTF-8 bytes, plus one per
+ * `"`, `\` or tab (escaped), plus {@link TRACE_LINE_OVERHEAD}. Counting the overhead matters: the
+ * sandbox charges an empty line one byte, so 1 KB of `log("")` is 1024 lines, ~3 KB of JSON.
+ */
+export const TRACE_LINE_OVERHEAD = 3;
+/**
+ * JSON bytes of `log()` output kept per exactly kept tick (and of the load log): the sandbox's
+ * 1 KB per tick always fits, even all escaped, unless it's split into many short lines.
+ */
+export const TRACE_TICK_LOG_BYTES = 2304;
+/** JSON bytes of `log()` output (and of the error) kept per downsampled tick. */
 export const TRACE_SAMPLED_LOG_BYTES = 160;
 /** Most timeouts and errors kept from before the full window. */
 export const TRACE_EVENTS_MAX = 20;
 /** Room ticks the bot restarted on (the room reloaded) that are kept. */
 export const TRACE_RESTARTS_MAX = 20;
-/** Bytes of an error message kept. */
+/** JSON bytes of an error message kept. */
 export const TRACE_ERROR_BYTES = 300;
 /**
- * Upper bound of a trace's JSON. With the per-tick log limit (1 KB), a worst-case trace (every tick
- * logging the full 1 KB of characters JSON escapes, and failing) is about 440 KB; apps/arena's
- * `room/trace.test.ts` builds one. Enforced anyway. A full 6000-tick life logging a short line
- * every other tick is about 90 KB (10 KB gzipped, as stored).
+ * Upper bound of a trace's JSON. Every part is bounded in JSON bytes, whatever the bot logs: a
+ * worst-case trace (every tick filling its log budget with characters JSON escapes, or with
+ * thousands of empty lines, and failing) is about 445 KB; apps/arena's `room/trace.test.ts` builds
+ * them. Enforced anyway (oldest downsampled logs go first). A full 6000-tick life logging a short
+ * line every other tick is about 90 KB (10 KB gzipped, as stored).
  */
 export const TRACE_MAX_BYTES = 512 * 1024;
 export const TRACE_RETENTION_DAYS = 7;
@@ -109,7 +121,7 @@ export interface LifeTrace {
   budget: { ops: number; work: number; logBytes: number };
   totals: TraceTotals;
   /** `log()` output of loading the bundle and `init()`, and the error if that failed. */
-  load: { log: string[]; error?: string };
+  load: { log: string[]; logCut?: true; error?: string };
   /**
    * Room ticks on which the room reloaded and the bot started again (`init`, empty memory). The
    * world carried on; only the bot's memory was lost.
@@ -122,7 +134,7 @@ export interface LifeTrace {
   events: TraceTick[];
   /** The last {@link TRACE_FULL_TICKS} ticks, oldest first. */
   full: TraceTick[];
-  /** Set when the size cap cut log text from the oldest full ticks (should never happen). */
+  /** Set when the size cap cut log text from older ticks (should never happen). */
   trimmed?: true;
 }
 
@@ -131,6 +143,31 @@ export interface LifeTrace {
  */
 export function traceKey(lifeId: string, endedAt: number): string {
   return `${new Date(endedAt).toISOString().slice(0, 10)}/${lifeId}.json.gz`;
+}
+
+/**
+ * `s` safe to store and print: control characters other than tab (C0, DEL, C1, which includes the
+ * one-byte CSI), bidi overrides and isolates, line separators and lone surrogates become `?`. The
+ * room stores logs this way (JSON would escape control characters as six bytes each, making a
+ * trace's size depend on what the bot logs instead of how much); the CLI applies it again before
+ * printing, so a terminal never gets an escape sequence from a trace.
+ */
+export function printable(s: string): string {
+  return s.replace(UNPRINTABLE, "?");
+}
+
+const UNPRINTABLE =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching them is the point.
+  /[\0-\x08\x0a-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069\ud800-\udfff]/gu;
+
+/** JSON bytes of a `printable` string (quotes excluded): `"`, `\` and tab are escaped. */
+export function jsonBytes(s: string): number {
+  let n = utf8Bytes(s);
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c === 0x22 || c === 0x5c || c === 0x09) n++;
+  }
+  return n;
 }
 
 /** UTF-8 bytes of `s`. */

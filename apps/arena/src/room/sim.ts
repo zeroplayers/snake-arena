@@ -16,7 +16,7 @@ import { type BotLife, DEFAULT_OP_BUDGET, type TickReport, WORK_PER_OP } from "@
 import { type BotInfo, type BotState, LOG_LIMIT_BYTES } from "@zerosnake/sdk";
 import { HOUSE_BUNDLES } from "../house-bundles.gen.ts";
 import type { LifeEntry, RosterEntry } from "./store.ts";
-import { TraceRecorder, type TraceState } from "./trace.ts";
+import { type TraceChange, TraceRecorder } from "./trace.ts";
 
 /** R2 key (REPLAYS) of a room's replay chunk that starts at `tick`. */
 export function chunkKey(roomId: string, tick: number): string {
@@ -102,7 +102,7 @@ export class RoomSim {
   /**
    * Resumes a room: `world` and `pending` as saved, `roster` the lives in it. Every bot starts a
    * fresh sandbox life (`init` again, empty memory): QuickJS heaps don't survive an eviction.
-   * `traces` are the saved states of the roster's traces (`traceStates`).
+   * `traces` are the roster's saved traces (`trace-store.ts`).
    */
   constructor(
     readonly roomId: string,
@@ -111,7 +111,7 @@ export class RoomSim {
     private readonly sandbox: LifeStarter,
     roster: RosterEntry[],
     chunkTicks?: number,
-    traces: Record<string, TraceState> = {},
+    traces: Record<string, TraceRecorder> = {},
   ) {
     this.recorder = new ReplayRecorder(world, {
       onChunk: (bytes, chunk) => {
@@ -122,9 +122,7 @@ export class RoomSim {
       ...(chunkTicks ? { chunkTicks } : {}),
     });
     for (const entry of roster) {
-      const state = traces[entry.lifeId];
-      const trace = state ? new TraceRecorder(state) : null;
-      this.running.set(entry.lifeId, { entry, life: null, trace });
+      this.running.set(entry.lifeId, { entry, life: null, trace: traces[entry.lifeId] ?? null });
     }
   }
 
@@ -150,10 +148,12 @@ export class RoomSim {
     return this.recorder.pending?.snapshot.tick ?? null;
   }
 
-  /** What the room saves of the running lives' traces. */
-  traceStates(): Record<string, TraceState> {
-    const out: Record<string, TraceState> = {};
-    for (const r of this.running.values()) if (r.trace) out[r.entry.lifeId] = r.trace.state;
+  /** What changed in the running lives' traces since the last call, for the room to save. */
+  traceChanges(): { lifeId: string; changes: TraceChange[] }[] {
+    const out: { lifeId: string; changes: TraceChange[] }[] = [];
+    for (const r of this.running.values()) {
+      if (r.trace) out.push({ lifeId: r.entry.lifeId, changes: r.trace.changes() });
+    }
     return out;
   }
 

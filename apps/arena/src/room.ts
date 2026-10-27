@@ -91,7 +91,8 @@ import {
   RoomStore,
   type RosterEntry,
 } from "./room/store.ts";
-import { gzip, type TraceState } from "./room/trace.ts";
+import { gzip } from "./room/trace.ts";
+import { TraceStore } from "./room/trace-store.ts";
 
 const TICK_MS = 1000 / TICK_RATE;
 
@@ -105,9 +106,10 @@ const TICK_MS = 1000 / TICK_RATE;
  *  2. write a marker with the invocation's start time and `sync()` it, so a batch that dies is
  *     noticed by the next alarm;
  *  3. run it (engine + one QuickJS life per snake, recorded by `ReplayRecorder`);
- *  4. in one transaction: save the world, the open replay chunk, the roster and the lives' traces
- *     (`room/trace.ts`), queue the side effects (replay chunks and finished lives' traces for R2,
- *     finished lives for D1 and the matchmaker), clear the marker;
+ *  4. in one transaction: save the world, the open replay chunk, the roster and what changed in
+ *     the lives' traces (`room/trace.ts`, `room/trace-store.ts`), queue the side effects (replay
+ *     chunks and finished lives' traces for R2, finished lives for D1 and the matchmaker), clear
+ *     the marker;
  *  5. deliver the outbox, ask the matchmaker for replacements, schedule the next alarm.
  *
  * Backstop (`room/backstop.ts`): a marker left over means the batch died. If too little wall time
@@ -128,6 +130,7 @@ const TICK_MS = 1000 / TICK_RATE;
  */
 export class RoomDO extends DurableObject<Env> implements RoomRpc {
   private readonly store: RoomStore;
+  private readonly traces: TraceStore;
   private sim: RoomSim | null = null;
   /** Instrumented bundles of the room's lives; outlive `sim`, so a rerun reuses them. */
   private readonly bundles = new BundleCache((source) => this.instrumentBundle(source));
@@ -139,6 +142,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.store = new RoomStore(ctx.storage);
+    this.traces = new TraceStore(ctx.storage.sql);
   }
 
   // --- RPC ---------------------------------------------------------------------------------
@@ -641,7 +645,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       const pending = sim.recorder.pending;
       this.store.putJson("world", sim.world);
       this.store.putBlob("chunk", pending ? encodeReplayChunk(pending) : null);
-      this.store.putJson("traces", sim.traceStates());
+      for (const t of sim.traceChanges()) this.traces.save(t.lifeId, t.changes);
       for (const s of result.spawned) this.store.addToRoster(s);
       this.store.removePending(maxPendingSeq);
       // Chunks first: a life is delivered only after the chunk it points to.
@@ -649,6 +653,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       let real = 0;
       for (const { entry, death, killer, chunkTick, trace } of result.ended) {
         this.store.removeFromRoster(entry.lifeId);
+        if (trace) this.traces.delete(entry.lifeId);
         if (!entry.versionId) continue;
         real++;
         const deathCause = entry.evicted ? "evicted" : entry.leaving ? "retired" : death.cause;
@@ -833,7 +838,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     this.store.transaction(() => {
       this.store.putJson("world", sim.world);
       this.store.putBlob("chunk", null);
-      this.store.putBlob("traces", null);
+      this.traces.clear();
       for (const c of chunks) this.store.enqueue({ kind: "chunk", ...c });
       this.store.enqueue({ kind: "closed" });
       meta.state = "closed";
@@ -898,7 +903,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       sandbox,
       this.store.roster(),
       meta.limits.chunkTicks,
-      this.store.getJson<Record<string, TraceState>>("traces") ?? {},
+      this.traces.load(),
     );
     return this.sim;
   }

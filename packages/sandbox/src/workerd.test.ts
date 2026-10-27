@@ -96,4 +96,40 @@ describe("workerd", () => {
       "timeout",
     ]);
   });
+
+  it("charges the same cost units as Node (#60)", async () => {
+    const body = Array.from({ length: 120 }, (_, i) => `x = (x * 31 + ${i}) | 0;`).join(" ");
+    const source = botWithTick(
+      `
+      const t = state.lifeTick % 4;
+      let x = 0;
+      if (t === 0) { for (let i = 0; i < 50; i++) { ${body} } }
+      if (t === 1) { for (let i = 0; i < 20; i++) { try { null.x; } catch (e) { x++; } } }
+      if (t === 2) { const o = { ...state.self, ...[1, 2] }; for (const k in o) x++; x += [...state.food].length; }
+      if (t === 3) { for (;;) { ${body} } }
+      return { turn: x > 0 ? 0.25 : 0 };`,
+    );
+    const info = makeInfo();
+    const states = makeStates(8);
+    const response = await mf.dispatchFetch("http://sandbox/", {
+      method: "POST",
+      body: JSON.stringify({ source, info, states }),
+    });
+    const fromWorkerd = (await response.json()) as { reports: unknown[] };
+    const sandbox = await createSandbox();
+    const life = sandbox.startLife(source, info, {});
+    const fromNode = JSON.parse(JSON.stringify(states.map((s) => life.tick(s))));
+    expect(fromWorkerd.reports).toEqual(fromNode);
+    expect(fromNode.map((r: { outcome: string }) => r.outcome)).toEqual([
+      "ok",
+      "ok",
+      "ok",
+      "timeout",
+      "ok",
+      "ok",
+      "ok",
+      "timeout",
+    ]);
+    expect(fromNode.every((r: { work: number }) => r.work > 0)).toBe(true);
+  });
 });

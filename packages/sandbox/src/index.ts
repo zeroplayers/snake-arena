@@ -12,6 +12,7 @@
  * @packageDocumentation
  */
 
+export { type InstrumentResult, instrument } from "./instrument.ts";
 export {
   type BotLife,
   createSandbox,

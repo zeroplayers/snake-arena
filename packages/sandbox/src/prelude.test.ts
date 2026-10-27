@@ -253,7 +253,7 @@ describe("native work budget", () => {
       const report = tickOnce(`${body} return { turn: 0 };`);
       expect(report.ms).toBeLessThan(FAST_MS);
       expect(report.outcome).toBe("timeout");
-      if (byWork.has(name)) expect(report.error).toMatch(/native built-ins/);
+      if (byWork.has(name)) expect(report.error).toMatch(/cost units/);
     });
   }
 
@@ -263,7 +263,7 @@ describe("native work budget", () => {
       "const a = new Set(), b = new Set(); for (let i = 0; i < 5e4; i++) { a.add(i); b.add(-i); }",
     );
     expect(report.ms).toBeLessThan(FAST_MS);
-    expect(report.error).toMatch(/native built-ins/);
+    expect(report.error).toMatch(/cost units/);
   });
 
   it("stops the review repro: JSON.stringify of a 4 MB string 50 times", () => {
@@ -273,7 +273,7 @@ describe("native work budget", () => {
     );
     expect(report.ms).toBeLessThan(FAST_MS);
     expect(report.outcome).toBe("timeout");
-    expect(report.error).toMatch(/native built-ins/);
+    expect(report.error).toMatch(/cost units/);
     expect(report.action.turn).not.toBe(0.5);
   });
 
@@ -289,7 +289,7 @@ describe("native work budget", () => {
     it(`stops ${name} within one tick`, () => {
       const report = tickOnce(`for (;;) ${body}; return { turn: 0 };`, collections);
       expect(report.ms).toBeLessThan(FAST_MS);
-      expect(report.error).toMatch(/native built-ins/);
+      expect(report.error).toMatch(/cost units/);
     });
   }
 

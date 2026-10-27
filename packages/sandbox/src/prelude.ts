@@ -3,7 +3,8 @@
  *
  * Its completion value is `setup(host, options)`, which hardens the globals and returns the
  * driver the host calls (`begin`, `load`, `tick`, `work`, `describe`). Nothing it creates is reachable
- * from bot code except through the globals it deliberately installs (`Math.random`, `console`).
+ * from bot code except through the globals it deliberately installs (`Math.random`, `console`) and
+ * the meter helpers it hands to the instrumented bundle's header (see `instrument.ts`).
  *
  * Why the wrappers: QuickJS only calls the interrupt handler from bytecode and C-function calls,
  * about once per 10 000 of them. A native built-in that loops internally (`indexOf` on a sparse
@@ -11,11 +12,12 @@
  * between two checks, and a bot can call it thousands of times before the next one. So every
  * built-in whose cost grows with its input is wrapped to:
  *   1. throw a RangeError when an array or typed array is longer than `maxArrayLength`;
- *   2. charge its input size to a per-tick native work counter. Past `workLimit` the wrapper asks
- *      the host to fail the next interrupt check and spins until it comes: an uncatchable
- *      "interrupted" error that the host reports as a timeout.
- * Weights (work units per element / char) are rough calibrations: 1 unit ≈ 1 ns of CPU on an M1,
- * `workLimit` = opBudget × 1e6 units ≈ the same CPU as `opBudget` interrupts of plain bytecode.
+ *   2. charge its input size to the per-tick cost meter, the same one the instrumented bot code
+ *      charges for its own bytecode. When it runs out, the wrapper asks the host to fail the next
+ *      interrupt check and spins until it comes: an uncatchable "interrupted" error that the host
+ *      reports as a timeout.
+ * Weights (units per element / char) are rough calibrations: 1 unit ≈ 1 ns of CPU on an M1, and
+ * a tick gets opBudget × 1e6 units.
  *
  * `concat`, `flat` and `flatMap` read several arrays in one native call, so a getter on one could
  * grow another after it was checked; they are re-implemented in JS here, where every step counts.
@@ -34,6 +36,7 @@ export const PRELUDE = String.raw`
 
   const { apply, construct, defineProperty, deleteProperty, getOwnPropertyDescriptor,
     getPrototypeOf, setPrototypeOf } = Reflect;
+  const ownKeysNative = Reflect.ownKeys;
   const ObjectCtor = Object;
   const hasOwn = Object.hasOwn;
   const isArray = Array.isArray;
@@ -89,17 +92,79 @@ export const PRELUDE = String.raw`
   // Per entry of a Set or Map walked by an iterator (spreading a Map: 192 ns).
   const ENTRY = 250;
 
-  // ---- native work accounting ----
+  // Copying one own property (object spread and rest, for-in: 50–130 ns).
+  const KEY = 150;
+  // Every call through one of the wrappers below runs ~0.5–1 µs of JS before the native.
+  const WRAP = 800;
 
-  let work = 0;
-  let workLimit = Infinity;
+  // ---- cost meter ----
+
+  // The units left in this phase live in the bot module (a var the instrumented code decrements
+  // inline); its header registers a getter and setter for it. Until then, a local stands in.
+  let local = Infinity;
+  let getLeft = () => local;
+  let setLeft = (n) => {
+    local = n;
+  };
+  let phaseLimit = Infinity;
+  let registered = false;
+  // Per-exception costs; set by the header (they depend on the bundle's largest function).
+  let exceptionUnits = 0;
+  let perChar = 0;
+  let perCharTick = 0;
+
   function charge(units) {
     if (!(units > 0)) return;
-    work += units;
-    if (work > workLimit) {
-      exhaust();
-      for (;;) {}
+    const left = getLeft() - units;
+    setLeft(left);
+    if (left < 0) overrun();
+  }
+  function overrun() {
+    exhaust();
+    for (;;) {}
+  }
+
+  // An exception was caught (or created): QuickJS wrote a backtrace for it, which costs about
+  // its length times the size of the functions on the stack.
+  function chargeCaught(e) {
+    let units = exceptionUnits;
+    if ((typeof e === "object" || typeof e === "function") && e !== null) {
+      const d = getOwnPropertyDescriptor(e, "stack");
+      if (d !== undefined && typeof d.value === "string") units += d.value.length * perChar;
     }
+    charge(units);
+  }
+  // Object spread and rest copy every own key of the source; for-in collects the keys of the
+  // whole prototype chain up front.
+  function chargeSpread(v) {
+    if (typeof v === "string") charge(v.length * PIECE);
+    else if ((typeof v === "object" || typeof v === "function") && v !== null) {
+      charge(ownKeysNative(v).length * KEY);
+    }
+    return v;
+  }
+  function chargeForIn(v) {
+    if (typeof v === "string") {
+      charge(v.length * PIECE);
+    } else if (v !== null && v !== undefined) {
+      let n = 0;
+      for (let p = ObjectCtor(v); p !== null; p = getPrototypeOf(p)) n += ownKeysNative(p).length;
+      charge(n * KEY);
+    }
+    return v;
+  }
+  function register(set, get, charTick, charLoad, exception) {
+    deleteProperty(g, "__zs_meter");
+    if (registered) throw new TypeErrorCtor("sandbox: the meter is already registered");
+    registered = true;
+    const left = getLeft();
+    getLeft = get;
+    setLeft = set;
+    setLeft(left);
+    perCharTick = charTick;
+    perChar = charLoad;
+    exceptionUnits = exception;
+    return { o: overrun, k: chargeSpread, f: chargeForIn, x: chargeCaught };
   }
 
   function tooLong(name, len) {
@@ -115,7 +180,8 @@ export const PRELUDE = String.raw`
     try {
       apply(regexpSource, o, []);
       return true;
-    } catch {
+    } catch (e) {
+      chargeCaught(e);
       return false;
     }
   }
@@ -192,6 +258,7 @@ export const PRELUDE = String.raw`
   function guard(obj, name, cost) {
     replaceMethod(obj, name, (native) => ({
       m(...args) {
+        charge(WRAP);
         cost(this, args, name);
         return apply(native, this, args);
       },
@@ -237,6 +304,7 @@ export const PRELUDE = String.raw`
     return s !== undefined ? !!s : isArray(o);
   }
   function concat(...items) {
+    charge(WRAP);
     const out = [];
     let n = 0;
     for (let i = -1; i < items.length; i++) {
@@ -265,10 +333,12 @@ export const PRELUDE = String.raw`
     return out;
   }
   function flat(depth) {
+    charge(WRAP);
     const d = depth === undefined ? 1 : NumberCtor(depth);
     return flatten([], ObjectCtor(this), d === d ? d : 0, undefined, undefined);
   }
   function flatMap(mapper, thisArg) {
+    charge(WRAP);
     if (typeof mapper !== "function") throw new TypeErrorCtor("flatMap: mapper is not a function");
     return flatten([], ObjectCtor(this), 1, mapper, thisArg);
   }
@@ -304,6 +374,7 @@ export const PRELUDE = String.raw`
   function guardConstructor(name, cost) {
     const Native = g[name];
     installConstructor(name, Native, function (...args) {
+      charge(WRAP);
       cost(args);
       if (new.target === undefined) return apply(Native, this, args);
       return construct(Native, args, new.target);
@@ -331,10 +402,14 @@ export const PRELUDE = String.raw`
     guardConstructor(name, (args) => {
       const a = args[0];
       if (typeof a === "object" && a !== null) {
-        try {
-          apply(abByteLength, a, []);
-          return; // a view on an existing buffer: nothing is copied
-        } catch {}
+        if (!isArray(a) && !isTypedArray(a)) {
+          try {
+            apply(abByteLength, a, []);
+            return; // a view on an existing buffer: nothing is copied
+          } catch (e) {
+            chargeCaught(e);
+          }
+        }
         arrayLikeCost(name, a, TYPED);
       } else if (args.length > 0) {
         // Convert once, so a valueOf cannot report a different size to the native.
@@ -372,6 +447,7 @@ export const PRELUDE = String.raw`
   function guardString(name, cost) {
     replaceMethod(StringProto, name, (native) => ({
       m(...args) {
+        charge(WRAP);
         // Convert once here, so the native gets a primitive and cannot run bot code (a
         // toString returning a different string) after we measured it.
         const s = this === null || this === undefined ? this : StringCtor(this);
@@ -472,7 +548,8 @@ export const PRELUDE = String.raw`
   function isGlobal(rx) {
     try {
       if (apply(regexpGlobal, rx, [])) return true;
-    } catch {
+    } catch (e) {
+      chargeCaught(e);
       return true;
     }
     for (let p = rx; p !== null; p = getPrototypeOf(p)) {
@@ -490,6 +567,7 @@ export const PRELUDE = String.raw`
     const once = key === Symbol.match || key === Symbol.replace;
     replaceMethod(RegExpProto, key, (native) => ({
       m(...args) {
+        charge(WRAP);
         const s = args[0] = StringCtor(args[0]);
         const many = !once || isGlobal(this);
         if (many) charge(s.length * MATCH);
@@ -519,11 +597,16 @@ export const PRELUDE = String.raw`
     charge(str.length * QUOTE);
     if (apply(regexpExec, SLOW_QUOTE, [str]) !== null) charge(str.length * (QUOTE_U - QUOTE));
   }
+  // A String object has an own non-writable, non-configurable length; checked first so ordinary
+  // objects don't pay for an exception.
   function isStringObject(v) {
+    const d = getOwnPropertyDescriptor(v, "length");
+    if (d === undefined || d.writable !== false || d.configurable !== false) return false;
     try {
       apply(stringValueOf, v, []);
       return true;
-    } catch {
+    } catch (e) {
+      chargeCaught(e);
       return false;
     }
   }
@@ -534,6 +617,7 @@ export const PRELUDE = String.raw`
   // allow-list) is turned into a function: same output, except keys come out in object order,
   // not list order.
   function stringify(value, replacer, space) {
+    charge(WRAP);
     let keep;
     if (isArray(replacer)) {
       checked("JSON.stringify", replacer.length, ARRAY);
@@ -563,6 +647,7 @@ export const PRELUDE = String.raw`
   function chargeAfter(obj, name) {
     replaceMethod(obj, name, (native) => ({
       m(...args) {
+        charge(WRAP);
         const out = apply(native, this, args);
         charge(out.length * ARRAY);
         return out;
@@ -574,6 +659,7 @@ export const PRELUDE = String.raw`
   function chargeKeys(obj, name, argIndex, weight) {
     replaceMethod(obj, name, (native) => ({
       m(...args) {
+        charge(WRAP);
         charge(sizeHint(args[argIndex]) * weight);
         const out = apply(native, this, args);
         if (isArray(out)) charge(out.length * weight);
@@ -637,7 +723,8 @@ export const PRELUDE = String.raw`
   const sizeOf = (o) => {
     try {
       return apply(setSize, o, []);
-    } catch {
+    } catch (e) {
+      chargeCaught(e);
       return 0;
     }
   };
@@ -655,11 +742,44 @@ export const PRELUDE = String.raw`
         let n = 0;
         try {
           n = apply(size, self, []);
-        } catch {}
+        } catch (e) {
+          chargeCaught(e);
+        }
         charge(n * ENTRY);
       });
     }
   }
+
+  // new Error() writes a backtrace (see chargeCaught). Subclasses get the wrapped Error as their
+  // prototype, so the native one stays out of reach.
+  // The backtrace starts with this wrapper and the native it called; drop those two lines.
+  function dropWrapperFrames(e) {
+    const d = getOwnPropertyDescriptor(e, "stack");
+    if (d === undefined || typeof d.value !== "string") return;
+    const first = apply(indexOfString, d.value, ["\n"]);
+    const second = first < 0 ? -1 : apply(indexOfString, d.value, ["\n", first + 1]);
+    if (second < 0) return;
+    defineProperty(e, "stack", { value: apply(sliceString, d.value, [second + 1]), writable: true,
+      configurable: true });
+  }
+  const ERROR_NAMES = ["Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError",
+    "TypeError", "URIError", "AggregateError", "InternalError", "SuppressedError"];
+  for (const name of ERROR_NAMES) {
+    const Native = g[name];
+    if (typeof Native !== "function") continue;
+    installConstructor(name, Native, function (...args) {
+      const e = new.target === undefined ? apply(Native, this, args) : construct(Native, args, new.target);
+      chargeCaught(e);
+      dropWrapperFrames(e);
+      return e;
+    }, []);
+    if (name !== "Error") setPrototypeOf(g[name], g.Error);
+  }
+
+  // Building the argument list walks the whole array in C.
+  guard(Function.prototype, "apply", (_self, args) => checked("apply", arrayLength(args[1]), ARRAY));
+  guard(Reflect, "apply", (_self, args) => checked("apply", arrayLength(args[2]), ARRAY));
+  guard(Reflect, "construct", (_self, args) => checked("construct", arrayLength(args[1]), ARRAY));
 
   // An exception inside a Promise executor or an async function becomes a rejection, and that
   // includes the interrupt that ends an over-budget tick: the bot could catch it and run on.
@@ -673,6 +793,7 @@ export const PRELUDE = String.raw`
     if (typeof executor !== "function") {
       throw new TypeErrorCtor("Promise executor is not a function");
     }
+    charge(WRAP);
     let resolve;
     let reject;
     const p = construct(NativePromise, [(a, b) => {
@@ -682,6 +803,7 @@ export const PRELUDE = String.raw`
     try {
       apply(executor, undefined, [resolve, reject]);
     } catch (e) {
+      chargeCaught(e);
       apply(reject, undefined, [e]);
     }
     return p;
@@ -735,10 +857,13 @@ export const PRELUDE = String.raw`
     try {
       const json = stringify(arg);
       if (json !== undefined) return json;
-    } catch {}
+    } catch (e) {
+      chargeCaught(e);
+    }
     return StringCtor(arg);
   }
   function log(...args) {
+    charge(WRAP);
     if (!logOpen) return;
     let line = "";
     for (let i = 0; i < args.length && line.length <= logLimit; i++) {
@@ -768,13 +893,17 @@ export const PRELUDE = String.raw`
   }
 
   return {
-    // Starts a budgeted phase: module evaluation + load, or one tick.
+    // Starts the load phase (module evaluation + init) with its budget, and offers the meter to
+    // the module's header.
     begin(limit) {
-      work = 0;
-      workLimit = limit;
+      phaseLimit = limit;
+      setLeft(limit);
       logOpen = true;
+      defineProperty(g, "__zs_meter", { value: register, writable: true, configurable: true });
     },
     load(ns, infoJson) {
+      deleteProperty(g, "__zs_meter");
+      if (!registered) throw new TypeErrorCtor("sandbox: the bundle was not instrumented");
       const def = ns.default;
       if ((typeof def !== "object" && typeof def !== "function") || def === null) {
         throw new TypeErrorCtor("the bot module must 'export default defineBot({ init, tick })'");
@@ -798,8 +927,9 @@ export const PRELUDE = String.raw`
       mem = m;
     },
     tick(stateJson, limit) {
-      work = 0;
-      workLimit = limit;
+      phaseLimit = limit;
+      setLeft(limit);
+      perChar = perCharTick;
       logOpen = true;
       const action = apply(tickFn, bot, [parse(stateJson), mem, log]);
       if (typeof action !== "object" || action === null) {
@@ -810,8 +940,9 @@ export const PRELUDE = String.raw`
       const turn = typeof t === "number" && t === t ? (t > 1 ? 1 : t < -1 ? -1 : t) : 0;
       return [turn, action.boost === true];
     },
+    // Units charged in the current phase.
     work() {
-      return work;
+      return phaseLimit - getLeft();
     },
     // Never runs bot code: only own data properties and primitive conversions.
     describe(e) {

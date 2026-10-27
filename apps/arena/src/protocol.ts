@@ -131,6 +131,25 @@ export type JoinResult =
   | { ok: true }
   | { ok: false; reason: "closed" | "duplicate-life" | "author-present" | "quarantined" | "full" };
 
+/**
+ * A ticket from `MatchmakerRpc.nextLife` that never became a life, so it must not count toward
+ * the bot's daily quota (`MatchmakerRpc.lifeDropped`).
+ */
+export interface LifeDrop {
+  lifeId: string;
+  versionId: string;
+  roomId: string;
+  /**
+   * - a `join` refusal (the room asked for the life, then couldn't take it);
+   * - `spawn`: dropped when the batch was to spawn it (quarantined meanwhile, or no room left);
+   * - `left`: `RoomRpc.leave` before it spawned;
+   * - `stopped`: the arena's kill switch, before it spawned.
+   */
+  reason: Extract<JoinResult, { ok: false }>["reason"] | "spawn" | "left" | "stopped";
+  /** Wall-clock ms. */
+  at: number;
+}
+
 export type RoomMode = "accelerated" | "realtime";
 
 export interface RoomStartOptions {
@@ -202,11 +221,18 @@ export interface MatchmakerRpc {
   /**
    * A deployed version's life ended (already written to D1, except `evicted` lives; may be
    * minutes after the death, since rows wait for their replay chunk). At least once. Skip
-   * `evicted` lives in ratings. TODO(#23): count them per version across rooms (the room only
-   * counts its own) and quarantine at `EVICTIONS_TO_QUARANTINE`. (Named kills are already counted
-   * across rooms, in D1's `version_kills`; evictions by the room's cap of kills can take fewer.)
+   * `evicted` lives in ratings. The matchmaker counts them per version across rooms (the room only
+   * counts its own) and quarantines at `EVICTIONS_TO_QUARANTINE`. (Named kills are already counted
+   * across rooms, in D1's `version_kills`.)
    */
   lifeEnded(result: LifeResult): Promise<void>;
+  /**
+   * A ticket from `nextLife` never started a life (see `LifeDrop`): the matchmaker gives the bot
+   * its quota back and its place in the queue. At least once. Every ticket a room got from
+   * `nextLife` or `RoomRpc.join` ends in exactly one `lifeEnded` or `lifeDropped`, except a `join`
+   * the matchmaker made itself and saw refused.
+   */
+  lifeDropped(drop: LifeDrop): Promise<void>;
   /**
    * The room's backstop quarantined a version (already set in D1, `versions.quarantined_at`):
    * stop queuing its lives until a person clears it. At least once.
@@ -220,7 +246,11 @@ export interface MatchmakerRpc {
 export interface RoomRpc {
   start(options?: RoomStartOptions): Promise<RoomStatus>;
   join(ticket: LifeTicket): Promise<JoinResult>;
-  /** Retires a life at the next batch (e.g. its version was archived). */
+  /**
+   * Retires a life at the next batch (e.g. its version was archived): it ends `retired`. A ticket
+   * that hasn't spawned yet is dropped instead (`MatchmakerRpc.lifeDropped`). False if the room
+   * doesn't hold it (any more).
+   */
   leave(lifeId: string): Promise<boolean>;
   setMode(mode: RoomMode): Promise<void>;
   status(): Promise<RoomStatus>;

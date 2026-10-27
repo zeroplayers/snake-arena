@@ -5,7 +5,13 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import type { BotLife, InstrumentResult } from "@zerosnake/sandbox";
-import type { LifeResult, LifeTicket, MatchmakerRpc, QuarantineRecord } from "../protocol.ts";
+import type {
+  LifeDrop,
+  LifeResult,
+  LifeTicket,
+  MatchmakerRpc,
+  QuarantineRecord,
+} from "../protocol.ts";
 import type { LifeStarter } from "../room/sim.ts";
 import { RoomDO as BaseRoomDO } from "../room.ts";
 import { BURN_LINE, SPIN_PREFIX } from "./burn.ts";
@@ -83,7 +89,7 @@ interface Call {
 }
 
 export interface MatchmakerEvent {
-  kind: "nextLife" | "lifeEnded" | "versionQuarantined" | "roomClosed";
+  kind: "nextLife" | "lifeEnded" | "lifeDropped" | "versionQuarantined" | "roomClosed";
   body: unknown;
 }
 
@@ -136,6 +142,10 @@ export class TestMatchmaker extends DurableObject<Env> implements MatchmakerRpc 
 
   async lifeEnded(result: LifeResult): Promise<void> {
     this.record("lifeEnded", result);
+  }
+
+  async lifeDropped(drop: LifeDrop): Promise<void> {
+    this.record("lifeDropped", drop);
   }
 
   async versionQuarantined(record: QuarantineRecord): Promise<void> {

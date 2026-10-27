@@ -69,6 +69,8 @@ export type OutboxItem =
   /** `chunkTick`: the replay chunk the life's row points to; sent only once it is in R2. */
   | { kind: "life"; json: string; chunkTick: number }
   | { kind: "quarantine"; json: string }
+  /** A ticket that never started a life (`LifeDrop`), for the matchmaker. */
+  | { kind: "dropped"; json: string }
   /** A named kill for D1 (`VersionKillRecord`), and named kills to retract (an array of them). */
   | { kind: "kill" | "retract"; json: string }
   | { kind: "closed" };
@@ -315,6 +317,7 @@ export class RoomStore {
         );
         break;
       case "quarantine":
+      case "dropped":
       case "kill":
       case "retract":
         this.sql.exec(
@@ -357,7 +360,12 @@ export class RoomStore {
           item = { kind: "chunk", key: r.key ?? "", tick: r.tick ?? 0, bytes: body };
         } else if (r.kind === "life") {
           item = { kind: "life", json: decoder.decode(body), chunkTick: r.tick ?? 0 };
-        } else if (r.kind === "quarantine" || r.kind === "kill" || r.kind === "retract") {
+        } else if (
+          r.kind === "quarantine" ||
+          r.kind === "dropped" ||
+          r.kind === "kill" ||
+          r.kind === "retract"
+        ) {
           item = { kind: r.kind, json: decoder.decode(body) };
         } else {
           item = { kind: "closed" };

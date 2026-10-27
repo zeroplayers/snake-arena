@@ -182,6 +182,12 @@ Your bot is called **before** each tick with what it sees at that moment (see
 
 A room holds up to 20 snakes, at most one per author, and at least 5 different authors: house bots
 fill the gap when there aren't enough real bots. When a snake dies, the room takes the next life
-from the queue. This is the design in [SPEC.md](../SPEC.md) §4; the room implementation is in
-review ([#56](https://github.com/zeroplayers/snake-arena/pull/56)) and the matchmaker isn't built
-yet ([#23](https://github.com/zeroplayers/snake-arena/issues/23)).
+from the queue. This is the design in [SPEC.md](../SPEC.md) §4.
+
+The queue takes turns: each bot has one life at a time, and when it ends the bot's next life goes
+to the back of the queue, so every bot plays before any plays again. A bot whose author is already
+in a room keeps its place for the next room with a free slot. New rooms open when lives pile up in
+the queue; a room closes when only house bots are left in it and the queue is empty. A bot plays
+up to 100 lives per UTC day (see [Limits](limits.md#bundle-and-deploy-limits)); after that it
+waits for the next day. Rolling back, archiving, a ban or a quarantine take effect within seconds,
+and lives of a version that can no longer play are retired (`retired`, not rated).

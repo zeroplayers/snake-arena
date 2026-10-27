@@ -218,8 +218,7 @@ const dialect = new SQLiteAsyncDialect();
 
 /**
  * Calls a `MatchmakerSiteRpc` method on the global `MatchmakerDO`, best effort: errors and
- * timeouts are logged, never thrown, since the matchmaker reconciles from D1 anyway. Until #23
- * implements the methods the calls fail and only log.
+ * timeouts are logged, never thrown, since the matchmaker reconciles from D1 anyway.
  */
 export async function callMatchmaker(
   namespace: DurableObjectNamespace | undefined,

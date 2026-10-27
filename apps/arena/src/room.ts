@@ -36,6 +36,7 @@ import {
 import type {
   IncidentOutcome,
   JoinResult,
+  LifeDrop,
   LifeResult,
   LifeTicket,
   MatchmakerRpc,
@@ -207,7 +208,10 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       this.sim?.markLeaving(lifeId);
       return true;
     }
-    return this.store.removePendingLife(lifeId);
+    const ticket = this.store.pending().find((p) => p.lifeId === lifeId);
+    if (!ticket || !this.store.removePendingLife(lifeId)) return false;
+    this.dropTicket(ticket, "left");
+    return true;
   }
 
   async setMode(mode: RoomMode): Promise<void> {
@@ -635,6 +639,10 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       this.store.putJson("world", sim.world);
       this.store.putBlob("chunk", pending ? encodeReplayChunk(pending) : null);
       for (const s of result.spawned) this.store.addToRoster(s);
+      const spawned = new Set(result.spawned.map((s) => s.lifeId));
+      for (const p of this.store.pending(maxPendingSeq)) {
+        if (!spawned.has(p.lifeId)) this.dropTicket(p, "spawn");
+      }
       this.store.removePending(maxPendingSeq);
       // Chunks first: a life is delivered only after the chunk it points to.
       for (const c of result.chunks) this.store.enqueue({ kind: "chunk", ...c });
@@ -702,6 +710,9 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
               await this.matchmaker().lifeEnded(life);
               break;
             }
+            case "dropped":
+              await this.matchmaker().lifeDropped(JSON.parse(item.json) as LifeDrop);
+              break;
             case "quarantine": {
               const record = JSON.parse(item.json) as QuarantineRecord;
               if ((await recordQuarantine(this.env.DB, record)) === "missing") {
@@ -788,8 +799,10 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         return true;
       }
       const result = await this.join(ticket);
-      if (!result.ok) console.warn("room refused ticket", ticket.lifeId, result.reason);
-      else vacancies--;
+      if (!result.ok) {
+        console.warn("room refused ticket", ticket.lifeId, result.reason);
+        this.dropTicket({ ...ticket, house: null }, result.reason);
+      } else vacancies--;
       excludeAuthors.push(ticket.author);
     }
     return false;
@@ -914,7 +927,9 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
 
   /** The arena is stopped: drop the tickets, retire every life at the next batch. */
   private retireAll(): void {
-    for (const p of this.store.pending()) this.store.removePendingLife(p.lifeId);
+    for (const p of this.store.pending()) {
+      if (this.store.removePendingLife(p.lifeId)) this.dropTicket(p, "stopped");
+    }
     for (const e of this.store.roster()) {
       if (e.leaving || e.evicted) continue;
       this.store.markLeaving(e.lifeId);
@@ -930,6 +945,20 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       console.error("room quarantine read failed", ticket.versionId, e);
       return false;
     }
+  }
+
+  /** Tells the matchmaker (through the outbox) that a ticket of a version won't start a life. */
+  private dropTicket(ticket: LifeEntry, reason: LifeDrop["reason"]): void {
+    const meta = this.store.meta();
+    if (!ticket.versionId || !meta) return;
+    const drop: LifeDrop = {
+      lifeId: ticket.lifeId,
+      versionId: ticket.versionId,
+      roomId: meta.roomId,
+      reason,
+      at: Date.now(),
+    };
+    this.store.enqueue({ kind: "dropped", json: JSON.stringify(drop) });
   }
 
   private findLife(lifeId: string): LifeEntry | null {

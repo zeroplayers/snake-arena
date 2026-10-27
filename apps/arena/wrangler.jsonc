@@ -1,7 +1,7 @@
 /**
- * Arena worker: MatchmakerDO, RoomDO, the version-checks Queue consumer, and later spectator
- * WebSockets and MCP. Top level is local dev (`pnpm dev`); `env.staging` is what CI deploys
- * to api.arena.surninsynergy.dev.
+ * Arena worker: MatchmakerDO, RoomDO, the version-checks Queue consumer, spectator WebSockets
+ * (`/showcase`; ShowcaseDO picks the rooms) and later MCP. Top level is local dev (`pnpm dev`);
+ * `env.staging` is what CI deploys to api.arena.surninsynergy.dev.
  *
  * Bindings are not inherited by environments, so every binding is declared twice.
  */
@@ -20,7 +20,10 @@
   "limits": { "cpu_ms": 300000 },
 
   // Shared by all environments.
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MatchmakerDO", "RoomDO"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["MatchmakerDO", "RoomDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["ShowcaseDO"] }
+  ],
 
   "vars": { "ENVIRONMENT": "development" },
   "d1_databases": [
@@ -52,7 +55,8 @@
   "durable_objects": {
     "bindings": [
       { "name": "MATCHMAKER", "class_name": "MatchmakerDO" },
-      { "name": "ROOMS", "class_name": "RoomDO" }
+      { "name": "ROOMS", "class_name": "RoomDO" },
+      { "name": "SHOWCASE", "class_name": "ShowcaseDO" }
     ]
   },
   // Rejects versions whose check job was lost (`reapStaleVersions`). Inherited by environments.
@@ -94,7 +98,8 @@
       "durable_objects": {
         "bindings": [
           { "name": "MATCHMAKER", "class_name": "MatchmakerDO" },
-          { "name": "ROOMS", "class_name": "RoomDO" }
+          { "name": "ROOMS", "class_name": "RoomDO" },
+          { "name": "SHOWCASE", "class_name": "ShowcaseDO" }
         ]
       }
     }

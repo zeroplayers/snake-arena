@@ -1,7 +1,9 @@
 import { type CheckJob, handleChecks, reapStaleVersions } from "./checks";
+import { handleShowcase } from "./showcase";
 
 export { MatchmakerDO } from "./matchmaker";
 export { RoomDO } from "./room";
+export { ShowcaseDO } from "./showcase";
 
 export default {
   async fetch(request, env) {
@@ -14,6 +16,7 @@ export default {
         matchmaker: await matchmaker.ping(),
       });
     }
+    if (url.pathname === "/showcase") return handleShowcase(request, env);
     return new Response("Not found", { status: 404 });
   },
 

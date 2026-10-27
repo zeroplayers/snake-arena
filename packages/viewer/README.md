@@ -38,7 +38,14 @@ any. A source decides how ticks come to exist:
 | ------------------------- | ---------------------------------- | ------------ |
 | `LiveEngineSource` (here) | simulates up to `tick` in the page | `undefined`  |
 | replay player (after #9)  | re-simulates from seed + actions   | end of chunk |
-| room broadcast (later)    | no-op; ticks arrive by themselves  | `undefined`  |
+| `BroadcastSource` (here)  | no-op; ticks arrive by themselves  | `undefined`  |
+
+`BroadcastSource` plays a room's live broadcast (`@zerosnake/engine` `broadcast.ts`, the
+arena's `/showcase`): a keyframe, then a second of state deltas per message. It reconnects with
+backoff, starts over from a keyframe after a gap or on a new stream, acks what it applied (the
+room skips spectators that fall behind, then sends them the newest keyframe), and sets
+`info.liveDelay`; `followLive(playback)` keeps the playhead that far behind the newest tick so
+the bursts play smoothly.
 
 A `TickSnapshot` holds a `RenderFrame` for the renderer and per-snake stats: score, mass,
 kills, and the `action`, `logs` and `ops` of the bot call that saw that tick. A source may

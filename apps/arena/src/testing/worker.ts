@@ -1,13 +1,18 @@
 /**
  * Test entry for `room.test.ts`: the real `RoomDO` (with a sandbox that can be told to burn CPU),
  * a scriptable matchmaker in place of the stub, and `POST /rpc` to call either from Node
- * (`{ target, name, method, args }`).
+ * (`{ target, name, method, args }`). Spectators: `/showcase` as in production, and
+ * `/spectate/<room name>` straight to a room.
  */
 import { DurableObject } from "cloudflare:workers";
 import type { BotLife, InstrumentResult } from "@zerosnake/sandbox";
 import type { LifeResult, LifeTicket, MatchmakerRpc, QuarantineRecord } from "../protocol.ts";
 import type { LifeStarter } from "../room/sim.ts";
 import { RoomDO as BaseRoomDO } from "../room.ts";
+import { handleShowcase } from "../showcase.ts";
+
+export { ShowcaseDO } from "../showcase.ts";
+
 import { BURN_LINE, SPIN_PREFIX } from "./burn.ts";
 
 /**
@@ -76,7 +81,7 @@ function burnOnRequest(life: BotLife): BotLife {
 }
 
 interface Call {
-  target: "room" | "matchmaker";
+  target: "room" | "matchmaker" | "showcase";
   name?: string;
   method: string;
   args?: unknown[];
@@ -157,8 +162,19 @@ export class TestMatchmaker extends DurableObject<Env> implements MatchmakerRpc 
 
 export default {
   async fetch(request, env) {
+    const path = new URL(request.url).pathname;
+    if (path === "/showcase") return handleShowcase(request, env);
+    if (path.startsWith("/spectate/")) {
+      const name = decodeURIComponent(path.slice("/spectate/".length));
+      return env.ROOMS.get(env.ROOMS.idFromName(name)).fetch(request);
+    }
     const call = (await request.json()) as Call;
-    const ns = call.target === "room" ? env.ROOMS : env.MATCHMAKER;
+    const ns =
+      call.target === "room"
+        ? env.ROOMS
+        : call.target === "showcase"
+          ? env.SHOWCASE
+          : env.MATCHMAKER;
     const stub = ns.get(ns.idFromName(call.name ?? "global")) as unknown as Record<
       string,
       (...args: unknown[]) => Promise<unknown>

@@ -26,10 +26,16 @@ const wasmPlugin: Plugin = {
 };
 
 export interface Harness {
-  call<T = unknown>(target: "room" | "matchmaker", method: string, ...args: unknown[]): Promise<T>;
+  call<T = unknown>(
+    target: "room" | "matchmaker" | "showcase",
+    method: string,
+    ...args: unknown[]
+  ): Promise<T>;
   room<T = unknown>(name: string, method: string, ...args: unknown[]): Promise<T>;
   /** Starts a call without waiting for it (it may never finish). */
   fire(name: string, method: string, ...args: unknown[]): Promise<unknown>;
+  /** A request to the test worker (`/showcase`, `/spectate/<room>`), e.g. a WebSocket upgrade. */
+  fetch(path: string, init?: RequestInit): Promise<Response>;
   /** Restarts workerd: every object loses its memory and in-flight requests; storage stays. */
   restart(): Promise<void>;
   d1(): Promise<D1Database>;
@@ -75,10 +81,12 @@ export async function createHarness(): Promise<Harness> {
             REPLAYS: { type: "r2", name: "replays" },
             ROOMS: { type: "durable-object", worker: "arena", exportName: "RoomDO" },
             MATCHMAKER: { type: "durable-object", worker: "arena", exportName: "TestMatchmaker" },
+            SHOWCASE: { type: "durable-object", worker: "arena", exportName: "ShowcaseDO" },
           },
           exports: {
             RoomDO: { type: "durable-object", storage: "sqlite" },
             TestMatchmaker: { type: "durable-object", storage: "sqlite" },
+            ShowcaseDO: { type: "durable-object", storage: "sqlite" },
           },
         },
       },
@@ -110,6 +118,8 @@ export async function createHarness(): Promise<Harness> {
     room: (name, method, ...args) => rpc({ target: "room", name, method, args }) as never,
     fire: (name, method, ...args) =>
       rpc({ target: "room", name, method, args }).catch((e: unknown) => e),
+    fetch: (path, init) =>
+      mf.dispatchFetch(`http://arena${path}`, init as never) as unknown as Promise<Response>,
     async restart() {
       await mf.dispose();
       mf = new Miniflare(options);

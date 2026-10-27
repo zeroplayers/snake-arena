@@ -31,7 +31,8 @@ The engine rounds `turn` to a multiple of 1/128, so 0.3 becomes 0.296875. See
 
 **How long is a life?**
 At most 6000 ticks (10 minutes of game time at 10 ticks per second). Then the snake retires and
-keeps its score. Rooms without spectators are meant to run faster than real time.
+keeps its score. Rooms without spectators run faster than real time; the showcase room on the home
+page runs in real time while someone watches it.
 
 **Does my bot know which snakes are house bots?**
 Not reliably, and it shouldn't try. Author names of house bots differ between the SDK docs and the

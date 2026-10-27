@@ -1,19 +1,61 @@
 import { buildBotInfo, buildBotState } from "@zerosnake/engine";
 import { type HouseBotName, houseBots } from "@zerosnake/house-bots";
 import { LOG_LIMIT_BYTES } from "@zerosnake/sdk";
-import { type LiveBot, LiveEngineSource, type MatchSource } from "@zerosnake/viewer";
+import {
+  BroadcastSource,
+  type LiveBot,
+  LiveEngineSource,
+  type MatchSource,
+} from "@zerosnake/viewer";
+import { SHOWCASE_PATH } from "../../site";
+
+export interface HeroSource {
+  readonly source: MatchSource;
+  /** A real room's broadcast, rather than the local fallback. */
+  readonly live: boolean;
+}
+
+export interface HeroSourceOptions {
+  /** Seed of the local match. */
+  readonly seed?: number;
+  /** Opens the live showcase; rejects when there is none. Default: `connectShowcase`. */
+  readonly live?: () => Promise<MatchSource>;
+}
 
 /**
- * Hook for the live showcase (zeroplayers/snake-arena#27): what the landing page's arena plays.
- *
- * Today it is a match between the house bots, simulated in the page by the real engine. Once the
- * showcase room broadcasts, return a `MatchSource` over that broadcast here instead: the hero
- * plays any source from its newest tick (`ArenaHero` and `heroPlayer.ts` don't change), and
- * `HERO_IS_LIVE` in `heroLive.ts` switches the caption.
+ * What the landing page's arena plays: the live showcase (#27), a real room broadcast in real
+ * time, when one is running; otherwise a match between the house bots, simulated in the page by
+ * the real engine. The hero plays either from its newest tick (`heroPlayer.ts`).
  */
-export async function createHeroSource(
-  seed = Math.floor(Math.random() * 2 ** 31),
-): Promise<MatchSource> {
+export async function createHeroSource(options: HeroSourceOptions = {}): Promise<HeroSource> {
+  try {
+    return { source: await (options.live ?? connectShowcase)(), live: true };
+  } catch {
+    // No showcase room right now, no WebSocket, or a network that blocks it.
+  }
+  return { source: await localMatch(options.seed), live: false };
+}
+
+/** How long the hero waits for the showcase's first keyframe before playing a local match. */
+export const SHOWCASE_TIMEOUT_MS = 4000;
+
+/** The showcase room's broadcast through this site (`src/server/showcase.ts`). */
+export function connectShowcase(): Promise<MatchSource> {
+  if (typeof WebSocket === "undefined" || typeof location === "undefined") {
+    return Promise.reject(new Error("no WebSocket here"));
+  }
+  const url = new URL(SHOWCASE_PATH, location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return BroadcastSource.open({
+    connect: () => new WebSocket(url),
+    timeoutMs: SHOWCASE_TIMEOUT_MS,
+    title: "Live from the arena",
+    // The hero never scrubs back.
+    maxTicks: 300,
+  });
+}
+
+async function localMatch(seed = Math.floor(Math.random() * 2 ** 31)): Promise<MatchSource> {
   const source = new LiveEngineSource({
     bots: LINEUP.map((name, i) => houseBot(name, i)),
     seed,

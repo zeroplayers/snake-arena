@@ -1,5 +1,5 @@
 import { ArenaRenderer } from "@zerosnake/renderer";
-import { type MatchSource, Playback } from "@zerosnake/viewer";
+import { followLive, type MatchSource, Playback } from "@zerosnake/viewer";
 
 export interface HeroPlayer {
   play(): void;
@@ -11,7 +11,8 @@ export interface HeroPlayer {
 /**
  * Plays a `MatchSource` on a bare arena canvas: no timeline or panels, the camera on the whole
  * disc, from the source's newest tick. `Playback` keeps the clock, so a live broadcast and a
- * local engine play the same way. A finished recording starts over.
+ * local engine play the same way; a broadcast is kept a little behind its newest tick
+ * (`followLive`) so its bursts play smoothly. A finished recording starts over.
  */
 export function playHero(container: HTMLElement, source: MatchSource): HeroPlayer {
   const renderer = new ArenaRenderer(container, { tps: source.info.tps, maxPixelRatio: 1.5 });
@@ -27,6 +28,7 @@ export function playHero(container: HTMLElement, source: MatchSource): HeroPlaye
   const frame = (now: number) => {
     const dt = last === undefined ? 0 : Math.min(0.1, (now - last) / 1000);
     last = now;
+    followLive(playback);
     playback.update(dt);
     if (source.endTick !== undefined && playback.position >= source.endTick) {
       playback.seek(source.firstTick);

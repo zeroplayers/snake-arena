@@ -104,3 +104,53 @@ delete keys older than a day that no `versions.bundle_key` / `source_key` refere
 `@zerosnake/web/shared` (`src/shared/`) is what other workspaces may import without pulling in the
 site: `CheckJob` and `isCheckJob` for apps/arena's consumer, `CheckReport`, `SourceArchive`, and
 the CLI API types.
+
+## Bot management (`/bots`)
+
+Signed-in authors manage their bots on `/bots`. The page's server functions are in
+`src/server/manage.ts`; the rules are in `src/server/bot-admin.ts`. Only Better Auth web sessions
+get in. A CLI token is not a session, so it gets `unauthorized`. Calls that change something must
+also come from the site's origin (`Origin`, or `Sec-Fetch-Site: same-origin`).
+
+- **Bots.** You can create, rename, archive and restore bots. An author has at most
+  `BOTS_PER_AUTHOR` active bots; archived ones don't count. The limit is checked in the same
+  statement as the insert or restore, so racing requests can't overrun it.
+- **Slugs never change.** A rename changes only the display name. `/@user/slug` links and the
+  CLI's handle keep working, so no redirects are needed. An archived bot keeps its slug, and its
+  page stays reachable (marked archived); the profile lists only active bots.
+- **Archiving a bot**, in one transaction: its `ready` version becomes `archived`, and versions
+  still in checks become `rejected` (the checks consumer skips non-`validating` rows), so it stops
+  playing. The CLI API refuses deploys to it (409 `bot_archived`). Restoring brings it back with
+  no active version.
+- **Active version.** "Make active" rolls back to an `archived` version. A version only becomes
+  `archived` after being `ready`, so these all passed the checks. "Archive" takes the active
+  version out of play. Both run as one D1 batch: the old `ready` row is archived before the new
+  one is readied, so `versions_bot_ready_idx` never sees two. Each batch first writes an
+  `activations` row only if every precondition holds (ownership, status, quota), and every later
+  statement is guarded by that row existing, so the batch applies fully or not at all.
+- **Rollbacks restart the rating and count as a deploy.** The reactivated version's `ratings` row
+  is deleted and `versions.activated_at` moves forward. The rollback uses one of
+  `DEPLOYS_PER_DAY` (`src/server/quota.ts`; the CLI API counts it too). A kept rating would let an
+  author deploy many versions and switch to the luckiest frozen one. A free restart would let them
+  roll back until 30 lives came out lucky. Either way the "redeploy lottery" would be back.
+  Archiving the active version is free.
+- **Quotas shown:** deploys and rollbacks today against `DEPLOYS_PER_DAY`, active bots against
+  `BOTS_PER_AUTHOR`, and per bot the lives started today against 100
+  (`ARENA_LIMITS.livesPerBotPerDay`, enforced by the matchmaker). Rejected versions are listed
+  with their reports as sentences (`checkReportLines`).
+
+### Contract with the matchmaker
+
+Defined in `src/shared/arena.ts` (`@zerosnake/web/shared`):
+
+- **D1 is the source of truth.** A bot plays its `ready` version, and an archived bot has none.
+  The matchmaker reconciles from D1 at start-up and periodically. Every status change sets
+  `versions.updated_at`, so `WHERE updated_at > ?` is a cheap incremental poll. Before starting
+  a life, check that its version is still `ready`.
+- **The RPC is a hint.** After each commit the site calls
+  `MATCHMAKER.get(idFromName("global")).activeVersionChanged(change)`, a typed
+  `ActiveVersionChange` with the bot, new and previous version, and reason. It is best effort:
+  2 s timeout, and errors are only logged. `MatchmakerDO` doesn't implement the method yet (#23),
+  so for now it only logs.
+- **Ratings** count only lives started at or after `versions.activated_at`, including when a
+  rating is rebuilt from `lives`.

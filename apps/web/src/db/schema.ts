@@ -160,10 +160,19 @@ export const bots = sqliteTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
-    /** URL segment, unique per owner: `/@{username}/{slug}`. */
+    /**
+     * URL segment, unique per owner: `/@{username}/{slug}`, and the CLI's handle for the bot.
+     * Never changes: a rename only changes `name`, so links and `zerosnake deploy` keep working.
+     * An archived bot keeps its slug.
+     */
     slug: text("slug").notNull(),
     /** Skin id; `null` means the default skin. */
     skin: text("skin"),
+    /**
+     * Set when the owner archives the bot (`null` while active). An archived bot has no `ready`
+     * version, doesn't count against `botsPerAuthor` and can't be deployed to until restored.
+     */
+    archivedAt: integer("archived_at", { mode: "timestamp_ms" }),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("bots_owner_slug_idx").on(t.ownerId, t.slug)],
@@ -201,6 +210,12 @@ export const versions = sqliteTable(
      * `0002_page_counters`), so pages never count `lives` rows. Writers need do nothing.
      */
     livesCount: integer("lives_count").notNull().default(0),
+    /**
+     * When the version last became `ready` (checks passed, or the owner rolled back to it). Its
+     * rating covers lives started since then: a rollback starts the rating over (see
+     * `src/server/bot-admin.ts`). `null` if it hasn't been `ready` since migration 0003.
+     */
+    activatedAt: integer("activated_at", { mode: "timestamp_ms" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -212,6 +227,42 @@ export const versions = sqliteTable(
     // A bot has at most one active version.
     uniqueIndex("versions_bot_ready_idx").on(t.botId).where(sql`status = 'ready'`),
     check("versions_status_check", oneOf(t.status, versionStatuses)),
+  ],
+);
+
+export const activationKinds = ["activate", "deactivate", "archive_bot"] as const;
+export type ActivationKind = (typeof activationKinds)[number];
+
+/**
+ * Every change of a bot's active version made from the site (`src/server/bot-admin.ts`): a
+ * rollback (`activate`), archiving the active version (`deactivate`) or the whole bot. An audit
+ * log, and how rollbacks count against the daily deploy quota. Versions the checks make `ready`
+ * aren't logged here; they are `versions` rows created that day.
+ */
+export const activations = sqliteTable(
+  "activations",
+  {
+    id: id(),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    botId: text("bot_id")
+      .notNull()
+      .references(() => bots.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: activationKinds }).notNull(),
+    /** The version made active; `null` when the bot was left without one. */
+    versionId: text("version_id").references(() => versions.id, { onDelete: "cascade" }),
+    /** The version that was active before, if any. */
+    previousVersionId: text("previous_version_id").references(() => versions.id, {
+      onDelete: "set null",
+    }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    // Daily quota: an author's rollbacks today.
+    index("activations_owner_created_idx").on(t.ownerId, t.createdAt),
+    index("activations_bot_idx").on(t.botId),
+    check("activations_kind_check", oneOf(t.kind, activationKinds)),
   ],
 );
 

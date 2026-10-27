@@ -30,7 +30,14 @@ export const CAUSES_WINDOW = 200;
 
 export interface BotPage {
   author: { username: string; avatarUrl: string | null };
-  bot: { id: string; name: string; slug: string; createdAt: string };
+  bot: {
+    id: string;
+    name: string;
+    slug: string;
+    createdAt: string;
+    /** Set when the owner archived it; the page stays up. */
+    archivedAt: string | null;
+  };
   /** The active (`ready`) version, if any. */
   active: VersionRow | null;
   /** One page of versions, newest first. */
@@ -111,6 +118,7 @@ export async function getBotPage(
       name: bots.name,
       slug: bots.slug,
       createdAt: bots.createdAt,
+      archivedAt: bots.archivedAt,
       username: users.username,
       avatarUrl: users.image,
     })
@@ -139,7 +147,13 @@ export async function getBotPage(
 
   return {
     author: { username: bot.username, avatarUrl: bot.avatarUrl },
-    bot: { id: bot.id, name: bot.name, slug: bot.slug, createdAt: bot.createdAt.toISOString() },
+    bot: {
+      id: bot.id,
+      name: bot.name,
+      slug: bot.slug,
+      createdAt: bot.createdAt.toISOString(),
+      archivedAt: bot.archivedAt?.toISOString() ?? null,
+    },
     active: active ?? null,
     versions: rows.slice(0, VERSIONS_PER_PAGE),
     page,

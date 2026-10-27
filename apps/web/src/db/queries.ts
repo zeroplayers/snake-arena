@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import type { BotSummary, LeaderboardEntry, LeaderboardQuery, Profile } from "../lib/api";
 import type { Db } from ".";
 import { bots, ratings, users, versions } from "./schema";
@@ -36,7 +36,8 @@ export async function getProfile(db: Db, username: string): Promise<Profile | nu
     .from(bots)
     .leftJoin(versions, and(eq(versions.botId, bots.id), eq(versions.status, "ready")))
     .leftJoin(ratings, eq(ratings.versionId, versions.id))
-    .where(eq(bots.ownerId, user.id))
+    // Archived bots drop off the profile; their pages stay reachable by URL.
+    .where(and(eq(bots.ownerId, user.id), isNull(bots.archivedAt)))
     .orderBy(bots.createdAt);
 
   return {

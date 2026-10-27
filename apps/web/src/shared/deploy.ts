@@ -27,10 +27,11 @@ export const DEPLOY_LIMITS = {
   maxBodyBytes: 3 * MiB,
   /**
    * Deploys per author per UTC day (`DEPLOYS_PER_DAY`). Versions the checks reject count; deploys
-   * that failed with 503 before being queued don't.
+   * that failed with 503 before being queued don't. Rollbacks on the site count too (a rollback
+   * restarts the version's rating, see `src/server/quota.ts`).
    */
   deploysPerDay: 20,
-  /** Bots per author (`BOTS_PER_AUTHOR`). */
+  /** Active bots per author (`BOTS_PER_AUTHOR`); archived ones don't count. */
   botsPerAuthor: 3,
 } as const;
 
@@ -118,6 +119,8 @@ export interface DeployResponse {
 export interface MeResponse {
   user: { id: string; username: string | null; name: string; image: string | null };
   bots: (BotInfo & {
+    /** Archived on the site: can't be deployed to until restored there. */
+    archived: boolean;
     /** `n` of the `ready` version, if any. */
     activeVersion: number | null;
     latestVersion: { n: number; status: VersionStatus; createdAt: string } | null;
@@ -153,8 +156,10 @@ export type ApiErrorCode =
   | "not_bot_owner"
   /** 409: `POST /api/bots` with a slug the caller already uses; `bot` is the existing one. */
   | "bot_exists"
-  /** 403: already at `botsPerAuthor`. */
+  /** 403: already at `botsPerAuthor` active (not archived) bots. */
   | "bot_limit_reached"
+  /** 409: deploying to a bot archived on the site; `bot` is the bot. */
+  | "bot_archived"
   /** 429: `deploysPerDay` used up; `quota` says when it resets. */
   | "quota_exceeded"
   /** 409: `Idempotency-Key` reused for different content. */

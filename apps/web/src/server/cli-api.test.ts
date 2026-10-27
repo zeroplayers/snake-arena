@@ -337,7 +337,9 @@ describe("POST /api/bots", () => {
     const { token } = await cliUser();
     const bot = await createBot(token, "  Sneaky Snake 2000!  ");
     expect(bot).toMatchObject({ name: "Sneaky Snake 2000!", slug: "sneaky-snake-2000" });
-    expect((await me(token)).bots).toEqual([{ ...bot, activeVersion: null, latestVersion: null }]);
+    expect((await me(token)).bots).toEqual([
+      { ...bot, archived: false, activeVersion: null, latestVersion: null },
+    ]);
   });
 
   it("takes an explicit slug and checks it", async () => {
@@ -400,6 +402,29 @@ describe("POST /api/bots", () => {
       );
     expect((await create("one")).status).toBe(201);
     await expectError(await create("two"), 403, "bot_limit_reached");
+  });
+
+  it("doesn't count archived bots, keeps their slugs taken and refuses deploys to them", async () => {
+    const { token } = await cliUser();
+    const create = (name: string) =>
+      api().createBot(request("/api/bots", { method: "POST", token, body: { name } }));
+    const archived = await createBot(token, "Old");
+    await createBot(token, "b");
+    await createBot(token, "c");
+    await expectError(await create("d"), 403, "bot_limit_reached");
+    await env.DB.prepare("UPDATE bots SET archived_at = ? WHERE id = ?")
+      .bind(clock.getTime(), archived.id)
+      .run();
+
+    expect((await create("d")).status).toBe(201);
+    const exists = await expectError(await create("Old"), 409, "bot_exists");
+    expect(exists.message).toMatch(/archived/);
+    const refused = await expectError(await deploy(token, "old"), 409, "bot_archived");
+    expect(refused.bot).toMatchObject({ id: archived.id });
+    expect(sent).toEqual([]);
+    expect((await me(token)).bots.find((b) => b.id === archived.id)).toMatchObject({
+      archived: true,
+    });
   });
 });
 
@@ -844,6 +869,7 @@ describe("GET /api/me", () => {
     expect(res.bots).toEqual([
       {
         ...bot,
+        archived: false,
         activeVersion: 1,
         latestVersion: { n: 2, status: "validating", createdAt: clock.toISOString() },
       },
@@ -856,6 +882,31 @@ describe("GET /api/me", () => {
       deploysPerDay: 20,
       botsPerAuthor: 3,
     });
+  });
+});
+
+describe("deploy quota", () => {
+  it("counts rollbacks made on the site", async () => {
+    const { token, userId } = await cliUser();
+    const bot = await createBot(token, "a");
+    expect((await deploy(token, "a", deployBody(), { limits: { deploysPerDay: 2 } })).status).toBe(
+      201,
+    );
+    const [version] = sent;
+    await env.DB.prepare(
+      `INSERT INTO activations (id, owner_id, bot_id, kind, version_id, created_at)
+       VALUES (?, ?, ?, 'activate', ?, ?)`,
+    )
+      .bind(crypto.randomUUID(), userId, bot.id, version?.versionId, clock.getTime())
+      .run();
+    expect((await me(token)).quota.deploysToday).toBe(2);
+    await expectError(
+      await deploy(token, "a", deployBody({ bundle: "export const tick = () => 1;" }), {
+        limits: { deploysPerDay: 2 },
+      }),
+      429,
+      "quota_exceeded",
+    );
   });
 });
 

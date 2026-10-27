@@ -517,6 +517,87 @@ button.button:disabled {
   color: var(--text);
 }
 
+/* Bot management */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.inline-form .input {
+  flex: 1 1 200px;
+  max-width: 320px;
+  height: 32px;
+}
+
+.bot-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.bot-head .subtitle {
+  margin: 0;
+}
+
+.table .button,
+.table .num {
+  white-space: nowrap;
+}
+
+.table tr.has-details td {
+  border-bottom: 0;
+}
+
+.table tr.details td {
+  padding-top: 0;
+}
+
+.table .show-narrow .button {
+  margin-top: 6px;
+}
+
+.pink {
+  color: var(--pink);
+}
+
+.bot-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.quota-note {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.reports {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+}
+
+.reports li {
+  padding: 8px 12px;
+  border-left: 2px solid var(--pink);
+}
+
 /* Rating chart */
 
 .chart {

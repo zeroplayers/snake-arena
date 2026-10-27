@@ -61,6 +61,7 @@ export function classify(method: string, pathname: string): { route: string; kin
     [/^\/api\/bots\/[^/]+\/versions\/[^/]+$/, "/api/bots/:bot/versions/:n"],
     [/^\/api\/bots\/[^/]+\/versions$/, "/api/bots/:bot/versions"],
     [/^\/api\/users\/[^/]+$/, "/api/users/:username"],
+    [/^\/api\/lives\/[^/]+\/replay$/, "/api/lives/:id/replay"],
     [/^\/api\/(me|bots|health)$/, pathname],
   ];
   const route = patterns.find(([re]) => re.test(pathname))?.[1] ?? "/api/*";

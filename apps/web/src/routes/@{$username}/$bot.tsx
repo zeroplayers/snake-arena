@@ -14,6 +14,7 @@ import { canonical, pageMeta } from "../../lib/meta";
 import type { Killer, LifeRow, VersionRow } from "../../queries/bot";
 import type { Sources } from "../../queries/sources";
 import { getBotPageData, getVersionSources } from "../../server/pages";
+import { REPLAY_EXPIRED_MESSAGE } from "../../shared/replay";
 
 interface BotSearch {
   /** Version number whose lives and sources are shown. */
@@ -277,6 +278,10 @@ function LivesTable({ lives }: { lives: LifeRow[] }) {
                   <Link to="/replay/$id" params={{ id: life.id }}>
                     Replay
                   </Link>
+                ) : life.replayExpired ? (
+                  <span className="muted" title={REPLAY_EXPIRED_MESSAGE}>
+                    Expired
+                  </span>
                 ) : (
                   <span className="muted">—</span>
                 )}

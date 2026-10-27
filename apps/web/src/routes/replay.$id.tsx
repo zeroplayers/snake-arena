@@ -6,6 +6,7 @@ import { ReplayViewer } from "../components/ReplayViewer";
 import { TracePanel } from "../components/TracePanel";
 import { getReplayPage } from "../server/pages";
 import { getReplayTrace, type ReplayTrace } from "../server/traces";
+import { REPLAY_EXPIRED_MESSAGE } from "../shared/replay";
 
 /** `/replay/{lifeId}`: the room replay around one life, with that snake selected. */
 export const Route = createFileRoute("/replay/$id")({
@@ -78,7 +79,9 @@ function ReplayPage() {
           </div>
         )}
       </dl>
-      {life.hasReplay ? (
+      {life.replayExpired ? (
+        <Empty>{REPLAY_EXPIRED_MESSAGE}</Empty>
+      ) : life.replayRecorded ? (
         <ReplayViewer
           lifeId={life.id}
           title={`${life.botName} v${life.version} · @${life.author}`}
@@ -88,7 +91,14 @@ function ReplayPage() {
       ) : (
         <Empty>No recording was kept for this life.</Empty>
       )}
-      {life.endedAt && <TracePanel trace={trace} onSeek={(tick) => seek.current?.(tick)} />}
+      {life.endedAt && (
+        <TracePanel
+          trace={trace}
+          // Rows jump to their tick in the player; without a replay there's nothing to jump in.
+          {...(life.replayRecorded &&
+            !life.replayExpired && { onSeek: (tick: number) => seek.current?.(tick) })}
+        />
+      )}
     </section>
   );
 }

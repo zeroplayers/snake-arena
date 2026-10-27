@@ -642,7 +642,14 @@ describe("zerosnake logs", () => {
         deathCause: "collision",
         killer: "@bob/viper v2",
       },
-      { ...life, id: "l1", endedAt: "2026-10-27T10:01:00Z", deathCause: "timeout" },
+      // Its replay expired (kept 2 days): no link.
+      {
+        ...life,
+        id: "l1",
+        endedAt: "2026-10-27T10:01:00Z",
+        deathCause: "timeout",
+        hasReplay: false,
+      },
     ];
     // Run from elsewhere: with a single bot, logs picks it.
     const r = await run(["logs"], makeProject({}));
@@ -650,6 +657,7 @@ describe("zerosnake logs", () => {
     expect(r.out).toContain("alive");
     expect(r.out).toContain("ran into @bob/viper v2");
     expect(r.out).toContain(`replay: ${SERVER}/replay/l2`);
+    expect(r.out).not.toContain(`${SERVER}/replay/l1`);
     expect(r.out).toContain("too slow");
 
     const deaths = await run(["logs", "--deaths", "--version", "1"]);

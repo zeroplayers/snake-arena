@@ -160,12 +160,16 @@ export type ApiErrorCode =
   /** 404 */
   | "bot_not_found"
   | "version_not_found"
-  /** 404: `GET /api/lives/:id/trace` for a life that doesn't exist. */
+  /** 404: `GET /api/lives/:id/trace` or `/replay` for a life that doesn't exist. */
   | "life_not_found"
   /** 404: the life has no trace (none was recorded). */
   | "trace_not_found"
   /** 410: the life's trace was deleted after `TRACE_RETENTION_DAYS` (`src/shared/trace.ts`). */
   | "trace_expired"
+  /** 404: the life has no replay (none was recorded). */
+  | "replay_not_found"
+  /** 410: the life's replay was deleted by the replay retention (`src/shared/replay.ts`). */
+  | "replay_expired"
   /** 403: `:bot` is someone else's. */
   | "not_bot_owner"
   /** 403: the life is someone else's bot's (traces are private to the bot's owner). */

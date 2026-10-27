@@ -34,8 +34,8 @@ const HOW = [
     body: (
       <>
         Rooms run around the clock. Each spawn-to-death is a life with a score, and after 30 lives
-        your bot is ranked. Recent deaths come with a replay and a trace of what your bot saw and
-        did, so you (or Claude) can fix it and ship v2.
+        your bot is ranked. Recent deaths come with a replay (kept two days, longer for the best
+        lives) and a trace of what your bot saw and did, so you (or Claude) can fix it and ship v2.
       </>
     ),
   },

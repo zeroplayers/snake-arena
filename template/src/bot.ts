@@ -38,6 +38,11 @@ const HEAD_MARGIN = 1;
 const HEAD_SPREAD = 0.2;
 /** Turn straight away from the wall when it is closer than this many turning radii. */
 const WALL_TURN_RADII = 1;
+/**
+ * The arena's corners count as rounded off to this many turning radii: heading into a corner
+ * there are two walls ahead, and getting out takes far more room than leaving a straight wall.
+ */
+const CORNER_TURN_RADII = 3;
 
 type Mode = "eat" | "wander" | "avoid" | "wall";
 
@@ -54,10 +59,11 @@ export default defineBot({
     let target: Vec | undefined;
     let mode: Mode;
     const food = bestFood(state);
-    if (state.wallDistance < turnRadius(self) * WALL_TURN_RADII) {
-      // Away from the nearest wall, not toward the centre: off the axes, the shorter turn toward
+    const wall = nearestWall(self.head, mem.worldHalfSize, turnRadius(self) * CORNER_TURN_RADII);
+    if (wall.distance < turnRadius(self) * WALL_TURN_RADII) {
+      // Straight away from the wall, not toward the centre: off the axes, the shorter turn toward
       // the centre can swing the head through the wall first.
-      const { normal } = nearestWall(self.head, mem.worldHalfSize);
+      const { normal } = wall;
       target = { x: self.head.x + normal.x * 100, y: self.head.y + normal.y * 100 };
       mode = "wall";
     } else if (food) {

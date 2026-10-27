@@ -193,22 +193,22 @@ print as they are, everything else as JSON (or `String()` if JSON fails). `conso
 All exported from `@zerosnake/sdk` ([`geometry.ts`](../packages/sdk/src/geometry.ts)). They have no
 dependencies and run inside the sandbox.
 
-| Helper                            | Returns                                                                       |
-| --------------------------------- | ----------------------------------------------------------------------------- |
-| `turnToward(self, angle)`         | the `turn` that rotates toward a heading as fast as allowed without overshoot |
-| `steerToward(self, point)`        | the `turn` toward a point                                                     |
-| `steerAway(self, point)`          | the `turn` directly away from a point                                         |
-| `angleTo(from, to)`               | heading from one point to another                                             |
-| `angleDiff(from, to)`             | signed smallest rotation, positive = counter-clockwise (left)                 |
-| `normalizeAngle(a)`               | `a` wrapped into (−π, π]                                                      |
-| `distance(a, b)`, `distanceSq`    | distance between points (squared)                                             |
-| `distanceToWall(point, half)`     | distance from a point to the nearest arena edge (negative outside)            |
-| `nearestWall(point, half)`        | that distance and the unit `normal` pointing away from the nearest edge       |
-| `distanceToWallAlong(p, a, half)` | how far `p` can go straight along heading `a` before crossing an edge         |
-| `project(origin, angle, dist)`    | the point `dist` ahead along `angle`                                          |
-| `nearest(from, items)`            | the closest item of a list of points                                          |
-| `nearestFood(state)`              | the closest visible pellet                                                    |
-| `nearestDanger(state)`            | the closest visible point of another snake, with its `distance` and `gap`     |
-| `clamp`, `CENTER`, `TAU`          | small utilities                                                               |
+| Helper                                     | Returns                                                                                                                 |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `turnToward(self, angle)`                  | the `turn` that rotates toward a heading as fast as allowed without overshoot                                           |
+| `steerToward(self, point)`                 | the `turn` toward a point                                                                                               |
+| `steerAway(self, point)`                   | the `turn` directly away from a point                                                                                   |
+| `angleTo(from, to)`                        | heading from one point to another                                                                                       |
+| `angleDiff(from, to)`                      | signed smallest rotation, positive = counter-clockwise (left)                                                           |
+| `normalizeAngle(a)`                        | `a` wrapped into (−π, π]                                                                                                |
+| `distance(a, b)`, `distanceSq`             | distance between points (squared)                                                                                       |
+| `distanceToWall(point, half)`              | distance from a point to the nearest arena edge (negative outside)                                                      |
+| `nearestWall(point, half, corner?)`        | that distance and the unit `normal` pointing away from the nearest edge; `corner` rounds the corners off to that radius |
+| `distanceToWallAlong(p, a, half, corner?)` | how far `p` can go straight along heading `a` before crossing an edge (corners rounded off as above)                    |
+| `project(origin, angle, dist)`             | the point `dist` ahead along `angle`                                                                                    |
+| `nearest(from, items)`                     | the closest item of a list of points                                                                                    |
+| `nearestFood(state)`                       | the closest visible pellet                                                                                              |
+| `nearestDanger(state)`                     | the closest visible point of another snake, with its `distance` and `gap`                                               |
+| `clamp`, `CENTER`, `TAU`                   | small utilities                                                                                                         |
 
 `gap` from `nearestDanger` is `distance − self.radius − snake.radius`: you die when it reaches 0.

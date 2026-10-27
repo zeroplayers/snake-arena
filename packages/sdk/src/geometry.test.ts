@@ -196,6 +196,22 @@ describe("nearestWall", () => {
     expect(nearestWall({ x: 20, y: 95 }, 100)).toEqual({ distance: 5, normal: { x: 0, y: -1 } });
     expect(nearestWall({ x: 20, y: -95 }, 100).normal).toEqual({ x: 0, y: 1 });
   });
+
+  it("can round off the corners", () => {
+    // Corner circle of radius 20 centred on (80, 80); (92, 96) is 20 from it, on its edge.
+    const w = nearestWall({ x: 92, y: 96 }, 100, 20);
+    expect(w.distance).toBeCloseTo(0);
+    expect(w.normal.x).toBeCloseTo(-0.6);
+    expect(w.normal.y).toBeCloseTo(-0.8);
+    expect(nearestWall({ x: -86, y: -88 }, 100, 20)).toMatchObject({
+      distance: 10,
+      normal: { x: expect.closeTo(0.6), y: expect.closeTo(0.8) },
+    });
+    // Along the sides, and with no rounding, as before.
+    expect(nearestWall({ x: 50, y: 95 }, 100, 20)).toEqual(nearestWall({ x: 50, y: 95 }, 100));
+    // A radius over the half-side is clamped: the arena becomes its inscribed disc.
+    expect(nearestWall({ x: 60, y: 80 }, 100, 1000).distance).toBeCloseTo(0);
+  });
 });
 
 describe("distanceToWallAlong", () => {
@@ -207,6 +223,14 @@ describe("distanceToWallAlong", () => {
     expect(distanceToWallAlong({ x: 50, y: 95 }, 0, 100)).toBeCloseTo(50);
     expect(distanceToWallAlong({ x: 50, y: 95 }, PI / 2, 100)).toBeCloseTo(5);
     expect(distanceToWallAlong({ x: 0, y: 101 }, -PI / 2, 100)).toBe(0);
+  });
+
+  it("can round off the corners", () => {
+    // Corner circle of radius 18 centred on (82, 82); from (80, 80) straight at it.
+    expect(distanceToWallAlong({ x: 80, y: 80 }, PI / 4, 100, 18)).toBeCloseTo(18 + 2 * Math.SQRT2);
+    expect(distanceToWallAlong({ x: 0, y: 90 }, PI / 2, 100, 18)).toBeCloseTo(10);
+    // Already inside a rounded-off corner: only the real square counts.
+    expect(distanceToWallAlong({ x: 98, y: 98 }, 0, 100, 18)).toBeCloseTo(2);
   });
 });
 

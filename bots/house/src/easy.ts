@@ -1,5 +1,5 @@
-import { defineBot, steerToward, turnToward } from "@zerosnake/sdk";
-import { nearestReachableFood, nearWall, turnRadius } from "./common.ts";
+import { defineBot, nearestWall, steerToward, turnToward } from "@zerosnake/sdk";
+import { arenaHalfSize, nearestReachableFood, turnRadius } from "./common.ts";
 
 /** Turns straight away from the wall once it is this close. Late on purpose: easy is weak. */
 const WALL_MARGIN = 8;
@@ -17,8 +17,11 @@ const CORNER_TURN_RADII = 4;
 export const easy = defineBot({
   tick(state) {
     const { self } = state;
-    const wall = nearWall(state, turnRadius(self) * CORNER_TURN_RADII);
-    if (wall.distance < WALL_MARGIN) return { turn: turnToward(self, wall.away) };
+    const wall = nearestWall(self.head, arenaHalfSize(state), turnRadius(self) * CORNER_TURN_RADII);
+    if (wall.distance < WALL_MARGIN) {
+      // Straight away from the wall, not toward the centre (see `nearestWall`).
+      return { turn: turnToward(self, Math.atan2(wall.normal.y, wall.normal.x)) };
+    }
     const food = nearestReachableFood(state);
     return { turn: food ? steerToward(self, food) : 0 };
   },

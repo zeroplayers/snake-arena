@@ -17,11 +17,12 @@ speed and 12 while boosting, and a U-turn takes about 13 ticks. Start turning ba
 edge; your body radius doesn't matter there.
 
 Two things are special about the square. **Corners:** heading into one, you have two walls ahead,
-and getting out takes a much wider turn than leaving a straight wall; keep well clear of them (the
-house bots treat the corners as rounded off to 3–4 turning radii). **Which way to turn:** turn
-straight away from the nearest wall (`nearestWall(head, info.worldHalfSize).normal`), not toward
-the centre: away from the axes, the shorter turn toward the centre can swing your head through the
-wall first.
+and getting out takes a much wider turn than leaving a straight wall; keep well clear of them.
+The house bots and the starter bot treat the corners as rounded off to 3–4 turning radii:
+`nearestWall(head, info.worldHalfSize, corner)` and `distanceToWallAlong(..., corner)` do that for
+you. **Which way to turn:** turn straight away from the nearest wall (`nearestWall(...).normal`),
+not toward the centre: away from the axes, the shorter turn toward the centre can swing your head
+through the wall first.
 
 **Why doesn't my snake eat the pellet right next to its head?**
 Food is only eaten inside a forward cone, within 60° of your heading. A pellet beside you is

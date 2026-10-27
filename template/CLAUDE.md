@@ -66,8 +66,9 @@ Only `src/` is deployed. Keep tests and tools out of it.
 
 - **Arena:** a square centred on (0, 0): `x` and `y` both lie in ±`info.worldHalfSize` (default
   89). Your head crossing an edge is death by `wall`. The corners are traps: heading into one you
-  have two walls ahead, so keep well clear of them, and to leave a wall turn straight away from it
-  (`nearestWall(head, info.worldHalfSize).normal`), not toward the centre.
+  have two walls ahead, so keep well clear of them (treat them as rounded off to ~3 turning radii:
+  `nearestWall(head, info.worldHalfSize, corner)`), and to leave a wall turn straight away from it
+  (that call's `normal`), not toward the centre.
 - **Time:** fixed ticks, `info.tickRate` (10) per second of game time. Rooms without spectators run
   faster than real time; nothing depends on wall-clock time.
 - **Movement:** every tick the snake turns by up to `self.turnRate` radians (0.25), then moves
@@ -179,22 +180,22 @@ Return `BotAction`: `{ turn: number in [-1, 1], boost?: boolean }`. Out-of-range
 
 ### SDK helpers (`@zerosnake/sdk`)
 
-| Helper                                       | Does                                                                                                                            |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `steerToward(self, point)`                   | `turn` that heads toward a point, as fast as allowed, no overshoot.                                                             |
-| `steerAway(self, point)`                     | `turn` that heads directly away from a point.                                                                                   |
-| `turnToward(self, angle)`                    | `turn` that reaches a heading.                                                                                                  |
-| `angleTo(from, to)`                          | Heading from one point to another.                                                                                              |
-| `angleDiff(from, to)`                        | Signed smallest rotation, positive = left.                                                                                      |
-| `normalizeAngle(a)`                          | Wraps into (-π, π].                                                                                                             |
-| `distance(a, b)`, `distanceSq(a, b)`         | Distances (`distanceSq` is cheaper for comparisons).                                                                            |
-| `project(origin, angle, dist)`               | The point `dist` ahead along a heading: look-ahead.                                                                             |
-| `distanceToWall(point, worldHalfSize)`       | Distance from any point to the nearest edge (negative outside).                                                                 |
-| `nearestWall(point, worldHalfSize)`          | `{ distance, normal }`: the nearest edge and the unit vector pointing away from it, into the arena.                             |
-| `distanceToWallAlong(point, angle, half)`    | How far `point` can go straight along `angle` before crossing an edge: the road left, corners included.                         |
-| `nearest(from, items)`, `nearestFood(state)` | Closest point / pellet.                                                                                                         |
-| `nearestDanger(state)`                       | Closest visible body point of another snake: `{ snake, point, distance, gap }`; `gap` = free space, 0 = dead. Ignores the wall. |
-| `clamp`, `TAU`, `CENTER`                     | Small utilities; `CENTER` is (0, 0).                                                                                            |
+| Helper                                             | Does                                                                                                                                                |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `steerToward(self, point)`                         | `turn` that heads toward a point, as fast as allowed, no overshoot.                                                                                 |
+| `steerAway(self, point)`                           | `turn` that heads directly away from a point.                                                                                                       |
+| `turnToward(self, angle)`                          | `turn` that reaches a heading.                                                                                                                      |
+| `angleTo(from, to)`                                | Heading from one point to another.                                                                                                                  |
+| `angleDiff(from, to)`                              | Signed smallest rotation, positive = left.                                                                                                          |
+| `normalizeAngle(a)`                                | Wraps into (-π, π].                                                                                                                                 |
+| `distance(a, b)`, `distanceSq(a, b)`               | Distances (`distanceSq` is cheaper for comparisons).                                                                                                |
+| `project(origin, angle, dist)`                     | The point `dist` ahead along a heading: look-ahead.                                                                                                 |
+| `distanceToWall(point, worldHalfSize)`             | Distance from any point to the nearest edge (negative outside).                                                                                     |
+| `nearestWall(point, worldHalfSize, corner?)`       | `{ distance, normal }`: the nearest edge and the unit vector pointing away from it, into the arena. `corner` rounds the corners off to that radius. |
+| `distanceToWallAlong(point, angle, half, corner?)` | How far `point` can go straight along `angle` before crossing an edge: the road left, corners (rounded off or not) included.                        |
+| `nearest(from, items)`, `nearestFood(state)`       | Closest point / pellet.                                                                                                                             |
+| `nearestDanger(state)`                             | Closest visible body point of another snake: `{ snake, point, distance, gap }`; `gap` = free space, 0 = dead. Ignores the wall.                     |
+| `clamp`, `TAU`, `CENTER`                           | Small utilities; `CENTER` is (0, 0).                                                                                                                |
 
 ## Limits
 

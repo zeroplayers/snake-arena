@@ -13,6 +13,7 @@ import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { REPO } from "../../site";
 import { DocArticle } from "../docs/DocArticle";
+import { claudePrompt } from "./claudePrompt";
 import { Landing } from "./Landing";
 import { QUICKSTART_COMMANDS, quickstartScript } from "./quickstart";
 
@@ -134,6 +135,20 @@ describe.each([
     },
   );
 
+  it(
+    cli || repo
+      ? "offers the Claude prompt to copy, and to read first"
+      : "shows the Claude prompt to read, with no copy",
+    async () => {
+      const html = await render();
+      expect(html).toContain("Read the prompt");
+      expect(html).toContain("init my-snake");
+      expect(html.includes("Copy prompt for Claude")).toBe(cli || repo);
+      // The first three steps, sign-in included, are in the hero either way.
+      expect(html).toContain("opens your browser to sign in");
+    },
+  );
+
   it(repo ? "links the repository" : "doesn't link the private repository", async () => {
     const html = await render();
     const links = hrefs(html);
@@ -143,6 +158,40 @@ describe.each([
     );
     expect(html.includes("Running the CLI from a checkout")).toBe(repo && !cli);
     expect(html.includes("from a checkout of the repository")).toBe(repo && !cli);
+  });
+});
+
+describe("Claude prompt", () => {
+  const cli = read("packages/cli/src/cli.ts");
+  const commands = (prompt: string) => [
+    ...prompt.matchAll(/(?:npx zerosnake|zerosnake\.js) (\w+)/g),
+  ];
+
+  it("walks an agent from init to deploy with the published CLI", () => {
+    const prompt = claudePrompt({ cli: true, repo: true });
+    expect(commands(prompt).map((m) => m[1])).toEqual(
+      expect.arrayContaining(["init", "sim", "test", "login", "deploy"]),
+    );
+    for (const [, sub] of commands(prompt)) expect(cli).toContain(`case "${sub}":`);
+    // The template's rules: never the blocking viewer, and login is the person's to run.
+    expect(prompt).toContain("npx zerosnake sim --headless");
+    expect(prompt).toContain("Ask me to run `npx zerosnake login` myself");
+    expect(prompt).toContain("sign in with GitHub");
+    expect(prompt).not.toContain("git clone");
+  });
+
+  it("builds the CLI from source while it isn't on npm but the repository is public", () => {
+    const prompt = claudePrompt({ cli: false, repo: true });
+    expect(prompt).toContain(`git clone ${REPO.url}`);
+    expect(prompt).toContain("pnpm --filter zerosnake build");
+    expect(prompt).not.toContain("npx zerosnake");
+    for (const [, sub] of commands(prompt)) expect(cli).toContain(`case "${sub}":`);
+  });
+
+  it("reads as on launch day while nothing is public", () => {
+    expect(claudePrompt({ cli: false, repo: false })).toBe(
+      claudePrompt({ cli: true, repo: false }),
+    );
   });
 });
 

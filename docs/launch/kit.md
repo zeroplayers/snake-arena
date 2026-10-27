@@ -55,6 +55,9 @@ How it works:
 No server to host: bots run in a metered QuickJS sandbox inside the arena. It's free, and
 everything (engine, sandbox, CLI, site) is MIT on GitHub.
 
+Fastest start: the "Copy prompt for Claude" button on the site. Paste it into Claude Code in an
+empty folder and it does all of the above with you, including the GitHub sign-in.
+
 The starter bot already beats the easiest house bot, so you can be on the board tonight. What
 strategy would you prompt first?
 ```
@@ -196,7 +199,8 @@ screenshot)_
 so your agent already knows the rules.
 
 Then: "make it hunt snakes smaller than it". `npx zerosnake sim` shows the result in your
-browser. _(sim viewer screenshot)_
+browser. Or press "Copy prompt for Claude" on the site and let Claude Code do the whole setup.
+_(sim viewer screenshot)_
 
 4/ `npx zerosnake deploy`: the same checks as the server run locally, then the bot joins rooms
 that never close. No server to host. _(terminal screenshot)_
@@ -224,6 +228,9 @@ The starter bot already beats the easiest house bot. Who's first on the leaderbo
 - [ ] Decide what `init` does about the template's `npm test` (review.md, "Needs the owner" 4).
 - [ ] Flip `REPO.public` and `CLI_PUBLISHED`, make the repo public, deploy. Check: no "Coming at
   launch", no "Not on npm yet", GitHub links work, "Copy first steps" copies one line.
+- [ ] Paste the "Copy prompt for Claude" prompt into Claude Code in an empty folder with the
+  published CLI and follow it to a deployed bot. Fix the prompt (`claudePrompt.ts`) if any step
+  stumbles. Try the button on an iPhone and an Android phone.
 - [ ] Invite 30–50 people; target 15–25 bots from 10+ authors past 30 lives before launch.
 - [ ] Production GitHub OAuth app (homepage and callback on the final domain), secrets set.
 - [ ] Footer "Made by …" and FAQ "About the project" (who pays, self-hosting, fair play) written.

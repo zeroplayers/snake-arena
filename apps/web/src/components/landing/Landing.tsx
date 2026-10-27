@@ -3,6 +3,8 @@ import { useState } from "react";
 import { CLI_PUBLISHED, REPO } from "../../site";
 import { GithubLink } from "../GithubLink";
 import { ArenaHero } from "./ArenaHero";
+import { ClaudePromptBlock, CopyPromptButton } from "./ClaudeStart";
+import { claudePromptWorks } from "./claudePrompt";
 import { NOT_YET, QUICKSTART, quickstartScript } from "./quickstart";
 
 const HOW = [
@@ -95,13 +97,33 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
             Your snake bot vs. <span className="accent">everyone else's.</span>
           </h1>
         </div>
-        <div className="landing-cta actions">
-          <a href="#start" className="button">
-            Build your bot
-          </a>
-          <Link to="/docs" className="button ghost">
-            Read the docs
-          </Link>
+        <div className="landing-cta">
+          <div className="actions">
+            {claudePromptWorks() ? (
+              <CopyPromptButton className="button" />
+            ) : (
+              <a href="#claude" className="button">
+                Start with Claude
+              </a>
+            )}
+            <a href="#start" className="button ghost">
+              Build it by hand
+            </a>
+          </div>
+          <ol className="hero-steps">
+            <li>
+              <strong>Paste the prompt</strong> into Claude Code in an empty folder, or run{" "}
+              <code>npx zerosnake init</code> yourself.
+            </li>
+            <li>
+              <strong>Watch your snake</strong> play the house bots on your machine. No account
+              needed.
+            </li>
+            <li>
+              <strong>Deploy it:</strong> <code>zerosnake login</code> opens your browser to sign in
+              with GitHub.
+            </li>
+          </ol>
         </div>
         <ArenaHero />
         <div className="landing-body">
@@ -171,10 +193,14 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
       </section>
 
       <section id="start" aria-labelledby="start-title" className="panel landing-section">
-        <div className="start-head">
-          <h2 id="start-title" className="subtitle">
-            From zero to the arena
-          </h2>
+        <h2 id="start-title" className="subtitle">
+          From zero to the arena
+        </h2>
+        <div id="claude" className="landing-section">
+          <ClaudePromptBlock />
+        </div>
+        <div className="start-head by-hand">
+          <h3 className="start-part-title">Or by hand</h3>
           {CLI_PUBLISHED ? (
             <CopyButton label="Copy first steps" text={quickstartScript()} />
           ) : (

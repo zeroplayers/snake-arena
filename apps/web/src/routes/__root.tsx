@@ -8,7 +8,7 @@ import {
   Scripts,
 } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { GithubLink } from "../components/GithubLink";
+import { GithubLink, GithubMark } from "../components/GithubLink";
 import { signInWithGithub } from "../lib/auth-client";
 import { siteMeta } from "../lib/meta";
 import { getViewer } from "../server/functions";
@@ -73,6 +73,7 @@ function RootLayout() {
                 className="button ghost small"
                 onClick={() => signInWithGithub()}
               >
+                <GithubMark />
                 Sign in<span className="hide-narrow sign-in-more">with GitHub</span>
               </button>
             )}

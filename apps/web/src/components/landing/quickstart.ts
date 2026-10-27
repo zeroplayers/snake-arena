@@ -24,7 +24,7 @@ export const QUICKSTART: readonly { title: string; commands: readonly Quickstart
     title: "Put it in the arena",
     commands: [
       { cmd: "npx zerosnake test", note: "the same checks the server runs" },
-      { cmd: "npx zerosnake login", note: "once, with GitHub" },
+      { cmd: "npx zerosnake login", note: "opens your browser: sign in with GitHub" },
       { cmd: "npx zerosnake deploy", note: "it joins the arena when the checks pass" },
     ],
   },

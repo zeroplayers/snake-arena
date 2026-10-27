@@ -27,10 +27,72 @@ Before/after screenshots are in [`screenshots/`](screenshots).
 Status: **done** = changed in this PR; **owner** = needs a decision or an action outside the code
 (accounts, ops, money); **later** = a proposal, deferred with the reason given.
 
-## Top findings, ranked by launch impact
+## Real-user feedback: "Copy to Claude" (top priority)
+
+A first-time visitor, after looking at the staging landing page (translated):
+
+> "I need some kind of 'Copy to Claude' button, so I paste the prompt into Claude and start right
+> away — because I didn't understand how to get in / sign in."
+
+Two problems in one: the fastest path for this audience (hand the whole setup to a coding agent)
+wasn't offered, and nothing said that "getting in" means GitHub sign-in, done by the CLI's
+`login` in the browser, and only at deploy time.
+
+**Done in this PR:**
+
+- **"Copy prompt for Claude"** is the hero's primary button
+  ([`ClaudeStart.tsx`](../../apps/web/src/components/landing/ClaudeStart.tsx), prompt in
+  [`claudePrompt.ts`](../../apps/web/src/components/landing/claudePrompt.ts)). One click copies a
+  short English prompt for Claude Code or any coding agent, to paste in an empty folder:
+  `npx zerosnake init my-snake`, read `CLAUDE.md` and the skills, explain in 3–4 sentences what a
+  bot sees and returns, ask for (or suggest) a strategy and write it, `sim --headless`, `test`,
+  then ask the person to run `login` themselves (it opens the browser for GitHub sign-in and a
+  device code; the first time they pick a username; in Claude Code `! npx zerosnake login`), then
+  `deploy` and give the bot page link it prints. It follows the template's rules: never the
+  blocking `sim` viewer, never invented output. `login` is left to the person because it opens
+  their browser and waits for them.
+- The button says "Copied! Paste in Claude" for 3 s. Where the Clipboard API is missing or denied
+  (some phones, in-app browsers), it falls back to `execCommand("copy")`; if that fails too, it
+  opens the prompt, scrolls to it and selects it ("Selected below: copy it"). Checked in the
+  browser with the Clipboard API removed.
+- The quick start now starts with **"Start with Claude"**: what the prompt does and an expandable
+  "Read the prompt" block, so people can read it before copying, with its own copy button. "Or by
+  hand" follows with the commands.
+- **The way in is above the fold** on desktop and phone: three steps under the hero's buttons
+  ("Paste the prompt into Claude Code in an empty folder, or run `npx zerosnake init` yourself" ·
+  "Watch your snake play the house bots on your machine. No account needed." · "Deploy it:
+  `zerosnake login` opens your browser to sign in with GitHub"). The header's sign-in button has
+  the GitHub mark, so "Sign in" on phones still says GitHub. The quick start's `login` note says
+  "opens your browser: sign in with GitHub".
+- Tests: the prompt's commands exist in the CLI; it uses `sim --headless` and leaves `login` to
+  the person; the landing offers the copy button exactly when the prompt works (below).
+
+**Launch flags.** The prompt is correct in every state:
+
+| `CLI_PUBLISHED` | `REPO.public` | Hero button                      | Prompt                                                                                |
+| --------------- | ------------- | -------------------------------- | ------------------------------------------------------------------------------------- |
+| false           | false (today) | "Start with Claude" → the prompt | shown as it will read on launch day, "Coming at launch", no copy button               |
+| false           | true          | "Copy prompt for Claude"         | clones the repo, builds the CLI (`pnpm --filter zerosnake build`), runs it from there |
+| true            | any (launch)  | "Copy prompt for Claude"         | `npx zerosnake …` throughout                                                          |
+
+No copy while nothing is public, for the same reason as the quick start: `zerosnake` isn't
+registered on npm, so a pasted `npx zerosnake` could run anyone's package.
+
+**"Open in Claude" link: skipped.** `claude.ai/new?q=…` prefills a chat on claude.ai, but a chat
+can't run `npx`, create files or open the CLI's login; the prompt is for Claude Code (or another
+agent with a terminal), and there is no documented, reliable link that opens Claude Code with a
+prompt. A link that lands people in the wrong tool is worse than a copy button. Revisit if
+Claude Code gets a documented deep link.
+
+**Later:** measure it. Count copies (a privacy-friendly counter on the button) next to
+first deploys, and run the prompt end to end in a fresh folder on launch day with the published
+CLI (kit checklist).
+
+
 
 | #   | Finding                                                                                                                                                                                                                          | Raised by              | Status                                         |
 | --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- | ---------------------------------------------- |
+| 0   | Real-user feedback: no "Copy to Claude" start, and no idea how to get in / sign in (see above).                                                                                                                                  | first-time visitor     | done                                           |
 | 1   | The landing's "Before launch" box would still say on launch day that `test` "is being wired in" and `deploy` "waits in validation" (only the `npx` row was tied to `CLI_PUBLISHED`).                                             | all 9                  | done                                           |
 | 2   | The docs opened with "no bot plays in the arena yet", a status table of PRs "in review" and boxes saying `login`/`deploy` aren't available, although everything is merged. `limits.md` described the pre-#62 budget.             | 8 of 9                 | done                                           |
 | 3   | No link preview: no `og:*` / `twitter:*` tags, no image. Every share on X, Reddit, Slack, Discord, PH would be a bare link.                                                                                                      | 8 of 9                 | done (og.jpg, tags)                            |

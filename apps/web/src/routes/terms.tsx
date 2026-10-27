@@ -12,11 +12,12 @@ function Terms() {
     <LegalPage title="Terms of Service">
       <p>
         ZeroSnake Arena (“the service”) is a free game where people write snake bots and the bots
-        play each other on this site. It is run by {LEGAL.operator}, {LEGAL.address} (“we”, “us”).
-        By creating an account or deploying a bot you agree to these terms, to the{" "}
-        <Link to="/acceptable-use">Acceptable Use Policy</Link>, which is part of them, and to how
-        we handle data as described in the <Link to="/privacy">Privacy Policy</Link>. You can watch
-        games, replays and the leaderboard without an account.
+        play each other on this site. It is run by {LEGAL.operator}, {LEGAL.registration},
+        registered office {LEGAL.address} (“we”, “us”). By creating an account or deploying a bot
+        you agree to these terms, to the <Link to="/acceptable-use">Acceptable Use Policy</Link>,
+        which is part of them, and to how we handle data as described in the{" "}
+        <Link to="/privacy">Privacy Policy</Link>. You can watch games, replays and the leaderboard
+        without an account.
       </p>
 
       <h2>Your account</h2>
@@ -89,10 +90,10 @@ function Terms() {
         <li>
           To the extent the law allows, we are not liable for any indirect, incidental, special or
           consequential damages, or for lost data, profits or goodwill, and our total liability for
-          any claim about the service is limited to 50 euros. Nothing in these terms limits
-          liability that cannot be limited by law, such as for intent, gross negligence, or injury
-          to life, body or health, and nothing takes away rights you have as a consumer under the
-          laws of the country where you live.
+          any claim about the service is limited to £50. Nothing in these terms limits liability
+          that cannot be limited by law, such as for death or personal injury caused by negligence,
+          or for fraud, and nothing takes away rights you have as a consumer under the laws of the
+          country where you live.
         </li>
       </ul>
 
@@ -112,14 +113,16 @@ function Terms() {
 
       <h2>Law and disputes</h2>
       <p>
-        These terms are governed by {LEGAL.governingLaw}, and disputes go to {LEGAL.courts}, unless
-        the law of the country where you live as a consumer says otherwise. If one part of these
-        terms is invalid, the rest still applies.
+        These terms are governed by {LEGAL.governingLaw}, and disputes go to {LEGAL.courts}. If you
+        live in Scotland or Northern Ireland you may also bring proceedings there, and if you live
+        elsewhere as a consumer, the mandatory consumer protections of your country still apply. If
+        one part of these terms is invalid, the rest still applies.
       </p>
 
       <h2>Contact</h2>
       <p>
-        {LEGAL.operator}, {LEGAL.address}. Email: <ContactEmail />.
+        {LEGAL.operator}, {LEGAL.registration}. Registered office: {LEGAL.address}. Email:{" "}
+        <ContactEmail />.
       </p>
     </LegalPage>
   );

@@ -17,8 +17,13 @@ function Privacy() {
         does; the code is open source.
       </p>
       <p>
-        The controller is {LEGAL.operator}, {LEGAL.address}. For anything about your data, write to{" "}
-        <ContactEmail />.
+        The controller is {LEGAL.operator}, {LEGAL.registration}, registered office {LEGAL.address}.
+        For anything about your data, write to <ContactEmail />.
+      </p>
+      <p>
+        We handle personal data under the UK GDPR and the Data Protection Act 2018. For people in
+        the European Union the EU GDPR applies as well, and for California residents the California
+        Consumer Privacy Act as amended by the CPRA. The rights below apply to everyone.
       </p>
 
       <h2>In short</h2>
@@ -172,8 +177,9 @@ function Privacy() {
       <h2>Why we may use it (legal bases)</h2>
       <ul>
         <li>
-          <strong>To provide the service you signed up for</strong> (contract, GDPR art. 6(1)(b)):
-          your account, sessions, CLI tokens, running and showing your bots and their games.
+          <strong>To provide the service you signed up for</strong> (contract, UK GDPR and EU GDPR
+          art. 6(1)(b)): your account, sessions, CLI tokens, running and showing your bots and their
+          games.
         </li>
         <li>
           <strong>Legitimate interests</strong> (art. 6(1)(f)): security, rate limiting, logs,
@@ -207,9 +213,10 @@ function Privacy() {
       <h2>International transfers</h2>
       <p>
         Cloudflare runs a global network and GitHub is in the United States, so your data may be
-        processed outside your country, including in the US. Where the GDPR or the UK GDPR applies,
-        those transfers rely on the EU-US Data Privacy Framework (and its UK extension), in which
-        both companies take part, and on the European Commission's standard contractual clauses.
+        processed outside your country, including in the US. Transfers from the UK rely on the UK
+        Extension to the EU-US Data Privacy Framework (the “UK-US data bridge”) and from the EU on
+        the EU-US Data Privacy Framework, in which both companies take part, and on the European
+        Commission's standard contractual clauses.
       </p>
 
       <h2>Deleting your account</h2>
@@ -249,9 +256,11 @@ function Privacy() {
       <p>
         Write to <ContactEmail /> for anything Settings doesn't do. We answer within one month
         (California residents: within 45 days), and may ask you to prove the account is yours, for
-        example by writing from the email address GitHub gave us. In the EU and UK you can also
-        complain to your data protection authority. California residents: we don't sell or share
-        personal information, don't use sensitive personal information, and won't treat you
+        example by writing from the email address GitHub gave us. You can also complain to the UK's
+        Information Commissioner's Office (
+        <a href="https://ico.org.uk/make-a-complaint/">ico.org.uk</a>) or, in the EU, to the data
+        protection authority where you live. California residents (CCPA/CPRA): we don't sell or
+        share personal information, don't use sensitive personal information, and won't treat you
         differently for using these rights.
       </p>
 

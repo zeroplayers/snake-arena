@@ -348,8 +348,9 @@ works as well. Locally, trigger it with
 ## Legal pages and data rights
 
 `/terms`, `/acceptable-use` and `/privacy` (cookie list included) are plain routes in
-`src/routes/`. The operator's name, address, contact email, governing law and courts are
-placeholders in [`src/legal.ts`](src/legal.ts), together with the "last updated" date. The
+`src/routes/`. The operator (Surnin Synergy Ltd, company number and registered office, also in
+the site footer), contact email, governing law and courts are in [`src/legal.ts`](src/legal.ts),
+together with the "last updated" date. The
 Privacy Policy describes what the code stores: when that changes (a new table, column, cookie,
 log field, metric or processor), update the page in the same pull request.
 

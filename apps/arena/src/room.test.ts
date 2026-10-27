@@ -247,15 +247,13 @@ describe("RoomDO", () => {
   }, 60_000);
 
   it("retries failed deliveries with backoff, pauses while they fail, drops nothing", async () => {
-    // No `versions` row yet: inserting the life fails its foreign key until we add it.
-    const ghost: LifeTicket = {
-      lifeId: "life-ghost-1",
-      versionId: "v-ghost",
-      author: "ghost",
-      source: BOTS.thrower,
-    };
+    // No `lives` table for a while: inserting the life fails until it's back. (A missing
+    // `versions` row wouldn't do: a life of a deleted version is dropped, not retried.)
+    const ghost = await ticket("ghost", BOTS.thrower);
     const rita = await ticket("rita", house.hard as string);
     await startRoom("outbox", [ghost, rita], { limits: { chunkTicks: 50, maxOutbox: 0 } });
+    const db = await h.d1();
+    await db.prepare("ALTER TABLE lives RENAME TO lives_away").run();
 
     const s1 = await h.room<RoomStatus>("outbox", "runBatch");
     expect(s1.outbox).toEqual({ size: 1, failing: 1 });
@@ -265,7 +263,7 @@ describe("RoomDO", () => {
     expect(s2.tick).toBe(s1.tick);
     expect(await (await h.r2()).head("outbox/0000000000.zsr")).not.toBeNull();
 
-    await seedVersion(await h.d1(), "ghost", BOTS.thrower);
+    await db.prepare("ALTER TABLE lives_away RENAME TO lives").run();
     await sleep(1100);
     const s3 = await h.room<RoomStatus>("outbox", "runBatch");
     expect(s3.outbox.failing).toBe(0);

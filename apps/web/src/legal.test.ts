@@ -5,6 +5,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { LEGAL } from "./legal";
 import { createAuth } from "./server/auth";
 import { siteConfig } from "./server/site-config";
 import { createTestD1 } from "./test/d1";
@@ -92,5 +93,11 @@ describe("Web Analytics config", () => {
       beaconToken: null,
     });
     expect(siteConfig({})).toEqual({ beaconToken: null });
+  });
+});
+
+describe("legal facts", () => {
+  it("has no placeholder left", () => {
+    expect(JSON.stringify(LEGAL)).not.toMatch(/\[|TODO|example/i);
   });
 });

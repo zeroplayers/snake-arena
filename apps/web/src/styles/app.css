@@ -1281,3 +1281,9 @@ button.link-card:hover {
 .danger-zone p {
   margin: 0;
 }
+
+.footer-company {
+  flex-basis: 100%;
+  color: var(--text-muted);
+  font-size: 12px;
+}

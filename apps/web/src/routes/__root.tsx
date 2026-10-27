@@ -11,6 +11,7 @@ import {
 import type { ReactNode } from "react";
 import { AnalyticsBeacon } from "../components/AnalyticsBeacon";
 import { GithubLink } from "../components/GithubLink";
+import { LEGAL } from "../legal";
 import { signInWithGithub } from "../lib/auth-client";
 import { getViewer } from "../server/functions";
 import { getSiteConfig } from "../server/site-config";
@@ -88,7 +89,14 @@ function RootLayout() {
             <GithubLink />
             <Link to="/terms">Terms</Link>
             <Link to="/privacy">Privacy</Link>
+            <a href={LEGAL.x.url} target="_blank" rel="me noopener" aria-label={LEGAL.x.label}>
+              Made by {LEGAL.x.handle}
+            </a>
           </span>
+          <small className="footer-company">
+            {LEGAL.operator}, registered in England and Wales, company number {LEGAL.companyNumber}.
+            Registered office: {LEGAL.address}.
+          </small>
         </footer>
       </div>
     </RootDocument>

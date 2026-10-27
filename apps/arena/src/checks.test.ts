@@ -15,7 +15,10 @@ let hard: string;
 const BOTS = {
   /** Drives straight into the wall every life: loads and runs, but can't qualify. */
   suicidal: `export default { tick() { return { turn: 0 }; } };`,
-  /** About 90% of the op budget on every tick: over the suite's cap of half on average. */
+  /**
+   * A heavy loop on every tick. Under the instrumented meter (#60) it goes over the per-tick
+   * budget, so the sandbox kills it after 3 ticks in a row, before any suite-level cap is reached.
+   */
   nearBudget: `export default { tick(state) {
     let x = 0; for (let i = 0; i < 40000; i++) x += i * 0.5;
     return { turn: x > 0 ? 0.2 : -0.2 };
@@ -140,14 +143,16 @@ describe("checks consumer", () => {
     expect(v?.report?.text).toMatch(/^Checks failed/);
   }, 60_000);
 
-  it("rejects a bot over the suite's cost caps", async () => {
+  it("rejects a bot that is too slow on every tick", async () => {
     const { job } = await h.deploy("slow", BOTS.nearBudget);
     await h.deliver(job);
     const v = await h.version(job.versionId);
     expect(v?.status).toBe("rejected");
-    expect(v?.report?.suite?.run.overrun?.limit).toBe("maxInterrupts");
     const failed = v?.report?.checks.find((c) => !c.ok);
-    expect(failed).toMatchObject({ name: "seeds", message: expect.stringMatching(/^too slow/) });
+    expect(failed).toMatchObject({
+      name: "seeds",
+      message: expect.stringMatching(/3 ticks in a row over budget/),
+    });
   }, 120_000);
 
   it("rejects a bot over the upload limits without running it", async () => {

@@ -285,6 +285,10 @@ describe("blameCall", () => {
     expect(blameCall(colluders, false, LIMIT)).toBeNull();
     // Abandoned for time spent outside the calls (syncs, the platform): nobody.
     expect(blameCall([timed("a", 5), timed("b", 7)], true, LIMIT)).toBeNull();
+    // Nor for slow starts (instrumenting bundles is host work), unless one alone ran past it.
+    const start = (ms: number): TimedCall => ({ call: { ...call(0, "s"), kind: "init" }, ms });
+    expect(blameCall([start(overrun), timed("a", 5)], true, LIMIT)).toBeNull();
+    expect(blameCall([start(abort), timed("a", 5)], false, LIMIT)).toEqual(start(abort));
   });
 });
 

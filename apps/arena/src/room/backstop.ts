@@ -47,7 +47,7 @@
  * itself is named too (`blameCall`), as a kill would have: the batch ends there, so a call that
  * takes most of the budget without reaching the CPU limit can't stall the room forever by making
  * every rerun abandon the same tick. So is the slowest call of a tick that watch mode abandons when
- * the tick's calls alone ran past the stop share. Bot calls are milliseconds; only code the meter
+ * the tick's bot calls alone ran past the stop share. Bot calls are milliseconds; only code the meter
  * can't see takes seconds.
  */
 
@@ -235,8 +235,10 @@ export interface TimedCall {
 /**
  * The call of a watched tick (`calls`, in order) to name as a kill, or null: one that by itself ran
  * past `WATCH_ABORT_SHARE` of `limitMs` (the room's budget); or, when watch mode abandons the tick
- * (`abandoned`), its slowest call, if the tick's calls together ran past the share between the stop
- * and the abort (the tick started below the stop share, so they alone made it overrun).
+ * (`abandoned`), its slowest `tick` call, if its `tick` calls together ran past the share between
+ * the stop and the abort (the tick started below the stop share, so they alone made it overrun).
+ * Starts don't count toward that: they include instrumenting the bundle, host work that grows with
+ * its size (`WORST_INSTRUMENT_MS`), and their bot code has an op budget of its own.
  */
 export function blameCall(
   calls: readonly TimedCall[],
@@ -244,14 +246,16 @@ export function blameCall(
   limitMs: number,
 ): TimedCall | null {
   let slowest: TimedCall | null = null;
-  let total = 0;
+  let slowestTick: TimedCall | null = null;
+  let ticks = 0;
   for (const c of calls) {
-    total += c.ms;
     if (!slowest || c.ms > slowest.ms) slowest = c;
+    if (c.call.kind !== "tick") continue;
+    ticks += c.ms;
+    if (!slowestTick || c.ms > slowestTick.ms) slowestTick = c;
   }
-  if (!slowest) return null;
-  if (slowest.ms >= WATCH_ABORT_SHARE * limitMs) return slowest;
-  if (abandoned && total >= (WATCH_ABORT_SHARE - WATCH_STOP_SHARE) * limitMs) return slowest;
+  if (slowest && slowest.ms >= WATCH_ABORT_SHARE * limitMs) return slowest;
+  if (abandoned && ticks >= (WATCH_ABORT_SHARE - WATCH_STOP_SHARE) * limitMs) return slowestTick;
   return null;
 }
 

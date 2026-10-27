@@ -59,10 +59,17 @@ export const users = sqliteTable("users", {
    */
   bannedAt: integer("banned_at", { mode: "timestamp_ms" }),
   banReason: text("ban_reason"),
+  /** Web sessions created up to this moment are revoked (`/revoke-sessions`, "sign out everywhere"). */
+  sessionsRevokedAt: integer("sessions_revoked_at", { mode: "timestamp_ms" }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
 
+/**
+ * Unused: web sessions live in KV, bound to apps/web only (src/server/session-store.ts, #50).
+ * Emptied by migration 0011 and kept one release so the site still running during a deploy
+ * doesn't fail on it; dropped in a follow-up (#81).
+ */
 export const sessions = sqliteTable(
   "sessions",
   {
@@ -78,6 +85,20 @@ export const sessions = sqliteTable(
     updatedAt: updatedAt(),
   },
   (t) => [index("sessions_user_id_idx").on(t.userId)],
+);
+
+/**
+ * Signed-out web sessions, by SHA-256 of the token (useless to whoever reads this database), until
+ * they would have expired. Sessions are in KV, which can serve a deleted one for a while longer;
+ * this is what makes a sign-out final (src/server/session-store.ts). Pruned by the 5-minute cron.
+ */
+export const revokedSessions = sqliteTable(
+  "revoked_sessions",
+  {
+    tokenHash: text("token_hash").primaryKey(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [index("revoked_sessions_expires_at_idx").on(t.expiresAt)],
 );
 
 export const accounts = sqliteTable(
@@ -498,4 +519,4 @@ export const moderationActions = sqliteTable(
   ],
 );
 
-export const authSchema = { users, sessions, accounts, verifications, deviceCodes };
+export const authSchema = { users, accounts, verifications, deviceCodes };

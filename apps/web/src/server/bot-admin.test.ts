@@ -23,6 +23,7 @@ beforeEach(async () => {
   d1 = await createTestD1();
   auth = createAuth({
     DB: d1.db,
+    AUTH_KV: d1.kv,
     BETTER_AUTH_URL: BASE,
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
     GITHUB_CLIENT_ID: "test-client-id",

@@ -93,14 +93,15 @@ export function banReport(report: CheckReport | null, ban: BanRecord): CheckRepo
 /**
  * Records a backstop ban: the version leaves the arena for good. `versions.status` has no
  * `banned` value, so it becomes `rejected`, and the report gets a failed `arena-backstop` check.
- * Idempotent.
+ * Idempotent. Throws on D1 errors (retry); `missing` means the version row is gone (deleted with
+ * its bot), which no retry can fix.
  */
-export async function recordBan(db: D1Database, ban: BanRecord): Promise<void> {
+export async function recordBan(db: D1Database, ban: BanRecord): Promise<"recorded" | "missing"> {
   const row = await db
     .prepare("SELECT report FROM versions WHERE id = ?")
     .bind(ban.versionId)
     .first<{ report: string | null }>();
-  if (!row) return;
+  if (!row) return "missing";
   const report = banReport(row.report ? (JSON.parse(row.report) as CheckReport) : null, ban);
   await db
     .prepare(
@@ -110,4 +111,5 @@ export async function recordBan(db: D1Database, ban: BanRecord): Promise<void> {
     )
     .bind(JSON.stringify(report), ban.versionId)
     .run();
+  return "recorded";
 }

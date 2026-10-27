@@ -5,7 +5,10 @@ import {
   type CrashMarker,
   INCIDENT_WINDOW_MS,
   judgeCrash,
+  judgeTrialCrash,
   retryDelayMs,
+  TRIAL_MAX_ATTEMPTS,
+  type Trial,
   WATCH_TICKS,
   watching,
   watchWindow,
@@ -37,10 +40,10 @@ describe("judgeCrash", () => {
     expect(judgeCrash(normal(0), 31_000, LIMIT)).toEqual({ kind: "overrun", gapMs: 31_000 });
   });
 
-  it("blames a watched bot only if its own call must have used the CPU", () => {
+  it("suspects a watched bot only if its own call must have used the CPU", () => {
     // 2 s of other work, then 29 s inside this bot's call.
     expect(judgeCrash(watched(0, 2_000), 31_000, LIMIT)).toMatchObject({
-      kind: "culprit",
+      kind: "suspect",
       lifeId: "bot",
       callMs: 29_000,
     });
@@ -50,6 +53,43 @@ describe("judgeCrash", () => {
     expect(judgeCrash({ ...watched(0, 2_000), suspectLife: null }, 31_000, LIMIT).kind).toBe(
       "overrun",
     );
+  });
+});
+
+describe("judgeTrialCrash", () => {
+  const trial = (): Trial => ({
+    kind: "cpu",
+    lifeId: "bot",
+    untilTick: 120,
+    maxPendingSeq: 0,
+    deaths: [],
+    attempts: 0,
+    reason: "",
+  });
+  const died = (t: Trial, tick: number, gap: number) =>
+    judgeTrialCrash(t, { ...watched(0, 0), trialTick: tick }, gap, LIMIT);
+
+  it("confirms only after three deaths in a row at the same tick", () => {
+    const t = trial();
+    expect(died(t, 120, 31_000)).toBe("retry");
+    expect(died(t, 120, 31_000)).toBe("retry");
+    expect(died(t, 120, 31_000)).toBe("confirmed");
+  });
+
+  it("doesn't count restarts, and needs the deaths to match", () => {
+    const t = trial();
+    expect(died(t, 120, 31_000)).toBe("retry");
+    expect(died(t, 120, 2_000)).toBe("retry"); // a restart: not a death
+    expect(died(t, 121, 31_000)).toBe("retry"); // a different tick: restarts land anywhere
+    expect(died(t, 120, 31_000)).toBe("retry");
+    expect(t.deaths).toEqual([120, 121, 120]);
+  });
+
+  it("gives up after too many attempts", () => {
+    const t = trial();
+    let verdict = "retry";
+    for (let i = 0; i < TRIAL_MAX_ATTEMPTS; i++) verdict = died(t, i, 31_000);
+    expect(verdict).toBe("inconclusive");
   });
 });
 

@@ -6,7 +6,7 @@
  * All methods are synchronous; writes made without an `await` in between commit together.
  */
 import type { IncidentOutcome, RoomLimits, RoomMode } from "../protocol.ts";
-import type { CrashMarker, WatchWindow } from "./backstop.ts";
+import type { CrashMarker, Trial, WatchWindow } from "./backstop.ts";
 
 /** A life the room holds: spawned (`roster`) or waiting for the next batch (`pending`). */
 export interface LifeEntry {
@@ -23,6 +23,8 @@ export interface LifeEntry {
 export interface RosterEntry extends LifeEntry {
   startTick: number;
   startedAt: number;
+  /** Tick its current sandbox life began: the spawn, or the reload that last restarted the bot. */
+  botStartTick: number;
   /** Retire at the next batch (`RoomRpc.leave`). */
   leaving: boolean;
 }
@@ -33,10 +35,14 @@ export interface PendingEntry extends LifeEntry {
 
 /** Written (and synced) before a batch runs; deleted in the transaction that saves its result. */
 export interface BatchMarker extends CrashMarker {
+  /** A batch of the room, or a trial of one suspect (see `backstop.ts`). */
+  phase: "batch" | "trial";
   fromTick: number;
   /** Pending tickets with `seq` up to this one spawn in the batch. */
   maxPendingSeq: number;
   suspectTick: number | null;
+  /** Trial: the tick the suspect is running. */
+  trialTick: number | null;
 }
 
 export interface Meta {
@@ -57,6 +63,8 @@ export interface Meta {
   watch: WatchWindow;
   /** Start tick of the replay chunk still being recorded (not in R2 yet), or null. */
   openChunkTick: number | null;
+  /** A suspect waiting for (or in) its trial; no batch runs meanwhile. */
+  trial: Trial | null;
 }
 
 export type OutboxItem =
@@ -98,7 +106,7 @@ CREATE TABLE IF NOT EXISTS blobs (key TEXT NOT NULL, part INTEGER NOT NULL, data
   PRIMARY KEY (key, part));
 CREATE TABLE IF NOT EXISTS roster (life_id TEXT PRIMARY KEY, version_id TEXT, author TEXT NOT NULL,
   house TEXT, source TEXT NOT NULL, start_tick INTEGER NOT NULL, started_at INTEGER NOT NULL,
-  leaving INTEGER NOT NULL DEFAULT 0);
+  bot_start_tick INTEGER NOT NULL, leaving INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS pending (seq INTEGER PRIMARY KEY AUTOINCREMENT,
   life_id TEXT NOT NULL UNIQUE, version_id TEXT, author TEXT NOT NULL, house TEXT,
   source TEXT NOT NULL);
@@ -207,6 +215,7 @@ export class RoomStore {
         source: string;
         start_tick: number;
         started_at: number;
+        bot_start_tick: number;
         leaving: number;
       }>("SELECT * FROM roster ORDER BY start_tick, life_id")
       .toArray()
@@ -218,6 +227,7 @@ export class RoomStore {
         source: r.source,
         startTick: r.start_tick,
         startedAt: r.started_at,
+        botStartTick: r.bot_start_tick,
         leaving: r.leaving !== 0,
       }));
   }
@@ -225,7 +235,7 @@ export class RoomStore {
   addToRoster(e: RosterEntry): void {
     this.sql.exec(
       `INSERT INTO roster (life_id, version_id, author, house, source, start_tick, started_at,
-        leaving) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        bot_start_tick, leaving) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       e.lifeId,
       e.versionId,
       e.author,
@@ -233,8 +243,15 @@ export class RoomStore {
       e.source,
       e.startTick,
       e.startedAt,
+      e.botStartTick,
       e.leaving ? 1 : 0,
     );
+  }
+
+  setBotStart(lifeIds: readonly string[], tick: number): void {
+    for (const id of lifeIds) {
+      this.sql.exec("UPDATE roster SET bot_start_tick = ? WHERE life_id = ?", tick, id);
+    }
   }
 
   removeFromRoster(lifeId: string): void {
@@ -355,6 +372,17 @@ export class RoomStore {
       });
   }
 
+  /** A replay chunk still waiting for its R2 upload. */
+  outboxChunk(tick: number): Uint8Array | null {
+    const row = this.sql
+      .exec<{ body: ArrayBuffer }>(
+        "SELECT body FROM outbox WHERE kind = 'chunk' AND tick = ? LIMIT 1",
+        tick,
+      )
+      .next();
+    return row.done ? null : new Uint8Array(row.value.body);
+  }
+
   outboxStats(): { size: number; failing: number; nextAt: number | null } {
     const r = this.sql
       .exec<{ size: number; failing: number; next_at: number | null }>(
@@ -415,6 +443,10 @@ export class RoomStore {
     return this.sql
       .exec<{ n: number }>("SELECT count(*) AS n FROM strikes WHERE version_id = ?", s.versionId)
       .one().n;
+  }
+
+  isStruck(lifeId: string): boolean {
+    return !this.sql.exec("SELECT 1 FROM strikes WHERE life_id = ?", lifeId).next().done;
   }
 
   strikes(): StrikeRow[] {
@@ -485,11 +517,11 @@ export class RoomStore {
     );
   }
 
-  /** CPU incidents (anything but a restart) since `since`. */
+  /** Batches that died with CPU-limit evidence (`overrun`, `suspect`) since `since`. */
   cpuIncidentsSince(since: number): number {
     return this.sql
       .exec<{ n: number }>(
-        "SELECT count(*) AS n FROM incidents WHERE outcome != 'restart' AND at >= ?",
+        "SELECT count(*) AS n FROM incidents WHERE outcome IN ('overrun', 'suspect') AND at >= ?",
         since,
       )
       .one().n;

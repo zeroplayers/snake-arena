@@ -265,28 +265,44 @@ describe("RoomDO backstop", () => {
   // Small CPU limit and batches, so "killed after 1.5 s" counts as CPU-limit evidence.
   const limits = { cpuLimitMs: 1000, batchTicks: 50 };
 
-  it("bans a version whose own call blows the CPU limit, twice", async () => {
+  it("bans a version whose code, run alone, reproducibly blows the CPU limit", async () => {
     const evil = await ticket("mallory", BOTS.hostile(120));
     const others = await Promise.all([
       ticket("kate", house.hard as string),
       ticket("liam", house.medium as string),
     ]);
     await startRoom("backstop", [evil, ...others], { limits });
+    // Its second life, for when the first is killed.
+    await h.call("matchmaker", "offer", { ...evil, lifeId: "life-mallory-2" });
 
-    const { kills, s } = await drive("backstop", (s) => s.bans.length > 0);
-    // Normal batch dies (overrun → watch), watched batch dies in its call (strike), again (ban).
-    expect(kills).toBe(3);
-    expect(s.incidents.map((i) => i.outcome)).toEqual(["overrun", "culprit", "banned"]);
-    expect(s.strikes.map((x) => [x.versionId, x.kind, x.tick])).toEqual([
-      [evil.versionId, "cpu", 120],
-      [evil.versionId, "cpu", 120],
+    const first = await drive("backstop", (s) => s.strikes.length > 0);
+    // Normal batch dies (overrun), watched batch dies in its call (suspect), then its trial dies
+    // three times at the same tick (strike); the life is killed.
+    expect(first.kills).toBe(5);
+    expect(first.s.incidents.map((i) => i.outcome)).toEqual(["overrun", "suspect", "culprit"]);
+    expect(first.s.strikes.map((x) => [x.lifeId, x.kind, x.tick])).toEqual([
+      [evil.lifeId, "cpu", 120],
     ]);
-    expect(s.bans).toEqual([evil.versionId]);
-    expect(s.watching).toBe(true);
-    expect(s.snakes.map((x) => x.lifeId)).not.toContain(evil.lifeId);
-    expect(s.snakes.map((x) => x.lifeId)).toEqual(
-      expect.arrayContaining(others.map((t) => t.lifeId)),
-    );
+    expect(first.s.bans).toEqual([]);
+
+    // Its second life does it again: second strike, banned.
+    const second = await drive("backstop", (s) => s.bans.length > 0, { max: 60 });
+    expect(second.kills).toBe(4);
+    expect(second.s.incidents.map((i) => i.outcome)).toEqual([
+      "overrun",
+      "suspect",
+      "culprit",
+      "suspect",
+      "banned",
+    ]);
+    expect(second.s.strikes.map((x) => x.lifeId)).toEqual([evil.lifeId, "life-mallory-2"]);
+    expect(second.s.bans).toEqual([evil.versionId]);
+    expect(second.s.watching).toBe(true);
+    // The banned snake dies at the start of the next batch.
+    const after = await h.room<RoomStatus>("backstop", "runBatch");
+    const alive = after.snakes.map((x) => x.lifeId);
+    expect(alive).not.toContain("life-mallory-2");
+    expect(alive).toEqual(expect.arrayContaining(others.map((t) => t.lifeId)));
 
     const db = await h.d1();
     const version = await db
@@ -303,19 +319,48 @@ describe("RoomDO backstop", () => {
       reason: "cpu",
     });
     expect(
-      await h.room("backstop", "join", { ...evil, lifeId: "evil-2", author: "mallory2" }),
+      await h.room("backstop", "join", { ...evil, lifeId: "evil-3", author: "mallory2" }),
     ).toEqual({ ok: false, reason: "banned" });
-  }, 120_000);
+  }, 180_000);
 
   it("catches a bot that only burns after many ticks of memory (restarts put it off)", async () => {
+    // The trial rebuilds its memory from the recorded states since its sandbox life began.
     const burner = await ticket("nina", BOTS.burnAfter(60));
     const other = await ticket("oscar", house.hard as string);
     await startRoom("burner", [burner, other], { limits });
-    const { kills, s } = await drive("burner", (s) => s.bans.length > 0, { max: 80 });
-    expect(kills).toBe(3);
-    expect(s.bans).toEqual([burner.versionId]);
-    expect(s.strikes.every((x) => x.versionId === burner.versionId)).toBe(true);
-    expect(s.snakes.map((x) => x.lifeId)).toContain(other.lifeId);
+    const { kills, s } = await drive("burner", (s) => s.strikes.length > 0, { max: 80 });
+    expect(kills).toBe(5);
+    expect(s.incidents.map((i) => i.outcome)).toEqual(["overrun", "suspect", "culprit"]);
+    expect(s.strikes.map((x) => x.lifeId)).toEqual([burner.lifeId]);
+    // The struck snake dies at the start of the next batch.
+    const next = await h.room<RoomStatus>("burner", "runBatch");
+    expect(next.snakes.map((x) => x.lifeId)).toContain(other.lifeId);
+    expect(next.snakes.map((x) => x.lifeId)).not.toContain(burner.lifeId);
+    expect(await lifeRow(burner.lifeId)).toBeNull(); // written once its replay chunk is in R2
+  }, 180_000);
+
+  it("never strikes honest bots, however often the room is restarted mid-batch", async () => {
+    // The review's repro: five honest versions, restarts at random points, recovery after
+    // 1.2 s (longer than this room's CPU limit, so every crash looks like the CPU limit).
+    const honest = await Promise.all(
+      ["h5", "h6", "h7", "h8", "h9"].map((a) => ticket(a, house.hard as string)),
+    );
+    await startRoom("storm", honest, { limits });
+    await h.room("storm", "runBatch");
+    for (let i = 0; i < 20; i++) {
+      void h.fire("storm", "runBatch");
+      await sleep(20 + ((i * 37) % 120));
+      await h.restart();
+      await sleep(1200);
+    }
+    // Let pending trials finish.
+    const { s } = await drive("storm", (s) => s.trial === null, { max: 40 });
+    expect(s.strikes).toEqual([]);
+    expect(s.bans).toEqual([]);
+    expect(s.incidents.some((i) => i.outcome === "culprit" || i.outcome === "slow")).toBe(false);
+    expect(s.snakes.filter((x) => !x.house).map((x) => x.lifeId)).toEqual(
+      expect.arrayContaining(honest.map((t) => t.lifeId)),
+    );
   }, 180_000);
 
   it("blames nobody when the room is restarted twice in a row (no CPU-limit evidence)", async () => {
@@ -339,7 +384,7 @@ describe("RoomDO backstop", () => {
     );
   }, 60_000);
 
-  it("kills a bot slow every tick, bans it on its second life, spares neighbours", async () => {
+  it("kills a bot slow every tick once a trial confirms it, bans it on its second life", async () => {
     const slow = await ticket("quentin", BOTS.slow(300));
     const honest = await Promise.all([
       ticket("ruth", house.hard as string),
@@ -350,11 +395,11 @@ describe("RoomDO backstop", () => {
     });
     await h.call("matchmaker", "offer", { ...slow, lifeId: "life-quentin-2" });
 
-    // The normal batch overruns in aggregate (~10 s); then watch mode measures every call.
+    // The normal batch overruns in aggregate (~12 s); watch mode measures it slow; its trial
+    // (alone, no crash) confirms.
     const first = await drive("slow", (s) => s.strikes.length > 0, { hangMs: 2500 });
     expect(first.kills).toBe(1);
-    expect(first.s.incidents.map((i) => i.outcome)).toEqual(["overrun", "slow"]);
-    expect(first.s.snakes.map((x) => x.lifeId)).not.toContain(slow.lifeId);
+    expect(first.s.incidents.map((i) => i.outcome)).toEqual(["overrun", "suspect", "slow"]);
 
     const second = await drive("slow", (s) => s.bans.length > 0, { hangMs: 2500 });
     expect(second.kills).toBe(0);

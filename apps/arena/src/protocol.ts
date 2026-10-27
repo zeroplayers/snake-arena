@@ -51,8 +51,8 @@ export interface BanRecord {
   /** Room tick of the last strike. */
   tick: number;
   /**
-   * `cpu`: a call of this bot alone ran for most of the DO CPU limit (watch mode); `slow`: its
-   * ticks were measured far over budget, life after life.
+   * `cpu`: running this bot alone blew the DO CPU limit, reproducibly; `slow`: run alone, its
+   * ticks were measured far over budget (each confirmed by a trial, see `backstop.ts`).
    */
   reason: "cpu" | "slow";
   message: string;
@@ -62,11 +62,23 @@ export interface BanRecord {
 /**
  * - `restart`: a batch died too quickly to be the CPU limit (deploy, eviction); nobody blamed.
  * - `overrun`: a batch died after long enough to be the CPU limit; the room is watched.
- * - `culprit`: in watch mode, only one bot's own call can explain it; that version gets a strike.
- * - `banned`: a culprit verdict or slow kill that was the version's last allowed strike.
- * - `slow`: a life killed in watch mode for ticks measured far over budget (a strike).
+ * - `suspect`: in watch mode, one bot's call (or its measured slowness) could explain it; that
+ *   bot goes on trial alone. No strike yet.
+ * - `cleared`: the suspect's trial completed without reproducing it. No strike.
+ * - `inconclusive`: the trial couldn't reproduce or rule it out (restarts, suspect gone). No strike.
+ * - `culprit`: the trial reproduced the CPU overrun with only the suspect running: a strike.
+ * - `slow`: the trial measured the suspect far over budget on its own: a strike.
+ * - `banned`: a strike that was the version's last allowed one.
  */
-export type IncidentOutcome = "restart" | "overrun" | "culprit" | "banned" | "slow";
+export type IncidentOutcome =
+  | "restart"
+  | "overrun"
+  | "suspect"
+  | "cleared"
+  | "inconclusive"
+  | "culprit"
+  | "slow"
+  | "banned";
 
 /** Tunables of one room. Defaults suit production; tests shrink them. */
 export interface RoomLimits {
@@ -132,6 +144,8 @@ export interface RoomStatus {
   bans: string[];
   /** Watch mode (isolated running) is on. */
   watching: boolean;
+  /** A suspect waiting for its trial (batches wait too). */
+  trial: { lifeId: string; kind: "cpu" | "slow" } | null;
   /** Side effects not delivered yet; `failing` of them failed at least once. */
   outbox: { size: number; failing: number };
   /** Simulation paused until the outbox drains below `maxOutbox`. */

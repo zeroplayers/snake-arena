@@ -12,6 +12,14 @@
  * once `WATCH_STOP_SHARE` of the limit has passed. So in watch mode the invocation can only die
  * inside one bot call that by itself ran for most of the CPU limit, and every bot call has a
  * measured upper bound on its CPU.
+ *
+ * Timing alone still can't tell a CPU kill from a restart with a slow recovery, and most of watch
+ * mode's wall time is storage syncs during which the last bot stays the recorded suspect. So a
+ * watched crash (or a bot measured slow) only names a **suspect**. The suspect is then put on
+ * **trial**: in an invocation of its own, only its code runs, in a fresh sandbox, on a throwaway
+ * copy of the saved world (other snakes go straight). A strike needs the trial to reproduce the
+ * overrun: die with CPU-limit evidence twice at the same tick, or measure slow on its own. A trial
+ * that completes clears the suspect. Restarts land at random; a real overrun reproduces.
  */
 
 /** A marker older than this share of the CPU limit is consistent with a CPU kill (clock skew). */
@@ -26,10 +34,35 @@ export const WATCH_TICKS = 600;
 export const INCIDENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** A bot call measured over this in watch mode counts as a slow tick (27 ms is the worst budget). */
 export const DEFAULT_SLOW_TICK_MS = 250;
-/** Slow ticks in one life before the snake dies by `timeout`. */
-export const SLOW_TICKS_TO_KILL = 3;
-/** Strikes (CPU culprit verdicts or slow kills) of one version before it is banned. */
+/** Slow calls of one life in watch mode before it is put on (slow) trial. */
+export const SLOW_TICKS_TO_SUSPECT = 3;
+/** Strikes (confirmed by trial) of one version before it is banned. */
 export const STRIKES_TO_BAN = 2;
+/** A CPU trial runs the suspect this many ticks past the tick it was suspected at. */
+export const TRIAL_MARGIN_TICKS = 5;
+/** A slow trial runs the suspect alone for this many ticks… */
+export const SLOW_TRIAL_TICKS = 10;
+/** …and confirms if this many of them are measured over `slowTickMs`. */
+export const SLOW_TRIAL_CONFIRM = 3;
+/**
+ * Trial deaths in a row at the same tick that confirm a CPU overrun. A real overrun dies at the
+ * same tick every time; restarts land wherever the trial happens to be.
+ */
+export const TRIAL_DEATHS_TO_CONFIRM = 3;
+/** Trial attempts (deaths without a match, restarts) before giving up: inconclusive. */
+export const TRIAL_MAX_ATTEMPTS = 8;
+/**
+ * Each trial waits a random 0..this ms (wall time, no CPU) before it starts, so restarts timed
+ * from the invocation's start (deploys, retries) don't hit the same tick every time.
+ */
+export const TRIAL_JITTER_MS = 250;
+/**
+ * After each of the suspect's calls the trial records "between calls" and waits a random
+ * 0..this ms (no CPU). Most of a trial's wall time is then between calls, where a restart counts
+ * for nothing; one that lands in a call hits a random tick. A real overrun never returns from its
+ * call, so it always dies at the same tick.
+ */
+export const TRIAL_GAP_MS = 20;
 
 /** What `RoomStore` keeps of a batch in progress, as far as the backstop is concerned. */
 export interface CrashMarker {
@@ -46,8 +79,8 @@ export type Verdict =
   | { kind: "restart"; gapMs: number }
   /** Possibly the CPU limit, with no single bot to blame (normal mode, or between bots). */
   | { kind: "overrun"; gapMs: number }
-  /** Watch mode, and only the suspect's own call can have used that much CPU. */
-  | { kind: "culprit"; lifeId: string; gapMs: number; callMs: number };
+  /** Watch mode, and only the suspect's own call can explain it: put the suspect on trial. */
+  | { kind: "suspect"; lifeId: string; gapMs: number; callMs: number };
 
 export function judgeCrash(marker: CrashMarker, now: number, cpuLimitMs: number): Verdict {
   const gapMs = now - marker.startedAt;
@@ -62,9 +95,46 @@ export function judgeCrash(marker: CrashMarker, now: number, cpuLimitMs: number)
   const callMs = now - marker.suspectAt;
   const needed = cpuLimitMs - before;
   if (before <= WATCH_ABORT_SHARE * cpuLimitMs && callMs >= CPU_EVIDENCE * needed) {
-    return { kind: "culprit", lifeId: marker.suspectLife, gapMs, callMs };
+    return { kind: "suspect", lifeId: marker.suspectLife, gapMs, callMs };
   }
   return { kind: "overrun", gapMs };
+}
+
+/** A suspect on trial. Lives in the room's meta until the verdict. */
+export interface Trial {
+  kind: "cpu" | "slow";
+  lifeId: string;
+  /** cpu: the tick the suspect was running at when the watched batch died. */
+  untilTick: number;
+  /** cpu: the crashed batch's pending tickets (the suspect may be one of its spawns). */
+  maxPendingSeq: number;
+  /** Ticks at which trials of this suspect died with CPU-limit evidence, in order. */
+  deaths: number[];
+  /** Trial invocations so far that didn't complete. */
+  attempts: number;
+  /** Why it was suspected, for the strike's detail. */
+  reason: string;
+}
+
+/** What a dead trial (only the suspect's code ran) means. Records the attempt in `trial`. */
+export function judgeTrialCrash(
+  trial: Trial,
+  marker: CrashMarker & { trialTick: number | null },
+  now: number,
+  cpuLimitMs: number,
+): "confirmed" | "retry" | "inconclusive" {
+  const attempts = trial.attempts + 1;
+  const cpu = now - marker.startedAt >= CPU_EVIDENCE * cpuLimitMs && marker.trialTick !== null;
+  if (cpu) {
+    const deaths = [...trial.deaths, marker.trialTick as number];
+    const last = deaths.slice(-TRIAL_DEATHS_TO_CONFIRM);
+    if (last.length === TRIAL_DEATHS_TO_CONFIRM && last.every((t) => t === last[0])) {
+      return "confirmed";
+    }
+    trial.deaths = deaths;
+  }
+  trial.attempts = attempts;
+  return attempts >= TRIAL_MAX_ATTEMPTS ? "inconclusive" : "retry";
 }
 
 export interface WatchWindow {

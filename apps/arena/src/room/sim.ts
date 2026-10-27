@@ -22,6 +22,11 @@ export function chunkKey(roomId: string, tick: number): string {
   return `${roomId}/${String(tick).padStart(10, "0")}.zsr`;
 }
 
+/** The bundle a life runs: its version's, or the house bot's that ships with the worker. */
+export function botSource(entry: LifeEntry): string {
+  return entry.house ? (HOUSE_BUNDLES[entry.house] ?? "") : entry.source;
+}
+
 export interface EndedLife {
   entry: RosterEntry;
   death: Death;
@@ -40,8 +45,6 @@ export interface BatchHooks {
   beforeBot?: (lifeId: string | null, tick: number) => Promise<"go" | "abort">;
   /** Asked between ticks; false ends the batch early. */
   continueBatch?: () => boolean;
-  /** Lives to kill at the next step without running their code (filled during the batch). */
-  kills?: Map<string, Fault>;
 }
 
 export interface BatchPlan {
@@ -109,6 +112,11 @@ export class RoomSim {
     return n;
   }
 
+  /** Lives whose bot will (re)start with the next batch, unless the plan kills them. */
+  idleLifeIds(): string[] {
+    return [...this.running.values()].filter((r) => !r.life).map((r) => r.entry.lifeId);
+  }
+
   /** Start tick of the open replay chunk, or null. */
   get openChunkTick(): number | null {
     return this.recorder.pending?.snapshot.tick ?? null;
@@ -122,7 +130,7 @@ export class RoomSim {
   /** Runs one batch: spawns, then up to `plan.ticks` engine steps, every bot's tick before each. */
   async run(plan: BatchPlan, hooks: BatchHooks = {}, now = Date.now()): Promise<BatchResult> {
     const world = this.world;
-    const { beforeBot, continueBatch, kills } = hooks;
+    const { beforeBot, continueBatch } = hooks;
     const result: BatchResult = {
       spawned: [],
       ended: [],
@@ -140,6 +148,7 @@ export class RoomSim {
     // Bots that lost their sandbox life (a resumed room) start again.
     for (const r of this.running.values()) {
       if (r.life || plan.faults.has(r.entry.lifeId)) continue;
+      r.entry.botStartTick = world.tick;
       if (beforeBot) await beforeBot(r.entry.lifeId, world.tick);
       r.life = this.startLife(r.entry);
     }
@@ -149,6 +158,7 @@ export class RoomSim {
         ...entry,
         startTick: world.tick,
         startedAt: now,
+        botStartTick: world.tick,
         leaving: false,
       };
       const r: Running = { entry: spawned, life: null };
@@ -165,7 +175,7 @@ export class RoomSim {
       const faults: Record<string, Fault> = {};
       for (const snake of world.snakes) {
         const id = snake.id;
-        const forced = (k === 0 ? plan.faults.get(id) : undefined) ?? kills?.get(id);
+        const forced = k === 0 ? plan.faults.get(id) : undefined;
         const r = this.running.get(id);
         if (forced || !r?.life) {
           faults[id] = forced ?? "error";
@@ -186,7 +196,6 @@ export class RoomSim {
       const chunkTick = this.recorder.pending?.snapshot.tick ?? world.tick;
       for (const death of world.deaths) {
         const r = this.running.get(death.id);
-        kills?.delete(death.id);
         if (!r) continue;
         r.life?.dispose();
         r.life = null;
@@ -216,11 +225,10 @@ export class RoomSim {
   private startLife(entry: RosterEntry): BotLife {
     const snake = this.world.snakes.find((s) => s.id === entry.lifeId);
     if (!snake) throw new Error(`life ${entry.lifeId} has no snake`);
-    const source = entry.house ? (HOUSE_BUNDLES[entry.house] ?? "") : entry.source;
     const info = buildBotInfo(this.world, snake, {
       opBudget: DEFAULT_OP_BUDGET,
       logLimitBytes: LOG_LIMIT_BYTES,
     });
-    return this.sandbox.startLife(source, info);
+    return this.sandbox.startLife(botSource(entry), info);
   }
 }

@@ -56,8 +56,9 @@ export const SAFETY_ALARM_MS = 1_000;
  * Ticks for the next batch: the most whose worst case (every bot at its full budget every tick,
  * plus starting `lifeStarts` lives) stays within `BATCH_CPU_SHARE` of the DO CPU limit.
  *
- * The sandbox's op budget doesn't yet bound straight-line code inside one op (#60), so a bot can
- * still run far over this worst case; the backstop (`room/backstop.ts`) covers that.
+ * The sandbox's meter bounds a tick's cost (with #62, also straight-line code, #60), except for
+ * what it can't charge (operators on huge strings), which can still run far over this worst case.
+ * The backstop (`room/backstop.ts`) covers that by evicting the bot.
  */
 export function batchTicks(bots: number, lifeStarts: number, cpuLimitMs = DO_CPU_LIMIT_MS): number {
   const budget =

@@ -1,12 +1,12 @@
 /**
  * The room's Durable Object SQLite storage: everything needed to resume after an eviction or a
  * batch that died (world snapshot, open replay chunk, roster, pending tickets, outbox of side
- * effects, the in-progress batch marker, strikes, bans, incidents).
+ * effects, the in-progress batch marker, incidents, evictions, quarantined versions).
  *
  * All methods are synchronous; writes made without an `await` in between commit together.
  */
 import type { IncidentOutcome, RoomLimits, RoomMode } from "../protocol.ts";
-import type { CrashMarker, Trial, WatchWindow } from "./backstop.ts";
+import type { CrashMarker, KillStreak, WatchWindow } from "./backstop.ts";
 
 /** A life the room holds: spawned (`roster`) or waiting for the next batch (`pending`). */
 export interface LifeEntry {
@@ -23,10 +23,10 @@ export interface LifeEntry {
 export interface RosterEntry extends LifeEntry {
   startTick: number;
   startedAt: number;
-  /** Tick its current sandbox life began: the spawn, or the reload that last restarted the bot. */
-  botStartTick: number;
   /** Retire at the next batch (`RoomRpc.leave`). */
   leaving: boolean;
+  /** Evicted by the backstop: dies at the next batch without running its code again. */
+  evicted: boolean;
 }
 
 export interface PendingEntry extends LifeEntry {
@@ -35,16 +35,9 @@ export interface PendingEntry extends LifeEntry {
 
 /** Written (and synced) before a batch runs; deleted in the transaction that saves its result. */
 export interface BatchMarker extends CrashMarker {
-  /** A batch of the room, or a trial of one suspect (see `backstop.ts`). */
-  phase: "batch" | "trial";
   fromTick: number;
   /** Pending tickets with `seq` up to this one spawn in the batch. */
   maxPendingSeq: number;
-  suspectTick: number | null;
-  /**
-   * Trial: the suspect's call in progress, `init@<tick>` or `tick@<tick>`; null between calls.
-   */
-  trialCall: string | null;
 }
 
 export interface Meta {
@@ -65,21 +58,23 @@ export interface Meta {
   watch: WatchWindow;
   /** Start tick of the replay chunk still being recorded (not in R2 yet), or null. */
   openChunkTick: number | null;
-  /** A suspect waiting for (or in) its trial; no batch runs meanwhile. */
-  trial: Trial | null;
+  /** Watched kills in a row that named the same life (see `backstop.ts`). */
+  streak: KillStreak | null;
 }
 
 export type OutboxItem =
   | { kind: "chunk"; key: string; tick: number; bytes: Uint8Array }
   /** `chunkTick`: the replay chunk the life's row points to; sent only once it is in R2. */
   | { kind: "life"; json: string; chunkTick: number }
-  | { kind: "ban"; json: string }
+  | { kind: "quarantine"; json: string }
   | { kind: "closed" };
 
-export interface BanRow {
-  versionId: string;
+export interface EvictionRow {
+  /** Null for house bots. */
+  versionId: string | null;
   lifeId: string;
   tick: number;
+  detail: string;
   at: number;
 }
 
@@ -87,15 +82,6 @@ export interface IncidentRow {
   tick: number;
   outcome: IncidentOutcome;
   versionId: string | null;
-  at: number;
-}
-
-export interface StrikeRow {
-  versionId: string;
-  lifeId: string;
-  kind: "cpu" | "slow";
-  tick: number;
-  detail: string;
   at: number;
 }
 
@@ -108,7 +94,7 @@ CREATE TABLE IF NOT EXISTS blobs (key TEXT NOT NULL, part INTEGER NOT NULL, data
   PRIMARY KEY (key, part));
 CREATE TABLE IF NOT EXISTS roster (life_id TEXT PRIMARY KEY, version_id TEXT, author TEXT NOT NULL,
   house TEXT, source TEXT NOT NULL, start_tick INTEGER NOT NULL, started_at INTEGER NOT NULL,
-  bot_start_tick INTEGER NOT NULL, leaving INTEGER NOT NULL DEFAULT 0);
+  leaving INTEGER NOT NULL DEFAULT 0, evicted INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS pending (seq INTEGER PRIMARY KEY AUTOINCREMENT,
   life_id TEXT NOT NULL UNIQUE, version_id TEXT, author TEXT NOT NULL, house TEXT,
   source TEXT NOT NULL);
@@ -116,11 +102,9 @@ CREATE TABLE IF NOT EXISTS outbox (seq INTEGER PRIMARY KEY AUTOINCREMENT, kind T
   key TEXT, tick INTEGER, body BLOB, attempts INTEGER NOT NULL DEFAULT 0,
   next_at INTEGER NOT NULL DEFAULT 0, last_error TEXT);
 CREATE TABLE IF NOT EXISTS batch (id INTEGER PRIMARY KEY CHECK (id = 1), json TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS strikes (seq INTEGER PRIMARY KEY AUTOINCREMENT, version_id TEXT NOT NULL,
-  life_id TEXT NOT NULL, kind TEXT NOT NULL, tick INTEGER NOT NULL, detail TEXT NOT NULL,
-  at INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS bans (version_id TEXT PRIMARY KEY, life_id TEXT NOT NULL,
-  tick INTEGER NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS evictions (seq INTEGER PRIMARY KEY AUTOINCREMENT, version_id TEXT,
+  life_id TEXT NOT NULL UNIQUE, tick INTEGER NOT NULL, detail TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS quarantined (version_id TEXT PRIMARY KEY, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS incidents (seq INTEGER PRIMARY KEY AUTOINCREMENT, tick INTEGER NOT NULL,
   outcome TEXT NOT NULL, version_id TEXT, at INTEGER NOT NULL);
 `;
@@ -217,8 +201,8 @@ export class RoomStore {
         source: string;
         start_tick: number;
         started_at: number;
-        bot_start_tick: number;
         leaving: number;
+        evicted: number;
       }>("SELECT * FROM roster ORDER BY start_tick, life_id")
       .toArray()
       .map((r) => ({
@@ -229,15 +213,15 @@ export class RoomStore {
         source: r.source,
         startTick: r.start_tick,
         startedAt: r.started_at,
-        botStartTick: r.bot_start_tick,
         leaving: r.leaving !== 0,
+        evicted: r.evicted !== 0,
       }));
   }
 
   addToRoster(e: RosterEntry): void {
     this.sql.exec(
       `INSERT INTO roster (life_id, version_id, author, house, source, start_tick, started_at,
-        bot_start_tick, leaving) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        leaving, evicted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       e.lifeId,
       e.versionId,
       e.author,
@@ -245,15 +229,9 @@ export class RoomStore {
       e.source,
       e.startTick,
       e.startedAt,
-      e.botStartTick,
       e.leaving ? 1 : 0,
+      e.evicted ? 1 : 0,
     );
-  }
-
-  setBotStart(lifeIds: readonly string[], tick: number): void {
-    for (const id of lifeIds) {
-      this.sql.exec("UPDATE roster SET bot_start_tick = ? WHERE life_id = ?", tick, id);
-    }
   }
 
   removeFromRoster(lifeId: string): void {
@@ -262,6 +240,10 @@ export class RoomStore {
 
   markLeaving(lifeId: string): boolean {
     return this.sql.exec("UPDATE roster SET leaving = 1 WHERE life_id = ?", lifeId).rowsWritten > 0;
+  }
+
+  markEvicted(lifeId: string): boolean {
+    return this.sql.exec("UPDATE roster SET evicted = 1 WHERE life_id = ?", lifeId).rowsWritten > 0;
   }
 
   pending(maxSeq = Number.MAX_SAFE_INTEGER): PendingEntry[] {
@@ -328,9 +310,9 @@ export class RoomStore {
           toBuffer(encoder.encode(item.json)),
         );
         break;
-      case "ban":
+      case "quarantine":
         this.sql.exec(
-          "INSERT INTO outbox (kind, body) VALUES ('ban', ?)",
+          "INSERT INTO outbox (kind, body) VALUES ('quarantine', ?)",
           toBuffer(encoder.encode(item.json)),
         );
         break;
@@ -368,8 +350,11 @@ export class RoomStore {
           item = { kind: "chunk", key: r.key ?? "", tick: r.tick ?? 0, bytes: body };
         } else if (r.kind === "life") {
           item = { kind: "life", json: decoder.decode(body), chunkTick: r.tick ?? 0 };
-        } else if (r.kind === "ban") item = { kind: "ban", json: decoder.decode(body) };
-        else item = { kind: "closed" };
+        } else if (r.kind === "quarantine") {
+          item = { kind: "quarantine", json: decoder.decode(body) };
+        } else {
+          item = { kind: "closed" };
+        }
         return { seq: r.seq, item };
       });
   }
@@ -430,69 +415,61 @@ export class RoomStore {
     this.sql.exec("DELETE FROM batch");
   }
 
-  // --- Strikes, bans and incidents ---------------------------------------------------------
+  // --- Incidents, evictions and quarantine ------------------------------------------------
 
-  addStrike(s: StrikeRow): number {
+  /** Records an eviction; returns how many lives of its version this room has evicted. */
+  addEviction(e: EvictionRow): number {
     this.sql.exec(
-      "INSERT INTO strikes (version_id, life_id, kind, tick, detail, at) VALUES (?, ?, ?, ?, ?, ?)",
-      s.versionId,
-      s.lifeId,
-      s.kind,
-      s.tick,
-      s.detail,
-      s.at,
+      `INSERT OR IGNORE INTO evictions (version_id, life_id, tick, detail, at)
+       VALUES (?, ?, ?, ?, ?)`,
+      e.versionId,
+      e.lifeId,
+      e.tick,
+      e.detail,
+      e.at,
     );
+    if (e.versionId === null) return 1;
     return this.sql
-      .exec<{ n: number }>("SELECT count(*) AS n FROM strikes WHERE version_id = ?", s.versionId)
+      .exec<{ n: number }>("SELECT count(*) AS n FROM evictions WHERE version_id = ?", e.versionId)
       .one().n;
   }
 
-  isStruck(lifeId: string): boolean {
-    return !this.sql.exec("SELECT 1 FROM strikes WHERE life_id = ?", lifeId).next().done;
-  }
-
-  strikes(): StrikeRow[] {
+  evictions(): EvictionRow[] {
     return this.sql
       .exec<{
-        version_id: string;
+        version_id: string | null;
         life_id: string;
-        kind: string;
         tick: number;
         detail: string;
         at: number;
-      }>("SELECT * FROM strikes ORDER BY seq")
+      }>("SELECT * FROM evictions ORDER BY seq")
       .toArray()
       .map((r) => ({
         versionId: r.version_id,
         lifeId: r.life_id,
-        kind: r.kind as StrikeRow["kind"],
         tick: r.tick,
         detail: r.detail,
         at: r.at,
       }));
   }
 
-  bans(): BanRow[] {
-    return this.sql
-      .exec<{ version_id: string; life_id: string; tick: number; at: number }>(
-        "SELECT * FROM bans ORDER BY at",
-      )
-      .toArray()
-      .map((r) => ({ versionId: r.version_id, lifeId: r.life_id, tick: r.tick, at: r.at }));
-  }
-
-  isBanned(versionId: string): boolean {
-    return !this.sql.exec("SELECT 1 FROM bans WHERE version_id = ?", versionId).next().done;
-  }
-
-  addBan(b: BanRow): void {
+  quarantine(versionId: string, at: number): void {
     this.sql.exec(
-      "INSERT OR IGNORE INTO bans (version_id, life_id, tick, at) VALUES (?, ?, ?, ?)",
-      b.versionId,
-      b.lifeId,
-      b.tick,
-      b.at,
+      "INSERT OR IGNORE INTO quarantined (version_id, at) VALUES (?, ?)",
+      versionId,
+      at,
     );
+  }
+
+  isQuarantined(versionId: string): boolean {
+    return !this.sql.exec("SELECT 1 FROM quarantined WHERE version_id = ?", versionId).next().done;
+  }
+
+  quarantined(): string[] {
+    return this.sql
+      .exec<{ version_id: string }>("SELECT version_id FROM quarantined ORDER BY at, version_id")
+      .toArray()
+      .map((r) => r.version_id);
   }
 
   incidents(): IncidentRow[] {
@@ -519,11 +496,11 @@ export class RoomStore {
     );
   }
 
-  /** Batches that died with CPU-limit evidence (`overrun`, `suspect`) since `since`. */
+  /** Batches that died with CPU-limit evidence (all but `restart`) since `since`. */
   cpuIncidentsSince(since: number): number {
     return this.sql
       .exec<{ n: number }>(
-        "SELECT count(*) AS n FROM incidents WHERE outcome IN ('overrun', 'suspect') AND at >= ?",
+        "SELECT count(*) AS n FROM incidents WHERE outcome != 'restart' AND at >= ?",
         since,
       )
       .one().n;

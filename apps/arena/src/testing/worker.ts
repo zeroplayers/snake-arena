@@ -3,7 +3,7 @@
  * and `POST /rpc` to call either from Node (`{ target, name, method, args }`).
  */
 import { DurableObject } from "cloudflare:workers";
-import type { BanRecord, LifeResult, LifeTicket, MatchmakerRpc } from "../protocol.ts";
+import type { LifeResult, LifeTicket, MatchmakerRpc, QuarantineRecord } from "../protocol.ts";
 
 export { RoomDO } from "../room.ts";
 
@@ -15,7 +15,7 @@ interface Call {
 }
 
 export interface MatchmakerEvent {
-  kind: "nextLife" | "lifeEnded" | "versionBanned" | "roomClosed";
+  kind: "nextLife" | "lifeEnded" | "versionQuarantined" | "roomClosed";
   body: unknown;
 }
 
@@ -61,8 +61,8 @@ export class TestMatchmaker extends DurableObject<Env> implements MatchmakerRpc 
     this.record("lifeEnded", result);
   }
 
-  async versionBanned(ban: BanRecord): Promise<void> {
-    this.record("versionBanned", ban);
+  async versionQuarantined(record: QuarantineRecord): Promise<void> {
+    this.record("versionQuarantined", record);
   }
 
   async roomClosed(roomId: string): Promise<void> {

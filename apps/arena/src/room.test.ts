@@ -2,7 +2,8 @@ import { CHUNK_TICKS, ReplayPlayer, replayChunkInfo } from "@zerosnake/engine";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { bundleHouseBots } from "../scripts/house-bundles.ts";
 import { batchTicks } from "./limits.ts";
-import type { LifeTicket, RoomStatus } from "./protocol.ts";
+import type { LifeResult, LifeTicket, QuarantineRecord, RoomStatus } from "./protocol.ts";
+import { KILLS_TO_EVICT } from "./room/backstop.ts";
 import { BOTS, createHarness, type Harness, seedVersion } from "./testing/harness.ts";
 import type { MatchmakerEvent } from "./testing/worker.ts";
 
@@ -40,11 +41,14 @@ async function lifeRow(id: string) {
  * Runs batches the way alarms would. A batch that doesn't return within `hangMs` is stuck in a
  * bot: workerd is restarted, as Cloudflare's CPU limit would reset the object. Stops when `done`
  * holds. Returns how many times the room was killed.
+ *
+ * `hangMs` stands in for the CPU limit, but in wall time, so it is set well above the rooms'
+ * `cpuLimitMs`: a watched batch spends wall time waiting (syncs, random gaps) that uses no CPU.
  */
 async function drive(
   name: string,
   done: (s: RoomStatus) => boolean,
-  { hangMs = 1500, max = 40 } = {},
+  { hangMs = 4000, max = 40 } = {},
 ): Promise<{ kills: number; s: RoomStatus }> {
   let kills = 0;
   let last: RoomStatus | null = null;
@@ -61,10 +65,10 @@ async function drive(
     last = s;
     if (done(s)) return { kills, s };
   }
-  const { tick, incidents, strikes, trial, snakes } = last ?? ({} as RoomStatus);
+  const { tick, incidents, evictions, streak, snakes } = last ?? ({} as RoomStatus);
   throw new Error(
     `room ${name}: condition not reached in ${max} batches (${kills} kills): ` +
-      JSON.stringify({ tick, incidents, strikes, trial, snakes: snakes?.map((x) => x.lifeId) }),
+      JSON.stringify({ tick, incidents, evictions, streak, snakes: snakes?.map((x) => x.lifeId) }),
   );
 }
 
@@ -267,110 +271,152 @@ describe("RoomDO", () => {
   }, 60_000);
 });
 
-describe("RoomDO backstop", () => {
-  // Small CPU limit and batches, so "killed after 1.5 s" counts as CPU-limit evidence. Short
-  // trial gaps for speed (the storm test keeps the default).
-  const limits = { cpuLimitMs: 1000, batchTicks: 50, trialGapMs: 10 };
+/** Lives the room reported to the matchmaker as `evicted`. */
+async function evictedLives(): Promise<LifeResult[]> {
+  return (await events())
+    .filter((e) => e.kind === "lifeEnded")
+    .map((e) => e.body as LifeResult)
+    .filter((l) => l.deathCause === "evicted");
+}
 
-  it("bans a version whose code, run alone, reproducibly blows the CPU limit", async () => {
+describe("RoomDO backstop", () => {
+  // Small CPU limit and batches, so "killed after 1.5 s" counts as CPU-limit evidence.
+  const limits = { cpuLimitMs: 1000, batchTicks: 50 };
+  const outcomes = (s: RoomStatus) => s.incidents.map((i) => i.outcome);
+  const evictionKills = ["suspect", "suspect", "evicted"].slice(-KILLS_TO_EVICT);
+
+  it("evicts a bot that blows the CPU limit by itself and quarantines it on its second life", async () => {
     const evil = await ticket("mallory", BOTS.hostile(120));
     const others = await Promise.all([
       ticket("kate", house.hard as string),
       ticket("liam", house.medium as string),
     ]);
-    await startRoom("backstop", [evil, ...others], { limits });
-    // Its second life, for when the first is killed.
+    // Short replay chunks, so the evicted life's chunk reaches R2 within the test.
+    await startRoom("backstop", [evil, ...others], { limits: { ...limits, chunkTicks: 100 } });
+    // Its second life, for when the first is evicted.
     await h.call("matchmaker", "offer", { ...evil, lifeId: "life-mallory-2" });
 
-    const first = await drive("backstop", (s) => s.strikes.length > 0, { max: 100 });
-    // Normal batch dies (overrun), watched batch dies in its call (suspect), then its trial dies
-    // four times in the same call (strike); the life is killed.
-    expect(first.kills).toBe(6);
-    expect(first.s.incidents.map((i) => i.outcome)).toEqual(["overrun", "suspect", "culprit"]);
-    expect(first.s.strikes.map((x) => [x.lifeId, x.kind, x.tick])).toEqual([
-      [evil.lifeId, "cpu", 120],
+    // A normal batch dies (nobody to name), then every watched rerun dies in its call.
+    const first = await drive("backstop", (s) => s.evictions.length > 0, { max: 200 });
+    expect(first.kills).toBe(1 + KILLS_TO_EVICT);
+    expect(outcomes(first.s)).toEqual(["overrun", ...evictionKills]);
+    expect(first.s.evictions).toEqual([
+      { versionId: evil.versionId, lifeId: evil.lifeId, tick: 120 },
     ]);
-    expect(first.s.bans).toEqual([]);
+    expect(first.s.quarantined).toEqual([]);
+    // Neutral: no strike, no ban, no D1 row; the matchmaker hears `evicted`.
+    const next = await h.room<RoomStatus>("backstop", "runBatch");
+    expect(next.snakes.map((x) => x.lifeId)).not.toContain(evil.lifeId);
 
-    // Its second life does it again: second strike, banned.
-    const second = await drive("backstop", (s) => s.bans.length > 0, { max: 100 });
-    expect(second.kills).toBe(5);
-    expect(second.s.incidents.map((i) => i.outcome)).toEqual([
-      "overrun",
-      "suspect",
-      "culprit",
-      "suspect",
-      "banned",
-    ]);
-    expect(second.s.strikes.map((x) => x.lifeId)).toEqual([evil.lifeId, "life-mallory-2"]);
-    expect(second.s.bans).toEqual([evil.versionId]);
-    expect(second.s.watching).toBe(true);
-    // The banned snake dies at the start of the next batch.
-    const after = await h.room<RoomStatus>("backstop", "runBatch");
-    const alive = after.snakes.map((x) => x.lifeId);
-    expect(alive).not.toContain("life-mallory-2");
-    expect(alive).toEqual(expect.arrayContaining(others.map((t) => t.lifeId)));
+    // Its second life does it again (still watched): evicted at once, and quarantined.
+    const second = await drive("backstop", (s) => s.quarantined.length > 0, { max: 200 });
+    expect(second.kills).toBe(KILLS_TO_EVICT);
+    expect(second.s.evictions.map((x) => x.lifeId)).toEqual([evil.lifeId, "life-mallory-2"]);
+    expect(second.s.quarantined).toEqual([evil.versionId]);
+    expect(
+      await h.room("backstop", "join", { ...evil, lifeId: "evil-3", author: "mallory2" }),
+    ).toEqual({ ok: false, reason: "quarantined" });
 
+    // The room goes on with the others.
+    let s = await h.room<RoomStatus>("backstop", "runBatch");
+    const from = s.tick;
+    while (s.tick < from + 50) s = await h.room<RoomStatus>("backstop", "runBatch");
+    expect(s.snakes.map((x) => x.lifeId)).not.toContain("life-mallory-2");
+    expect(s.incidents).toHaveLength(1 + 2 * KILLS_TO_EVICT);
+
+    // Like any life, the matchmaker hears of it once its replay chunk is in R2; D1 gets no row.
+    for (let i = 0; i < 100 && !(await evictedLives()).some((l) => l.lifeId === evil.lifeId); i++) {
+      s = await h.room<RoomStatus>("backstop", "runBatch");
+    }
+    expect((await evictedLives()).find((l) => l.lifeId === evil.lifeId)).toMatchObject({
+      versionId: evil.versionId,
+      endTick: expect.any(Number),
+    });
+    expect(await lifeRow(evil.lifeId)).toBeNull();
     const db = await h.d1();
     const version = await db
       .prepare("SELECT status, report FROM versions WHERE id = ?")
       .bind(evil.versionId)
       .first<{ status: string; report: string }>();
-    expect(version?.status).toBe("rejected");
+    // Quarantine isn't a ban: still `ready`, with a note for review.
+    expect(version?.status).toBe("ready");
     expect(JSON.parse(version?.report ?? "{}")).toMatchObject({
-      ok: false,
       checks: [{ name: "arena-backstop", ok: false }],
     });
-    expect((await events()).find((e) => e.kind === "versionBanned")?.body).toMatchObject({
+    const quarantine = (await events()).find((e) => e.kind === "versionQuarantined");
+    expect(quarantine?.body as QuarantineRecord).toMatchObject({
       versionId: evil.versionId,
-      reason: "cpu",
+      lifeId: "life-mallory-2",
+      evictions: 2,
     });
-    expect(
-      await h.room("backstop", "join", { ...evil, lifeId: "evil-3", author: "mallory2" }),
-    ).toEqual({ ok: false, reason: "banned" });
-  }, 180_000);
+  }, 240_000);
 
-  it("catches a bot that only burns after many ticks of memory (restarts put it off)", async () => {
-    // The trial rebuilds its memory from the recorded states since its sandbox life began.
+  it("evicts and quarantines a bot that only burns next to its real neighbours", async () => {
+    // The reviewer's case: reruns of the room replay its neighbours exactly (every bot restarts
+    // at the saved frame), so it burns again on every attempt.
+    const fickle = await ticket("uma", BOTS.neighbours);
+    const others = await Promise.all([
+      ticket("vic", house.hard as string),
+      ticket("wes", house.medium as string),
+    ]);
+    await startRoom("neighbours", [fickle, ...others], { limits });
+    await h.call("matchmaker", "offer", { ...fickle, lifeId: "life-uma-2" });
+
+    const { kills, s } = await drive("neighbours", (s) => s.quarantined.length > 0, { max: 300 });
+    expect(kills).toBe(1 + 2 * KILLS_TO_EVICT);
+    expect(s.evictions.map((x) => x.lifeId)).toEqual([fickle.lifeId, "life-uma-2"]);
+    expect(s.quarantined).toEqual([fickle.versionId]);
+
+    // And the room makes progress.
+    let after = await h.room<RoomStatus>("neighbours", "runBatch");
+    const from = after.tick;
+    while (after.tick < from + 100) after = await h.room<RoomStatus>("neighbours", "runBatch");
+    expect(after.incidents).toHaveLength(kills);
+    expect(after.snakes.map((x) => x.lifeId)).not.toContain("life-uma-2");
+  }, 240_000);
+
+  it("evicts a bot that only burns after many ticks of memory (restarts put it off)", async () => {
+    // Each kill restarts it with empty memory, but it is the one named every time.
     const burner = await ticket("nina", BOTS.burnAfter(60));
     const other = await ticket("oscar", house.hard as string);
     await startRoom("burner", [burner, other], { limits });
-    const { kills, s } = await drive("burner", (s) => s.strikes.length > 0, { max: 120 });
-    expect(kills).toBe(6);
-    expect(s.incidents.map((i) => i.outcome)).toEqual(["overrun", "suspect", "culprit"]);
-    expect(s.strikes.map((x) => x.lifeId)).toEqual([burner.lifeId]);
-    // The struck snake dies at the start of the next batch.
+    const { kills, s } = await drive("burner", (s) => s.evictions.length > 0, { max: 300 });
+    expect(kills).toBe(1 + KILLS_TO_EVICT);
+    expect(outcomes(s)).toEqual(["overrun", ...evictionKills]);
+    expect(s.evictions.map((x) => x.lifeId)).toEqual([burner.lifeId]);
+    // The evicted snake dies at the start of the next batch, without running again.
     const next = await h.room<RoomStatus>("burner", "runBatch");
     expect(next.snakes.map((x) => x.lifeId)).toContain(other.lifeId);
     expect(next.snakes.map((x) => x.lifeId)).not.toContain(burner.lifeId);
-    expect(await lifeRow(burner.lifeId)).toBeNull(); // written once its replay chunk is in R2
-  }, 180_000);
+  }, 240_000);
 
-  it("never strikes honest bots, however often the room is restarted mid-batch", async () => {
-    // The review's repro: five honest versions, restarts at random points, recovery after
-    // 1.2 s (longer than this room's CPU limit, so every crash looks like the CPU limit).
+  it("never evicts or quarantines honest bots, however often the room is restarted", async () => {
+    // The reviewer's repro: five honest versions, 40 restarts 0-300 ms into a batch, each
+    // recovered after 1.5 s (longer than this room's CPU limit, so every crash looks like the
+    // CPU limit, and timing can't spare anyone).
     const honest = await Promise.all(
       ["h5", "h6", "h7", "h8", "h9"].map((a) => ticket(a, house.hard as string)),
     );
-    await startRoom("storm", honest, { limits: { cpuLimitMs: 1000, batchTicks: 50 } });
+    await startRoom("storm", honest, { limits });
     await h.room("storm", "runBatch");
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 40; i++) {
       void h.fire("storm", "runBatch");
-      await sleep(20 + ((i * 37) % 120));
+      await sleep((i * 97) % 301);
       await h.restart();
-      await sleep(1200);
+      await sleep(1500);
     }
-    // Let pending trials finish.
-    const { s } = await drive("storm", (s) => s.trial === null, { max: 100 });
-    expect(s.strikes).toEqual([]);
-    expect(s.bans).toEqual([]);
-    expect(s.incidents.some((i) => i.outcome === "culprit" || i.outcome === "slow")).toBe(false);
-    expect(s.snakes.filter((x) => !x.house).map((x) => x.lifeId)).toEqual(
-      expect.arrayContaining(honest.map((t) => t.lifeId)),
-    );
-  }, 180_000);
+    let s = await h.room<RoomStatus>("storm", "runBatch");
+    expect(s.incidents.filter((i) => i.outcome !== "restart").length).toBeGreaterThan(20);
+    expect(s.evictions).toEqual([]);
+    expect(s.quarantined).toEqual([]);
+    const evicted = await evictedLives();
+    expect(evicted.filter((l) => honest.some((t) => t.lifeId === l.lifeId))).toEqual([]);
+    // The room goes on.
+    const from = s.tick;
+    while (s.tick < from + 100) s = await h.room<RoomStatus>("storm", "runBatch");
+  }, 300_000);
 
-  it("blames nobody when the room is restarted twice in a row (no CPU-limit evidence)", async () => {
+  it("counts nothing when the room is restarted twice in a row (no CPU-limit evidence)", async () => {
     // Default 30 s CPU limit; a slow but honest bot just makes the batch long enough to interrupt.
     const slowpoke = await ticket("pia", BOTS.slow(100));
     const tom = await ticket("tom", house.hard as string);
@@ -381,9 +427,9 @@ describe("RoomDO backstop", () => {
       await h.restart();
     }
     const s = await h.room<RoomStatus>("restarts", "runBatch");
-    expect(s.incidents.map((i) => i.outcome)).toEqual(["restart", "restart"]);
-    expect(s.strikes).toEqual([]);
-    expect(s.bans).toEqual([]);
+    expect(outcomes(s)).toEqual(["restart", "restart"]);
+    expect(s.evictions).toEqual([]);
+    expect(s.streak).toBeNull();
     expect(s.watching).toBe(false);
     expect(s.tick).toBe(50);
     expect(s.snakes.map((x) => x.lifeId)).toEqual(
@@ -391,32 +437,20 @@ describe("RoomDO backstop", () => {
     );
   }, 60_000);
 
-  it("kills a bot slow every tick once a trial confirms it, bans it on its second life", async () => {
+  it("doesn't punish a bot for being slow: watch mode keeps the room going", async () => {
+    // Slow every tick (uncharged string compares), so a normal batch overruns in aggregate. Only
+    // the sandbox's meter may strike a bot; watch mode just keeps each invocation short.
     const slow = await ticket("quentin", BOTS.slow(300));
     const honest = await Promise.all([
       ticket("ruth", house.hard as string),
       ticket("sam", house.medium as string),
     ]);
-    await startRoom("slow", [slow, ...honest], {
-      limits: { cpuLimitMs: 2000, batchTicks: 50, slowTickMs: 100 },
-    });
-    await h.call("matchmaker", "offer", { ...slow, lifeId: "life-quentin-2" });
-
-    // The normal batch overruns in aggregate (~12 s); watch mode measures it slow; its trial
-    // (alone, no crash) confirms.
-    const first = await drive("slow", (s) => s.strikes.length > 0, { hangMs: 2500 });
-    expect(first.kills).toBe(1);
-    expect(first.s.incidents.map((i) => i.outcome)).toEqual(["overrun", "suspect", "slow"]);
-
-    const second = await drive("slow", (s) => s.bans.length > 0, { hangMs: 2500 });
-    expect(second.kills).toBe(0);
-    expect(second.s.strikes.map((x) => [x.lifeId, x.kind])).toEqual([
-      [slow.lifeId, "slow"],
-      ["life-quentin-2", "slow"],
-    ]);
-    expect(second.s.bans).toEqual([slow.versionId]);
-    expect(second.s.snakes.map((x) => x.lifeId)).toEqual(
-      expect.arrayContaining(honest.map((t) => t.lifeId)),
-    );
-  }, 120_000);
+    await startRoom("slow", [slow, ...honest], { limits: { cpuLimitMs: 2000, batchTicks: 50 } });
+    const { kills, s } = await drive("slow", (s) => s.tick >= 80, { hangMs: 4000, max: 200 });
+    expect(kills).toBe(1);
+    expect(outcomes(s)).toEqual(["overrun"]);
+    expect(s.watching).toBe(true);
+    expect(s.evictions).toEqual([]);
+    expect(s.snakes.map((x) => x.lifeId)).toContain(slow.lifeId);
+  }, 180_000);
 });

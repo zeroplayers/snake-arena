@@ -16,6 +16,13 @@ export interface LifeTicket {
   source: string;
 }
 
+/**
+ * How a life ended: the engine's cause, or `evicted` when the room's CPU backstop ended it so the
+ * room could make progress (see `room/backstop.ts`). `evicted` is neutral: not a failure of the
+ * bot that the room could prove, so ratings must skip it.
+ */
+export type LifeEndCause = DeathCause | "evicted";
+
 /** A finished life of a deployed version, as written to the `lives` table. */
 export interface LifeResult {
   lifeId: string;
@@ -28,7 +35,11 @@ export interface LifeResult {
   /** Highest mass during the life (SPEC's "length"). */
   lengthMax: number;
   kills: number;
-  deathCause: DeathCause;
+  /**
+   * `evicted` lives aren't written to D1 (`lives.death_cause` has no such value yet) and must not
+   * count toward the version's rating.
+   */
+  deathCause: LifeEndCause;
   /** The killer's version id, `house:<kind>` for a house bot, null unless `collision`. */
   killer: string | null;
   /**
@@ -41,44 +52,33 @@ export interface LifeResult {
   endedAt: number;
 }
 
-/** A version banned by a room's CPU backstop (after `STRIKES_TO_BAN` strikes, see `backstop.ts`). */
-export interface BanRecord {
+/**
+ * A version a room's CPU backstop quarantined: its lives were evicted `EVICTIONS_TO_QUARANTINE`
+ * times (see `room/backstop.ts`). Not a ban: the version stays `ready` in D1 with a note in its
+ * report; it just isn't matched any more until a person has looked at it.
+ */
+export interface QuarantineRecord {
   versionId: string;
   author: string;
-  /** The life of the last strike. */
+  /** The life of the last eviction. */
   lifeId: string;
   roomId: string;
-  /** Room tick of the last strike. */
+  /** Room tick of the last eviction. */
   tick: number;
-  /**
-   * `cpu`: running this bot alone blew the DO CPU limit, reproducibly; `slow`: run alone, its
-   * ticks were measured far over budget (each confirmed by a trial, see `backstop.ts`).
-   */
-  reason: "cpu" | "slow";
+  evictions: number;
   message: string;
   at: number;
 }
 
 /**
- * - `restart`: a batch died too quickly to be the CPU limit (deploy, eviction); nobody blamed.
- * - `overrun`: a batch died after long enough to be the CPU limit; the room is watched.
- * - `suspect`: in watch mode, one bot's call (or its measured slowness) could explain it; that
- *   bot goes on trial alone. No strike yet.
- * - `cleared`: the suspect's trial completed without reproducing it. No strike.
- * - `inconclusive`: the trial couldn't reproduce or rule it out (restarts, suspect gone). No strike.
- * - `culprit`: the trial reproduced the CPU overrun with only the suspect running: a strike.
- * - `slow`: the trial measured the suspect far over budget on its own: a strike.
- * - `banned`: a strike that was the version's last allowed one.
+ * - `restart`: a batch died too quickly to be the CPU limit (deploy, eviction). Counts for nothing.
+ * - `overrun`: a batch died after long enough to be the CPU limit, with no bot call to name
+ *   (normal mode, or between calls in watch mode). The room is watched.
+ * - `suspect`: in watch mode, the batch died inside one bot's call. Counts toward evicting it.
+ * - `evicted`: the `KILLS_TO_EVICT`-th such kill in a row in the same life's calls: the life was
+ *   evicted (`versionId` set unless it's a house bot).
  */
-export type IncidentOutcome =
-  | "restart"
-  | "overrun"
-  | "suspect"
-  | "cleared"
-  | "inconclusive"
-  | "culprit"
-  | "slow"
-  | "banned";
+export type IncidentOutcome = "restart" | "overrun" | "suspect" | "evicted";
 
 /** Tunables of one room. Defaults suit production; tests shrink them. */
 export interface RoomLimits {
@@ -86,19 +86,17 @@ export interface RoomLimits {
   cpuLimitMs?: number;
   /** Fixed ticks per batch instead of worst-case sizing (0 = size it). Default 0. */
   batchTicks?: number;
-  /** Watch mode: a bot call measured over this is a slow tick. Default 250. */
-  slowTickMs?: number;
   /** Stop simulating while the outbox holds more items than this. Default 500. */
   maxOutbox?: number;
   /** Ticks per replay chunk. Default `CHUNK_TICKS` (1200, two minutes). */
   chunkTicks?: number;
-  /** Trials: random wait after each of the suspect's calls, up to this. Default 100. */
-  trialGapMs?: number;
+  /** Watch mode: base of the random wait after each bot call (`watchGapMs`). Default 10. */
+  watchGapMs?: number;
 }
 
 export type JoinResult =
   | { ok: true }
-  | { ok: false; reason: "closed" | "duplicate-life" | "author-present" | "banned" | "full" };
+  | { ok: false; reason: "closed" | "duplicate-life" | "author-present" | "quarantined" | "full" };
 
 export type RoomMode = "accelerated" | "realtime";
 
@@ -142,12 +140,14 @@ export interface RoomStatus {
   livesEnded: number;
   /** Batches that died (CPU limit, restarts) and what the backstop made of them. */
   incidents: { tick: number; outcome: IncidentOutcome; versionId: string | null }[];
-  strikes: { versionId: string; lifeId: string; kind: "cpu" | "slow"; tick: number }[];
-  bans: string[];
-  /** Watch mode (isolated running) is on. */
+  /** Lives the backstop evicted (house bots have no `versionId`). */
+  evictions: { versionId: string | null; lifeId: string; tick: number }[];
+  /** Versions this room quarantined. */
+  quarantined: string[];
+  /** Watched kills in a row that named the same life (see `backstop.ts`). */
+  streak: { lifeId: string; kills: number } | null;
+  /** Watch mode (each bot call synced, batches stopped early) is on. */
   watching: boolean;
-  /** A suspect waiting for its trial (batches wait too). */
-  trial: { lifeId: string; kind: "cpu" | "slow" } | null;
   /** Side effects not delivered yet; `failing` of them failed at least once. */
   outbox: { size: number; failing: number };
   /** Simulation paused until the outbox drains below `maxOutbox`. */
@@ -162,11 +162,18 @@ export interface RoomStatus {
 export interface MatchmakerRpc {
   /** The next life for `roomId` whose author is not in `excludeAuthors`, or null. */
   nextLife(request: { roomId: string; excludeAuthors: string[] }): Promise<LifeTicket | null>;
-  /** A deployed version's life ended (already written to D1; may be minutes after the death,
-   * since rows wait for their replay chunk). At least once. */
+  /**
+   * A deployed version's life ended (already written to D1, except `evicted` lives; may be
+   * minutes after the death, since rows wait for their replay chunk). At least once. Skip
+   * `evicted` lives in ratings; counting them per version across rooms (the room only counts its
+   * own) and quarantining at `EVICTIONS_TO_QUARANTINE` is the matchmaker's job.
+   */
   lifeEnded(result: LifeResult): Promise<void>;
-  /** The room's backstop banned a version (already recorded in D1). At least once. */
-  versionBanned(ban: BanRecord): Promise<void>;
+  /**
+   * The room's backstop quarantined a version (already noted in D1): stop queuing its lives until
+   * a person clears it. At least once.
+   */
+  versionQuarantined(record: QuarantineRecord): Promise<void>;
   /** Only house bots were left and the queue was empty, so the room stopped. */
   roomClosed(roomId: string): Promise<void>;
 }

@@ -13,7 +13,7 @@ import { createSandbox } from "@zerosnake/sandbox";
 // Wrangler only treats specifiers ending in .wasm as compiled modules; the package's "./wasm"
 // export doesn't, so the file is imported by path.
 import wasmModule from "../node_modules/@jitl/quickjs-wasmfile-release-sync/dist/emscripten-module.wasm";
-import { insertLives, recordBan } from "./db.ts";
+import { insertLives, recordQuarantine } from "./db.ts";
 import {
   batchTicks,
   DEFAULT_MAX_OUTBOX,
@@ -25,34 +25,31 @@ import {
   SAFETY_ALARM_MS,
 } from "./limits.ts";
 import type {
-  BanRecord,
   IncidentOutcome,
   JoinResult,
   LifeResult,
   LifeTicket,
   MatchmakerRpc,
+  QuarantineRecord,
   RoomMode,
   RoomRpc,
   RoomStartOptions,
   RoomStatus,
 } from "./protocol.ts";
 import {
-  DEFAULT_SLOW_TICK_MS,
+  type BotCall,
+  DEFAULT_WATCH_GAP_MS,
+  EVICTIONS_TO_QUARANTINE,
   INCIDENT_WINDOW_MS,
   judgeCrash,
-  judgeTrialCrash,
+  KILLS_TO_EVICT,
+  nextStreak,
   retryDelayMs,
-  SLOW_TICKS_TO_SUSPECT,
-  SLOW_TRIAL_CONFIRM,
-  SLOW_TRIAL_TICKS,
-  STRIKES_TO_BAN,
-  TRIAL_DEATHS_TO_CONFIRM,
-  TRIAL_GAP_MS,
-  TRIAL_JITTER_MS,
-  TRIAL_MARGIN_TICKS,
-  type Trial,
   WATCH_ABORT_SHARE,
+  WATCH_GAP_CAP_SHARE,
   WATCH_STOP_SHARE,
+  WATCH_WALL_SHARE,
+  watchGapMs,
   watching,
   watchWindow,
 } from "./room/backstop.ts";
@@ -72,7 +69,6 @@ import {
   RoomStore,
   type RosterEntry,
 } from "./room/store.ts";
-import { TrialRunner } from "./room/trial.ts";
 
 const TICK_MS = 1000 / TICK_RATE;
 
@@ -81,7 +77,7 @@ const TICK_MS = 1000 / TICK_RATE;
  * `alarm()`: as fast as the CPU allows (`accelerated`) or at 10 ticks/s (`realtime`).
  *
  * A batch, step by step:
- *  1. plan: spawn the pending tickets (and house bots up to 5 distinct authors), kill banned and
+ *  1. plan: spawn the pending tickets (and house bots up to 5 distinct authors), kill evicted and
  *     leaving lives; size the batch for the worst case (see `limits.ts`);
  *  2. write a marker with the invocation's start time and `sync()` it, so a batch that dies is
  *     noticed by the next alarm;
@@ -91,11 +87,12 @@ const TICK_MS = 1000 / TICK_RATE;
  *  5. deliver the outbox, ask the matchmaker for replacements, schedule the next alarm.
  *
  * Backstop (`room/backstop.ts`): a marker left over means the batch died. If too little wall time
- * passed for it to have been the CPU limit, it was a restart: the batch runs again and nobody is
- * blamed. Otherwise the room switches to watch mode (each bot call synced and timed, batches
- * stopped early) for a window that grows with repeated incidents. A crash in watch mode that only
- * one bot's own call can explain is a strike for that version; so is a life killed for ticks
- * measured far over budget. Two strikes ban the version.
+ * passed for it to have been the CPU limit, it was a restart: the batch runs again and counts for
+ * nothing. Otherwise the room switches to watch mode (each bot call made durable, a random wait
+ * after it, batches stopped early) for a window that grows with repeated incidents. Nobody is ever
+ * struck or banned for a kill: a life whose calls `KILLS_TO_EVICT` watched kills in a row
+ * interrupted is evicted (neutral end, not rated) so the room makes progress, and a version
+ * evicted `EVICTIONS_TO_QUARANTINE` times is quarantined (no new lives; noted in D1 for review).
  *
  * After any reload (eviction or crash) every bot restarts with `init` and empty memory; the
  * world, replay and roster continue exactly.
@@ -104,10 +101,6 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   private readonly store: RoomStore;
   private sim: RoomSim | null = null;
   private busy = false;
-  /** Watch mode: slow ticks measured per life (in memory; a reload starts the count again). */
-  private readonly slowTicks = new Map<string, number>();
-  /** A trial in progress over several invocations (lost on eviction: it starts over). */
-  private trialRun: { key: string; runner: TrialRunner } | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -131,10 +124,9 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         limits: {
           cpuLimitMs: limits.cpuLimitMs ?? DO_CPU_LIMIT_MS,
           batchTicks: limits.batchTicks ?? 0,
-          slowTickMs: limits.slowTickMs ?? DEFAULT_SLOW_TICK_MS,
           maxOutbox: limits.maxOutbox ?? DEFAULT_MAX_OUTBOX,
           chunkTicks: limits.chunkTicks ?? CHUNK_TICKS,
-          trialGapMs: limits.trialGapMs ?? TRIAL_GAP_MS,
+          watchGapMs: limits.watchGapMs ?? DEFAULT_WATCH_GAP_MS,
         },
         livesEnded: 0,
         lastBatchTicks: 0,
@@ -142,7 +134,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         realtimeNext: 0,
         watch: { untilTick: 0, untilMs: 0 },
         openChunkTick: null,
-        trial: null,
+        streak: null,
       };
       this.store.transaction(() => {
         this.store.setMeta(meta);
@@ -156,7 +148,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   async join(ticket: LifeTicket): Promise<JoinResult> {
     const meta = this.store.meta();
     if (meta?.state !== "running") return { ok: false, reason: "closed" };
-    if (this.store.isBanned(ticket.versionId)) return { ok: false, reason: "banned" };
+    if (this.store.isQuarantined(ticket.versionId)) return { ok: false, reason: "quarantined" };
     const present = [...this.store.roster(), ...this.store.pending()];
     if (present.some((p) => p.lifeId === ticket.lifeId)) {
       return { ok: false, reason: "duplicate-life" };
@@ -213,12 +205,12 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       incidents: this.store
         .incidents()
         .map(({ tick, outcome, versionId }) => ({ tick, outcome, versionId })),
-      strikes: this.store
-        .strikes()
-        .map(({ versionId, lifeId, kind, tick }) => ({ versionId, lifeId, kind, tick })),
-      bans: this.store.bans().map((b) => b.versionId),
+      evictions: this.store
+        .evictions()
+        .map(({ versionId, lifeId, tick }) => ({ versionId, lifeId, tick })),
+      quarantined: this.store.quarantined(),
+      streak: meta?.streak ?? null,
       watching: meta ? watching(meta.watch, world?.tick ?? 0, Date.now()) : false,
-      trial: meta?.trial ? { lifeId: meta.trial.lifeId, kind: meta.trial.kind } : null,
       outbox: { size: outbox.size, failing: outbox.failing },
       paused: meta ? outbox.size > meta.limits.maxOutbox : false,
     };
@@ -257,9 +249,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       }
       try {
         const marker = this.store.marker();
-        if (marker?.phase === "trial") this.trialDied(meta, marker);
-        else if (marker) await this.recover(meta, marker, invokedAt);
-        else if (meta.trial) await this.trial(meta, meta.trial, invokedAt);
+        if (marker) await this.recover(meta, marker, invokedAt);
         else await this.batch(invokedAt);
       } catch (e) {
         // The in-memory room may be half a batch ahead of storage: drop it. The marker stays,
@@ -284,348 +274,157 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     const plan = this.plan(meta, sim.roster, sim.world.tick, sim.idleLives, maxPendingSeq);
     const watch = watching(meta.watch, sim.world.tick, Date.now());
     const marker: BatchMarker = {
-      phase: "batch",
       fromTick: sim.world.tick,
       maxPendingSeq,
       startedAt: invokedAt,
       watch,
-      suspectLife: null,
-      suspectAt: null,
-      suspectTick: null,
-      trialCall: null,
+      call: null,
     };
-    // Bots that restart now begin a new sandbox life here; a trial rebuilds them from this tick.
-    this.store.setBotStart(
-      sim.idleLifeIds().filter((id) => !plan.faults.has(id)),
-      sim.world.tick,
-    );
     await this.begin(meta, marker);
-    const slow = { lifeId: null as string | null };
-    const hooks = watch ? this.watchHooks(meta, marker, slow) : {};
-    const result = await sim.run(plan, hooks);
-    this.commit(sim, result, maxPendingSeq, () => {
-      // Measured slow in watch mode: try it alone before anything else runs.
-      const lifeId = slow.lifeId;
-      const life = lifeId ? sim.roster.find((e) => e.lifeId === lifeId) : undefined;
-      if (!lifeId || !life) return;
-      this.slowTicks.delete(lifeId);
-      this.store.updateMeta((m) => {
-        m.trial ??= {
-          kind: "slow",
-          lifeId,
-          untilTick: sim.world.tick,
-          maxPendingSeq: 0,
-          deaths: [],
-          attempts: 0,
-          reason: `${SLOW_TICKS_TO_SUSPECT} calls over ${meta.limits.slowTickMs} ms in watch mode`,
-        };
-      });
-      this.store.addIncident({
-        tick: sim.world.tick,
-        outcome: "suspect",
-        versionId: life.versionId,
-        at: Date.now(),
-      });
-    });
+    const result = await sim.run(plan, watch ? this.watchHooks(meta, marker) : {});
+    this.commit(sim, result, maxPendingSeq);
     // Some bots ran a tick the world never stepped: restart them from the saved frame.
     if (result.aborted) this.dropSim();
   }
 
   /**
-   * Watch mode: before each bot call, sync who is about to run and when; time each call (the
-   * clock moves at I/O, so the time between two syncs bounds the CPU in between); stop the batch
-   * before the invocation gets near the CPU limit, or when a bot was measured slow.
+   * Watch mode: before each bot call, make "this call is running" durable, and stop the batch
+   * before the invocation gets near the CPU limit (wall time minus the random waits bounds its CPU
+   * from above). While a kill streak is open (a watched kill named a life), also make "between
+   * calls" durable after each call and wait a random while (wall time only), so most of the
+   * batch's wall time is between calls and a restart rarely names the same life again. Without a streak that isn't needed: a kill only names a call that ran for
+   * most of the CPU limit, which restarts in production practically never look like.
    */
-  private watchHooks(meta: Meta, marker: BatchMarker, slow: { lifeId: string | null }): BatchHooks {
+  private watchHooks(meta: Meta, marker: BatchMarker): BatchHooks {
     const limit = meta.limits.cpuLimitMs;
-    let last = Date.now();
-    let lastLife: string | null = null;
+    const decorrelate = meta.streak !== null;
+    let callAt = 0;
+    let slept = 0;
+    let first = true;
+    const busy = () => Date.now() - marker.startedAt - slept;
+    const wait = async (ms: number) => {
+      await new Promise((r) => setTimeout(r, ms));
+      slept += ms;
+    };
     return {
       continueBatch: () =>
-        slow.lifeId === null && Date.now() - marker.startedAt < WATCH_STOP_SHARE * limit,
-      beforeBot: async (lifeId, tick) => {
-        // Any I/O moves the clock; a timer is the cheapest.
+        busy() < WATCH_STOP_SHARE * limit &&
+        Date.now() - marker.startedAt < WATCH_WALL_SHARE * limit,
+      beforeBot: async (lifeId, kind, tick) => {
+        if (decorrelate && first) await wait(Math.random() * WATCH_GAP_CAP_SHARE * limit);
+        first = false;
+        // Any I/O moves the clock (the engine step since the last one was CPU); a timer is cheapest.
         await new Promise((r) => setTimeout(r, 0));
-        const now = Date.now();
-        if (lastLife !== null && now - last > meta.limits.slowTickMs) {
-          const n = (this.slowTicks.get(lastLife) ?? 0) + 1;
-          this.slowTicks.set(lastLife, n);
-          console.warn("room slow call", meta.roomId, lastLife, `${now - last} ms`, n);
-          if (n >= SLOW_TICKS_TO_SUSPECT) slow.lifeId ??= lastLife;
-        }
-        if (lifeId !== null && now - marker.startedAt > WATCH_ABORT_SHARE * limit) return "abort";
-        marker.suspectLife = lifeId;
-        marker.suspectAt = now;
-        marker.suspectTick = tick;
+        callAt = Date.now();
+        if (kind === "tick" && busy() > WATCH_ABORT_SHARE * limit) return "abort";
+        marker.call = { lifeId, kind, tick, at: callAt, before: busy() };
         this.store.setMarker(marker);
         await this.ctx.storage.sync();
-        last = Date.now();
-        lastLife = lifeId;
         return "go";
+      },
+      afterBot: async () => {
+        if (!decorrelate) return;
+        marker.call = null;
+        this.store.setMarker(marker);
+        await this.ctx.storage.sync();
+        await wait(watchGapMs(Date.now() - callAt, meta.limits.watchGapMs, Math.random(), limit));
       },
     };
   }
 
-  /** A batch died before saving its result (the marker is still there). */
+  /**
+   * A batch died before saving its result (the marker is still there). Count it toward evicting
+   * the life whose call it interrupted, watch the room, and run the batch again from the saved
+   * frame (every bot restarts there).
+   */
   private async recover(meta: Meta, marker: BatchMarker, invokedAt: number): Promise<void> {
     this.dropSim();
-    this.slowTicks.clear();
     const now = Date.now();
     const verdict = judgeCrash(marker, now, meta.limits.cpuLimitMs);
-    const suspect = verdict.kind === "suspect" ? this.findLife(verdict.lifeId) : null;
+    const named = verdict.kind === "suspect" ? this.findLife(verdict.call.lifeId) : null;
+    const { streak, evict } = nextStreak(meta.streak, verdict, marker.watch);
     this.store.transaction(() => {
       this.store.clearMarker();
+      let outcome: IncidentOutcome = verdict.kind;
+      if (evict && named && verdict.kind === "suspect") {
+        this.evict(meta, named, verdict.call.tick, evictionDetail(meta, verdict.call), now);
+        outcome = "evicted";
+      }
       this.store.addIncident({
         tick: marker.fromTick,
-        outcome: verdict.kind,
-        versionId: suspect?.versionId ?? null,
+        outcome,
+        versionId: named?.versionId ?? null,
         at: now,
       });
       if (verdict.kind === "restart") return;
       const recent = this.store.cpuIncidentsSince(now - INCIDENT_WINDOW_MS);
       this.store.updateMeta((m) => {
+        m.streak = streak;
         m.watch = watchWindow(m.watch, recent, marker.fromTick, now, DEFAULT_CONFIG.lifeCap);
-        if (verdict.kind === "suspect" && suspect) {
-          m.trial = {
-            kind: "cpu",
-            lifeId: suspect.lifeId,
-            untilTick: marker.suspectTick ?? marker.fromTick,
-            maxPendingSeq: marker.maxPendingSeq,
-            deaths: [],
-            attempts: 0,
-            reason:
-              `the room died ${Math.round(verdict.gapMs)} ms after its batch began, ` +
-              `${Math.round(verdict.callMs)} ms into this bot's call`,
-          };
-        }
       });
     });
-    console.error("room batch died", meta.roomId, verdict);
-    // A suspect is tried alone first, in an invocation of its own.
-    if (verdict.kind !== "suspect" || !suspect) await this.batch(invokedAt);
+    console.error("room batch died", meta.roomId, verdict, { streak, evict });
+    await this.batch(invokedAt);
   }
 
   /**
-   * The suspect's trial (`room/trial.ts`): only its code runs, rebuilt from the recorded states
-   * since its sandbox life began, then through the unrecorded ticks. Long trials continue over
-   * several invocations. Completing clears the suspect; a slow trial measures it.
+   * Ends `life` with the neutral cause `evicted` (at the next batch, without running its code
+   * again; a pending ticket is dropped), and quarantines its version after
+   * `EVICTIONS_TO_QUARANTINE` evictions in this room. Runs inside a transaction.
    */
-  private async trial(meta: Meta, trial: Trial, invokedAt: number): Promise<void> {
-    const key = `${trial.lifeId}/${trial.attempts}`;
-    if (this.trialRun?.key !== key) {
-      this.trialRun?.runner.dispose();
-      this.trialRun = null;
-      const runner = await this.prepareTrial(meta, trial);
-      if (typeof runner === "string") {
-        this.endTrial(meta, trial, "inconclusive", runner);
-        return;
+  private evict(meta: Meta, life: LifeEntry, tick: number, detail: string, now: number): void {
+    if (!this.store.markEvicted(life.lifeId)) {
+      // Killed while starting its life: it never made it into the roster.
+      this.store.removePendingLife(life.lifeId);
+      if (life.versionId) {
+        const chunkTick =
+          meta.openChunkTick ?? Math.floor(tick / meta.limits.chunkTicks) * meta.limits.chunkTicks;
+        const result: LifeResult = {
+          lifeId: life.lifeId,
+          versionId: life.versionId,
+          author: life.author,
+          roomId: meta.roomId,
+          startTick: tick,
+          endTick: tick,
+          score: 0,
+          lengthMax: 0,
+          kills: 0,
+          deathCause: "evicted",
+          killer: null,
+          replayKey: chunkKey(meta.roomId, chunkTick),
+          startedAt: now,
+          endedAt: now,
+        };
+        this.store.enqueue({ kind: "life", json: JSON.stringify(result), chunkTick });
       }
-      this.trialRun = { key, runner };
     }
-    const { runner } = this.trialRun;
-    const limit = meta.limits.cpuLimitMs;
-    await new Promise((r) => setTimeout(r, Math.random() * TRIAL_JITTER_MS));
-    // CPU budget for this part of the trial (the jitter was wall time only).
-    const started = Date.now();
-    const marker: BatchMarker = {
-      phase: "trial",
-      fromTick: this.store.getJson<World>("world")?.tick ?? 0,
-      maxPendingSeq: trial.maxPendingSeq,
-      startedAt: invokedAt,
-      watch: true,
-      suspectLife: trial.lifeId,
-      suspectAt: null,
-      suspectTick: null,
-      trialCall: null,
-    };
-    await this.begin(meta, marker);
-    const mark = async (call: string | null) => {
-      marker.trialCall = call;
-      this.store.setMarker(marker);
-      await this.ctx.storage.sync();
-      return Date.now();
-    };
-    const step = await runner.run(
-      {
-        before: (call) => mark(call),
-        after: async () => {
-          const now = await mark(null);
-          await new Promise((r) => setTimeout(r, Math.random() * meta.limits.trialGapMs));
-          return now;
-        },
-      },
-      // Wall time, sleeps included: a lower bound on how much CPU budget is left.
-      () => Date.now() - started > WATCH_STOP_SHARE * limit,
-    );
-    if (step === "yield") {
-      this.store.clearMarker();
-      return;
-    }
-    this.trialRun = null;
-    const out = runner.outcome;
-    const slowTicks = out.tickMs.filter((ms) => ms > meta.limits.slowTickMs).length;
-    console.warn("room trial", meta.roomId, trial.kind, trial.lifeId, out);
-    if (out.gone) {
-      this.endTrial(meta, trial, "inconclusive", "the suspect wasn't alive through the trial");
-    } else if (trial.kind === "slow" && slowTicks >= SLOW_TRIAL_CONFIRM) {
-      const detail =
-        `${trial.reason}; run alone, ${slowTicks} of ${out.ran} ticks took over ` +
-        `${meta.limits.slowTickMs} ms (slowest ${Math.max(...out.tickMs)} ms)`;
-      this.endTrial(meta, trial, "slow", detail);
-    } else this.endTrial(meta, trial, "cleared", "the trial completed");
-  }
-
-  /** Builds the trial's runner, or says why it can't be run. */
-  private async prepareTrial(meta: Meta, trial: Trial): Promise<TrialRunner | string> {
-    const saved = this.store.getJson<World>("world");
-    const life = this.findLife(trial.lifeId);
-    if (!saved || !life) return "the suspect left the room";
-    const inRoster = "botStartTick" in life;
-    const startTick = inRoster ? (life as RosterEntry).botStartTick : saved.tick;
-    let chunks: Uint8Array[] | null = null;
-    if (startTick < saved.tick) {
-      chunks = await this.recordedChunks(meta, startTick);
-      if (!chunks) return "its replay chunks are missing";
-    }
-    const live =
-      trial.kind === "cpu"
-        ? this.plan(meta, this.store.roster(), saved.tick, 0, trial.maxPendingSeq)
-        : { spawns: [], faults: new Map<string, Fault>(), ticks: 0 };
-    const liveTicks =
-      trial.kind === "cpu"
-        ? Math.max(1, trial.untilTick - saved.tick + 1 + TRIAL_MARGIN_TICKS)
-        : SLOW_TRIAL_TICKS;
-    try {
-      return new TrialRunner({
-        suspect: life,
-        sandbox: await createSandbox({ wasmModule }),
-        startTick,
-        chunks,
-        saved,
-        spawns: live.spawns,
-        faults: live.faults,
-        liveTicks,
-      });
-    } catch (e) {
-      return `its replay can't be played back (${String(e)})`;
-    }
-  }
-
-  /** Recorded chunks from the one holding `fromTick` through the open one. Null if any is gone. */
-  private async recordedChunks(meta: Meta, fromTick: number): Promise<Uint8Array[] | null> {
-    const open = meta.openChunkTick;
-    const pending = this.store.getBlob("chunk");
-    if (open === null || !pending) return null;
-    const size = meta.limits.chunkTicks;
-    const chunks: Uint8Array[] = [];
-    for (let t = Math.floor(fromTick / size) * size; t < open; t += size) {
-      let bytes = this.store.outboxChunk(t);
-      if (!bytes) {
-        const obj = await this.env.REPLAYS.get(chunkKey(meta.roomId, t));
-        if (!obj) return null;
-        bytes = new Uint8Array(await obj.arrayBuffer());
-      }
-      chunks.push(bytes);
-    }
-    chunks.push(pending);
-    return chunks;
-  }
-
-  /** Records the trial's verdict (a strike for `slow`/`cpu`) and resumes the room. */
-  private endTrial(
-    meta: Meta,
-    trial: Trial,
-    verdict: "cleared" | "inconclusive" | "slow" | "cpu",
-    detail: string,
-    atTick?: number,
-  ): void {
-    const life = this.findLife(trial.lifeId);
-    const tick = atTick ?? this.store.getJson<World>("world")?.tick ?? 0;
-    this.store.transaction(() => {
-      this.store.clearMarker();
-      let outcome: IncidentOutcome = verdict === "cpu" ? "culprit" : verdict;
-      if ((verdict === "slow" || verdict === "cpu") && life?.versionId) {
-        outcome = this.strike(meta, life, verdict, tick, detail);
-      } else if ((verdict === "slow" || verdict === "cpu") && life) {
-        this.store.markLeaving(life.lifeId);
-      }
-      this.store.addIncident({ tick, outcome, versionId: life?.versionId ?? null, at: Date.now() });
-      this.store.updateMeta((m) => {
-        m.trial = null;
-      });
-    });
-    console.warn("room trial verdict", meta.roomId, trial.lifeId, verdict, detail);
-  }
-
-  /** A trial died before finishing: count it, and confirm when it reproduces. */
-  private trialDied(meta: Meta, marker: BatchMarker): void {
-    this.trialRun?.runner.dispose();
-    this.trialRun = null;
-    const trial = meta.trial;
-    if (!trial) {
-      this.store.clearMarker();
-      return;
-    }
-    const verdict = judgeTrialCrash(trial, marker, Date.now(), meta.limits.cpuLimitMs);
-    console.error("room trial died", meta.roomId, trial, verdict);
-    if (verdict === "confirmed") {
-      const detail =
-        `${trial.reason}; run alone, it used up the CPU limit (${meta.limits.cpuLimitMs} ms) ` +
-        `in ${marker.trialCall}, ${TRIAL_DEATHS_TO_CONFIRM} times in a row`;
-      const tick = Number(marker.trialCall?.split("@")[1] ?? marker.fromTick);
-      this.endTrial(meta, trial, "cpu", detail, tick);
-    } else if (verdict === "inconclusive") {
-      this.endTrial(meta, trial, "inconclusive", `${trial.attempts} trials without a verdict`);
-    } else {
-      this.store.transaction(() => {
-        this.store.clearMarker();
-        this.store.updateMeta((m) => {
-          m.trial = trial;
-        });
-      });
-    }
-  }
-
-  /**
-   * Records a strike against `life`'s version (its snake dies at the next batch); bans the
-   * version at `STRIKES_TO_BAN`. Returns the incident outcome. Runs inside a transaction.
-   */
-  private strike(
-    meta: Meta,
-    life: LifeEntry,
-    kind: "cpu" | "slow",
-    tick: number,
-    detail: string,
-  ): IncidentOutcome {
-    const versionId = life.versionId as string;
-    const now = Date.now();
-    const strikes = this.store.addStrike({
+    const versionId = life.versionId;
+    const evictions = this.store.addEviction({
       versionId,
       lifeId: life.lifeId,
-      kind,
       tick,
       detail,
       at: now,
     });
-    if (strikes < STRIKES_TO_BAN) return kind === "cpu" ? "culprit" : "slow";
-    const ban: BanRecord = {
+    console.warn("room evicted", meta.roomId, life.lifeId, versionId, detail);
+    if (!versionId || evictions < EVICTIONS_TO_QUARANTINE || this.store.isQuarantined(versionId)) {
+      return;
+    }
+    this.store.quarantine(versionId, now);
+    const record: QuarantineRecord = {
       versionId,
       author: life.author,
       lifeId: life.lifeId,
       roomId: meta.roomId,
       tick,
-      reason: kind,
+      evictions,
       message:
-        kind === "cpu"
-          ? `Banned by the arena: run alone, this bot used up the room's CPU limit (${strikes} ` +
-            `lives; last: ${detail}).`
-          : `Banned by the arena: run alone, this bot's ticks ran far over the time budget ` +
-            `(${strikes} lives; last: ${detail}).`,
+        `Quarantined by the arena for review: the room's CPU limit cut ${KILLS_TO_EVICT} runs in a ` +
+        `row short inside this bot's code, in ${evictions} lives (last: ${detail}). That's ` +
+        "usually an operator on huge strings or objects, which the tick budget can't meter.",
       at: now,
     };
-    this.store.addBan({ versionId, lifeId: life.lifeId, tick, at: now });
-    this.store.enqueue({ kind: "ban", json: JSON.stringify(ban) });
-    return "banned";
+    this.store.enqueue({ kind: "quarantine", json: JSON.stringify(record) });
   }
 
   /** What the next batch does. Depends only on saved state, so a rerun plans the same batch. */
@@ -637,19 +436,15 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     maxPendingSeq: number,
   ): BatchPlan {
     const faults = new Map<string, Fault>();
-    for (const e of roster) {
-      if (e.versionId && this.store.isBanned(e.versionId)) faults.set(e.lifeId, "timeout");
-      else if (this.store.isStruck(e.lifeId)) faults.set(e.lifeId, "timeout");
-      else if (e.leaving) faults.set(e.lifeId, "error");
-    }
+    // The engine has no `evicted` cause: the replay shows `error`, the life result `evicted`.
+    for (const e of roster) if (e.evicted || e.leaving) faults.set(e.lifeId, "error");
     const staying: LifeEntry[] = roster.filter((e) => !faults.has(e.lifeId));
     const spawns: LifeEntry[] = [];
     for (const p of this.store.pending(maxPendingSeq)) {
       const taken = [...staying, ...spawns].some((e) => e.author === p.author);
-      const banned =
-        (p.versionId !== null && this.store.isBanned(p.versionId)) || this.store.isStruck(p.lifeId);
-      if (taken || banned || staying.length + spawns.length >= meta.maxSnakes) {
-        console.warn("room drops ticket", p.lifeId, { taken, banned });
+      const quarantined = p.versionId !== null && this.store.isQuarantined(p.versionId);
+      if (taken || quarantined || staying.length + spawns.length >= meta.maxSnakes) {
+        console.warn("room drops ticket", p.lifeId, { taken, quarantined });
         continue;
       }
       spawns.push(stripSeq(p));
@@ -669,12 +464,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     await this.ctx.storage.sync();
   }
 
-  private commit(
-    sim: RoomSim,
-    result: BatchResult,
-    maxPendingSeq: number,
-    alsoInTransaction?: () => void,
-  ): void {
+  private commit(sim: RoomSim, result: BatchResult, maxPendingSeq: number): void {
     const now = Date.now();
     this.store.transaction(() => {
       const meta = this.store.meta() as Meta;
@@ -688,7 +478,6 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       let real = 0;
       for (const { entry, death, killer, chunkTick } of result.ended) {
         this.store.removeFromRoster(entry.lifeId);
-        this.slowTicks.delete(entry.lifeId);
         if (!entry.versionId) continue;
         real++;
         const life: LifeResult = {
@@ -701,9 +490,9 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
           score: death.score,
           lengthMax: death.maxMass,
           kills: death.kills,
-          deathCause: entry.leaving ? "retired" : death.cause,
+          deathCause: entry.evicted ? "evicted" : entry.leaving ? "retired" : death.cause,
           killer: killer ? (killer.versionId ?? `house:${killer.house}`) : null,
-          replayKey: `${meta.roomId}/${String(chunkTick).padStart(10, "0")}.zsr`,
+          replayKey: chunkKey(meta.roomId, chunkTick),
           startedAt: entry.startedAt,
           endedAt: now,
         };
@@ -713,9 +502,10 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       meta.lastBatchTicks = result.ticks;
       meta.openChunkTick = sim.openChunkTick;
       if (real > 0) meta.nextLifeAfter = 0;
+      // A streak is about one life: once it ended, the next kill starts over.
+      if (result.ended.some((e) => e.entry.lifeId === meta.streak?.lifeId)) meta.streak = null;
       this.store.setMeta(meta);
       this.store.clearMarker();
-      alsoInTransaction?.();
     });
   }
 
@@ -723,8 +513,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
 
   /**
    * Delivers what committed batches queued: replay chunks to R2, lives (once their chunk is in
-   * R2) and bans to D1 and the matchmaker. Failures retry with exponential backoff; nothing is
-   * dropped.
+   * R2) and quarantines to D1 and the matchmaker. Failures retry with exponential backoff;
+   * nothing is dropped.
    */
   private async drain(): Promise<void> {
     for (let pass = 0; pass < 2; pass++) {
@@ -744,13 +534,13 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
               await this.matchmaker().lifeEnded(life);
               break;
             }
-            case "ban": {
-              const ban = JSON.parse(item.json) as BanRecord;
-              if ((await recordBan(this.env.DB, ban)) === "missing") {
-                // Terminal: the version was deleted. The room's own ban stands; say so loudly.
-                console.error("room ban: version row missing in D1", meta.roomId, ban);
+            case "quarantine": {
+              const record = JSON.parse(item.json) as QuarantineRecord;
+              if ((await recordQuarantine(this.env.DB, record)) === "missing") {
+                // Terminal: the version was deleted. The room's own quarantine stands.
+                console.error("room quarantine: version row missing in D1", meta.roomId, record);
               }
-              await this.matchmaker().versionBanned(ban);
+              await this.matchmaker().versionQuarantined(record);
               break;
             }
             case "closed":
@@ -903,4 +693,10 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
 
 function stripSeq({ seq: _, ...entry }: PendingEntry): LifeEntry {
   return entry;
+}
+
+function evictionDetail(meta: Meta, call: BotCall): string {
+  return `${call.kind === "init" ? "starting its life" : "its tick"} at room tick ${call.tick} (${
+    meta.limits.cpuLimitMs
+  } ms CPU limit)`;
 }

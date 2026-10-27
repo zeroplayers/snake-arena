@@ -148,6 +148,13 @@ export async function seedVersion(
   return { lifeId, versionId, author, source };
 }
 
+/** Compares two 4 MiB strings forever: uncharged by the sandbox's meter (its "Known gaps"). */
+const BURN = `
+  let a = "x", b = "x";
+  for (let i = 0; i < 22; i++) { a = a + a; b = b + b; }
+  let n = 0;
+  for (;;) if (a === b) n++;`;
+
 /** Bots written as plain JS modules (they run in the sandbox as-is). */
 export const BOTS = {
   /** Throws every tick: dies by `error` on its third tick. */
@@ -176,6 +183,27 @@ export const BOTS = {
       },
     };`,
   /**
+   * Burns forever once the snakes it sees turned on two ticks in a row: it depends on its
+   * neighbours, so only running it with the room's real neighbours reproduces it.
+   */
+  neighbours: `
+    export default {
+      init() { return { angles: {}, turning: 0 }; },
+      tick(state, mem) {
+        const angles = {};
+        let turned = false;
+        for (const s of state.snakes) {
+          if (s.angle === null) continue;
+          angles[s.id] = s.angle;
+          if (s.id in mem.angles && mem.angles[s.id] !== s.angle) turned = true;
+        }
+        mem.angles = angles;
+        mem.turning = turned ? mem.turning + 1 : 0;
+        if (mem.turning >= 2) {${BURN}}
+        return { turn: 0 };
+      },
+    };`,
+  /**
    * Honest about its result but slow every tick: `reps` comparisons of two 1 MiB strings
    * (uncharged by the sandbox, like straight-line code in #60).
    */
@@ -188,9 +216,3 @@ export const BOTS = {
       return { turn: n > 0 ? 1 : -1 };
     } };`,
 };
-
-const BURN = `
-  let a = "x", b = "x";
-  for (let i = 0; i < 22; i++) { a = a + a; b = b + b; }
-  let n = 0;
-  for (;;) if (a === b) n++;`;

@@ -39,10 +39,12 @@ export interface EndedLife {
 /** Watch mode's hooks (see `backstop.ts`). Normal batches pass none and never await. */
 export interface BatchHooks {
   /**
-   * Awaited before any bot code of `lifeId` runs (its start, or its tick at `tick`), and with
-   * null before each engine step. `abort` abandons the tick in progress and ends the batch.
+   * Awaited before any bot code of `lifeId` runs: starting its life (`init`) or its tick at
+   * `tick`. `abort` abandons the tick in progress and ends the batch.
    */
-  beforeBot?: (lifeId: string | null, tick: number) => Promise<"go" | "abort">;
+  beforeBot?: (lifeId: string, kind: "init" | "tick", tick: number) => Promise<"go" | "abort">;
+  /** Awaited after each bot call returned. */
+  afterBot?: () => Promise<void>;
   /** Asked between ticks; false ends the batch early. */
   continueBatch?: () => boolean;
 }
@@ -50,7 +52,7 @@ export interface BatchHooks {
 export interface BatchPlan {
   /** Lives to spawn before the first tick, in order. */
   spawns: LifeEntry[];
-  /** Lives killed on the first tick without running their code (banned, leaving). */
+  /** Lives killed on the first tick without running their code (evicted, leaving). */
   faults: Map<string, Fault>;
   ticks: number;
 }
@@ -130,7 +132,7 @@ export class RoomSim {
   /** Runs one batch: spawns, then up to `plan.ticks` engine steps, every bot's tick before each. */
   async run(plan: BatchPlan, hooks: BatchHooks = {}, now = Date.now()): Promise<BatchResult> {
     const world = this.world;
-    const { beforeBot, continueBatch } = hooks;
+    const { beforeBot, afterBot, continueBatch } = hooks;
     const result: BatchResult = {
       spawned: [],
       ended: [],
@@ -148,9 +150,9 @@ export class RoomSim {
     // Bots that lost their sandbox life (a resumed room) start again.
     for (const r of this.running.values()) {
       if (r.life || plan.faults.has(r.entry.lifeId)) continue;
-      r.entry.botStartTick = world.tick;
-      if (beforeBot) await beforeBot(r.entry.lifeId, world.tick);
+      if (beforeBot) await beforeBot(r.entry.lifeId, "init", world.tick);
       r.life = this.startLife(r.entry);
+      if (afterBot) await afterBot();
     }
     for (const entry of plan.spawns) {
       this.recorder.spawn({ id: entry.lifeId, author: entry.author });
@@ -158,14 +160,15 @@ export class RoomSim {
         ...entry,
         startTick: world.tick,
         startedAt: now,
-        botStartTick: world.tick,
         leaving: false,
+        evicted: false,
       };
       const r: Running = { entry: spawned, life: null };
       this.running.set(entry.lifeId, r);
       result.spawned.push(spawned);
-      if (beforeBot) await beforeBot(entry.lifeId, world.tick);
+      if (beforeBot) await beforeBot(entry.lifeId, "init", world.tick);
       r.life = this.startLife(spawned);
+      if (afterBot) await afterBot();
     }
 
     const ended = new Map<string, Running>();
@@ -181,16 +184,16 @@ export class RoomSim {
           faults[id] = forced ?? "error";
           continue;
         }
-        if (beforeBot && (await beforeBot(id, world.tick)) === "abort") {
+        if (beforeBot && (await beforeBot(id, "tick", world.tick)) === "abort") {
           result.aborted = true;
           return finish();
         }
         const report = r.life.tick(buildBotState(world, snake));
+        if (afterBot) await afterBot();
         result.botTicks++;
         actions[id] = report.action;
         if (report.death) faults[id] = report.death.fault;
       }
-      if (beforeBot) await beforeBot(null, world.tick);
       this.recorder.step(actions, faults);
       result.ticks++;
       const chunkTick = this.recorder.pending?.snapshot.tick ?? world.tick;

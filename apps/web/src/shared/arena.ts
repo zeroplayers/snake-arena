@@ -35,21 +35,13 @@
  * don't go through this.
  *
  * Ratings: a version activated by a rollback starts its rating over (the site deletes its
- * `ratings` row and moves `versions.activated_at`). Rating writers count only lives started at or
- * after `versions.activated_at`, including when they rebuild a rating from `lives`, and write the
- * `activated_at` they counted from into `ratings.activated_at`. A trigger
+ * `ratings` row and moves `versions.activated_at`). Ratings count only lives started at or after
+ * `versions.activated_at`, and not those ended with `death_cause = 'retired'`. The site's rating
+ * job (`src/server/ratings.ts`) computes them from `lives`, so the arena only inserts `lives` rows
+ * (`INSERT ... ON CONFLICT (id) DO NOTHING`, never `INSERT OR REPLACE`) and writes no `ratings`.
+ * It writes the `activated_at` it counted from into `ratings.activated_at`; a trigger
  * (`ratings_stint_insert`/`ratings_stint_update`) ignores a write whose `activated_at` isn't the
- * version's current one, so a writer that read the version before a rollback can't bring the old
- * rating back. Upsert with `RETURNING`; no row back means the stint ended, so drop the result:
- *
- * ```sql
- * INSERT INTO ratings (version_id, activated_at, mean, ci, n_lives, updated_at)
- * VALUES (?1, ?2, ?3, ?4, ?5, ?6)
- * ON CONFLICT (version_id) DO UPDATE SET activated_at = excluded.activated_at,
- *   mean = excluded.mean, ci = excluded.ci, n_lives = excluded.n_lives,
- *   updated_at = excluded.updated_at
- * RETURNING version_id
- * ```
+ * version's current one, so a rating computed before a rollback can't bring the old one back.
  */
 
 /** `idFromName` of the single global `MatchmakerDO`. */

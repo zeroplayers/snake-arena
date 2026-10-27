@@ -44,9 +44,33 @@ and the empty cases `/@newbie`, `/@linus/draft`, `/@grace/wip`.
 | `/@{username}/{bot}` | `src/queries/bot.ts`: versions, rating chart, recent lives; `?v=N` picks the version. Sources from `SOURCES` (`src/queries/sources.ts`), shown as escaped text only |
 | `/replay/{lifeId}`   | `src/queries/replay.ts` + the life's chunk from `REPLAYS`, played by `ReplaySource`                                                                                 |
 
-Ratings are read, never computed here: when `packages/rating` lands, only `leaderboardQuery` and
-the `ratings` columns it reads are involved. `ratings.lower_bound` is a generated column for now;
-the rating work can make it a stored one with the same name.
+Pages only read `ratings`; the rating job below writes it. `ratings.lower_bound` is a generated
+column (`mean - ci`), the leaderboard's sort key.
+
+## Ratings
+
+The rating job (`src/server/ratings.ts`, Cron Trigger every minute) turns `lives` into `ratings`
+with `@zerosnake/rating`: mean and 95% interval over the last 200 counted lives, ranked by the
+lower bound from 30 lives. The arena only inserts `lives` rows; nothing else writes `ratings`
+(a rollback deletes the version's row).
+
+- **Cursor.** Triggers number each finished life in commit order (`lives.seq`, counter in
+  `rating_progress.assigned_seq`, `migrations/0007_rating_job.sql`); the job reads lives after
+  `rating_progress.rated_seq` in batches of 1000 and moves the cursor in the same transaction as
+  the rating writes. Lives the arena writes late just come later in the order. At most 20 000
+  lives per run (about 45 D1 queries and well under a second of CPU per 10 000), so a backlog
+  drains over a few runs.
+- **Counted lives**: started at or after the version's `activated_at` (its current stint),
+  `death_cause` not `retired`. A rating needs two of them.
+- **Idempotent**: `ratings.life_seq` records which lives a rating covers, and every commit is
+  guarded by `rating_progress.rev`, so overlapping runs, a cursor moved back or a life written
+  twice never count a life twice.
+- **Rebuild** a rating from `lives` by setting `ratings.life_seq = NULL` (the job rebuilds 50 per
+  run); `UPDATE rating_progress SET rated_seq = 0 WHERE id = 1` replays every life, which also
+  covers versions without a row. Each run logs `ratings.updated` with `backlog`
+  (`assigned_seq - rated_seq`); failures log `ratings.update_failed`.
+
+Locally: `curl "http://localhost:3000/cdn-cgi/handler/scheduled?cron=*+*+*+*+*"`.
 
 Page views never aggregate `lives`: totals come from `versions.lives_count`, which triggers on
 `lives` keep current (`migrations/0002_page_counters.sql`), and every `lives` query is an index
@@ -297,4 +321,5 @@ ones whose bot hasn't used its `livesPerBotPerDay` lives today. With no `ready` 
 `idle` (house bots write no `lives` rows); when every bot's daily quota is used up, it's
 `exhausted` until 00:00 UTC, not an alert. Each run also logs
 `arena.liveness`, at level `error` with `alert: "no_lives"` when stalled, so a Workers Logs alert
-works as well. Locally, trigger it with `curl "http://localhost:3000/cdn-cgi/handler/scheduled"`.
+works as well. Locally, trigger it with
+`curl "http://localhost:3000/cdn-cgi/handler/scheduled?cron=*/5+*+*+*+*"`.

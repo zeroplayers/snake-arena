@@ -78,7 +78,8 @@ SELECT
   t0 + i * 600000 + 300000
 FROM seq;
 
--- Ratings over the last 200 lives, as the arena computes them: mean and 95% CI half-width.
+-- Ratings over the last 200 lives, roughly: mean and 95% CI half-width. `life_seq` stays NULL,
+-- so the rating job (`src/server/ratings.ts`) rebuilds them exactly on its first run.
 -- `activated_at` names the version's current stint; a rating for any other one is ignored.
 INSERT INTO ratings (version_id, activated_at, mean, ci, n_lives, updated_at)
 SELECT

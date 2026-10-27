@@ -88,6 +88,17 @@ export const DEFAULT_MIN_AUTHORS = 5;
 /** Stop simulating while the outbox holds more undelivered items than this. */
 export const DEFAULT_MAX_OUTBOX = 500;
 
+/**
+ * A room writes its `room.batch` metric (sums of its batches, `room/metrics.ts`) at most this
+ * often: ~2 900 data points a day per room, whatever its batch rate.
+ */
+export const METRICS_MS = 30_000;
+/**
+ * A room's cycle (one alarm) delivers at most this many outbox items; the rest wait for the next
+ * cycle. Each delivered life is a `life.ended` data point, and an invocation may write at most
+ * 250 (Analytics Engine), so a backlog after an outage is written over several cycles, not lost.
+ */
+export const OUTBOX_PER_CYCLE = 100;
 /** After the matchmaker had nothing for us, ask again at most this often (unless a life ends). */
 export const NEXT_LIFE_RETRY_MS = 10_000;
 /**

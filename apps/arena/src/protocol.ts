@@ -137,6 +137,10 @@ export interface RoomLimits {
   spectatorGraceMs?: number;
   /** A spectator that acks nothing for this long is closed. Default `ACK_TIMEOUT_MS` (30 s). */
   spectatorAckTimeoutMs?: number;
+  /** Most often the room writes its `room.batch` metric. Default `METRICS_MS` (30 s). */
+  metricsMs?: number;
+  /** Most outbox items one cycle delivers. Default `OUTBOX_PER_CYCLE` (100). */
+  outboxPerCycle?: number;
 }
 
 export type JoinResult =

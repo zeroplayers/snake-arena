@@ -16,12 +16,14 @@ import type {
   RoomStatus,
 } from "../protocol.ts";
 
+import { type DataPoint, sqlPoints, withTestMetrics } from "./metrics.ts";
+
 export { RoomDO, ShowcaseDO } from "./worker.ts";
 
 /** The real matchmaker: manual (the test runs `tick`), and its clock can be moved forward. */
 export class TestMatchmakerDO extends MatchmakerDO {
   constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
+    super(ctx, withTestMetrics(env, sqlPoints(ctx.storage.sql).write));
     ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS test_clock (id INTEGER PRIMARY KEY, offset INTEGER NOT NULL)",
     );
@@ -45,6 +47,11 @@ export class TestMatchmakerDO extends MatchmakerDO {
        ON CONFLICT(id) DO UPDATE SET offset = offset + excluded.offset`,
       ms,
     );
+  }
+
+  /** The metric points it wrote (with the harness's `metrics: "record"`). */
+  async metricPoints(): Promise<DataPoint[]> {
+    return sqlPoints(this.ctx.storage.sql).read();
   }
 
   /** Reads the matchmaker's own tables. */
@@ -78,7 +85,7 @@ export class FakeRoom extends DurableObject<Env> {
     super(ctx, env);
     ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS meta (id INTEGER PRIMARY KEY, room_id TEXT NOT NULL,
-        max_snakes INTEGER NOT NULL, state TEXT NOT NULL);
+        max_snakes INTEGER NOT NULL, state TEXT NOT NULL, tick INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS lives (seq INTEGER PRIMARY KEY AUTOINCREMENT,
         life_id TEXT NOT NULL UNIQUE, version_id TEXT NOT NULL, author TEXT NOT NULL,
         leaving INTEGER NOT NULL DEFAULT 0);
@@ -86,15 +93,20 @@ export class FakeRoom extends DurableObject<Env> {
     `);
   }
 
-  private meta(): { roomId: string; maxSnakes: number; state: "running" | "closed" } | null {
+  private meta(): {
+    roomId: string;
+    maxSnakes: number;
+    state: "running" | "closed";
+    tick: number;
+  } | null {
     const row = this.ctx.storage.sql
-      .exec<{ room_id: string; max_snakes: number; state: string }>(
+      .exec<{ room_id: string; max_snakes: number; state: string; tick: number }>(
         "SELECT * FROM meta WHERE id = 1",
       )
       .next();
     if (row.done) return null;
-    const { room_id, max_snakes, state } = row.value;
-    return { roomId: room_id, maxSnakes: max_snakes, state: state as "running" | "closed" };
+    const { room_id, max_snakes, state, tick } = row.value;
+    return { roomId: room_id, maxSnakes: max_snakes, state: state as "running" | "closed", tick };
   }
 
   private matchmaker() {
@@ -135,6 +147,9 @@ export class FakeRoom extends DurableObject<Env> {
     return {
       roomId: meta?.roomId ?? null,
       state: meta?.state ?? "new",
+      tick: meta?.tick ?? 0,
+      paused: false,
+      outbox: { size: 0, failing: 0 },
       snakes: this.lives().map((l) => ({
         lifeId: l.lifeId,
         versionId: l.versionId,
@@ -191,6 +206,8 @@ export class FakeRoom extends DurableObject<Env> {
   } = {}): Promise<FakeStep> {
     const meta = this.meta();
     if (meta?.state !== "running") return { ended: [], joined: [], state: "closed" };
+    // Each step is a batch: the world moves on.
+    this.ctx.storage.sql.exec("UPDATE meta SET tick = tick + 100 WHERE id = 1");
     const lives = this.lives();
     const dying = [
       ...lives.filter((l) => l.leaving).map((l) => ({ l, cause: "retired" as const })),

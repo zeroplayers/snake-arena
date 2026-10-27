@@ -20,8 +20,11 @@
  * - **Reaper.** {@link reapStaleVersions} (cron) rejects versions queued long ago that are still
  *   `validating`, in case a job was lost altogether, and versions whose deploy request died
  *   before queueing a job (`enqueue_failed`).
+ * - **Metrics.** One `checks.finished` per job, version reaped or malformed message (with the
+ *   `METRICS` binding; `@zerosnake/observability`), and a structured log of each.
  */
 import { LIMITS, runChecks, type SourceFile as SizedSource } from "@zerosnake/checks";
+import { log, type MetricsDataset, writeMetric } from "@zerosnake/observability";
 import {
   type CheckJob,
   isCheckJob,
@@ -51,7 +54,8 @@ import {
 
 export type { CheckJob };
 
-export type ChecksEnv = Pick<Env, "DB" | "BUNDLES" | "SOURCES">;
+/** `METRICS` is optional: without it nothing is measured. */
+export type ChecksEnv = Pick<Env, "DB" | "BUNDLES" | "SOURCES"> & { METRICS?: MetricsDataset };
 
 /** Dead-letter queues are named after their queue: `zerosnake-<env>-checks-dlq`. */
 const DEAD_LETTER_SUFFIX = "-dlq";
@@ -74,37 +78,47 @@ export async function handleChecks(batch: MessageBatch<unknown>, env: ChecksEnv)
 /** Runs one job from the checks queue; acks it once the version is done, retries on errors. */
 async function check(message: Message<unknown>, env: ChecksEnv): Promise<void> {
   const job = message.body;
+  const startedAt = Date.now();
   if (!isCheckJob(job)) {
-    console.error("checks: dropping a malformed job", message.id, JSON.stringify(job));
+    log("error", "checks.malformed", { messageId: message.id, body: JSON.stringify(job) });
+    finished(env, { outcome: "malformed", reason: null }, startedAt, message.attempts);
     message.ack();
     return;
   }
   try {
-    const outcome = await checkVersion(job, env);
-    console.log("checks:", job.versionId, outcome, `attempt ${message.attempts}`);
+    const result = await checkVersion(job, env);
+    finished(env, result, startedAt, message.attempts, job.versionId);
     message.ack();
   } catch (error) {
     // R2 or D1 failed: try again after the queue's `retry_delay`.
     // After the last retry the job goes to the dead-letter queue, and `giveUp` rejects it.
-    console.error("checks: job failed", job.versionId, `attempt ${message.attempts}`, error);
+    const reason = error instanceof Error ? error.message : String(error);
+    finished(env, { outcome: "failed", reason }, startedAt, message.attempts, job.versionId, error);
     message.retry();
   }
 }
 
 export type CheckOutcome = Outcome | "missing";
 
+export interface CheckResult {
+  outcome: CheckOutcome;
+  /** Why it was rejected: the consumer's `FailureReason`, or the first failed check. */
+  reason: string | null;
+}
+
 /** Checks one version and writes the result; throws only on errors worth retrying. */
-export async function checkVersion(job: CheckJob, env: ChecksEnv): Promise<CheckOutcome> {
+export async function checkVersion(job: CheckJob, env: ChecksEnv): Promise<CheckResult> {
   const version = await loadVersion(env.DB, job.versionId);
-  if (!version) return "missing";
+  if (!version) return { outcome: "missing", reason: null };
   // Not `enqueued_at`: the deploy API sets it after `send()`, so a job can arrive before it.
-  if (version.status !== "validating") return "unchanged";
-  if (version.botArchivedAt !== null) {
-    return markRejected(env.DB, version.id, failureReport("bot_archived"), Date.now());
-  }
+  if (version.status !== "validating") return { outcome: "unchanged", reason: null };
 
   // Inputs that no retry can fix: reject now, with what is wrong.
-  const reject = (report: VersionReport) => markRejected(env.DB, version.id, report, Date.now());
+  const reject = async (report: VersionReport): Promise<CheckResult> => ({
+    outcome: await markRejected(env.DB, version.id, report, Date.now()),
+    reason: report.reason ?? report.checks.find((c) => !c.ok)?.name ?? null,
+  });
+  if (version.botArchivedAt !== null) return reject(failureReport("bot_archived"));
 
   // The row's keys, not the job's: D1 is the source of truth.
   const [bundle, archive] = await Promise.all([
@@ -138,10 +152,37 @@ export async function checkVersion(job: CheckJob, env: ChecksEnv): Promise<Check
 
   const suite = await runChecks({ bundle: bundleText, sources }, { wasmModule });
   const report = versionReport(suite);
-  const now = Date.now();
-  return suite.passed
-    ? markPassed(env.DB, version, report, failureReport("bot_archived"), now)
-    : markRejected(env.DB, version.id, report, now);
+  if (!suite.passed) return reject(report);
+  const outcome = await markPassed(
+    env.DB,
+    version,
+    report,
+    failureReport("bot_archived"),
+    Date.now(),
+  );
+  // Passed, but its bot was archived meanwhile.
+  return { outcome, reason: outcome === "rejected" ? "bot_archived" : null };
+}
+
+/** The `checks.finished` metric and log of one job (or reaped version). */
+function finished(
+  env: Pick<ChecksEnv, "METRICS">,
+  { outcome, reason }: { outcome: string; reason: string | null },
+  startedAt: number,
+  attempt: number,
+  versionId?: string,
+  error?: unknown,
+): void {
+  const durationMs = Date.now() - startedAt;
+  writeMetric(env.METRICS, "checks.finished", { outcome, reason, durationMs, attempt });
+  log(outcome === "failed" ? "error" : "info", "checks.finished", {
+    versionId,
+    outcome,
+    reason,
+    durationMs,
+    attempt,
+    error,
+  });
 }
 
 /**
@@ -172,33 +213,54 @@ function sourceSizes(text: string): SizedSource[] | null {
 /** A job that ran out of retries: its version, if still `validating`, is rejected. */
 async function giveUp(message: Message<unknown>, env: ChecksEnv): Promise<void> {
   const job = message.body;
+  const startedAt = Date.now();
   if (!isCheckJob(job)) {
-    console.error("checks: dropping a malformed dead letter", message.id, JSON.stringify(job));
+    log("error", "checks.malformed", { messageId: message.id, body: JSON.stringify(job) });
+    finished(env, { outcome: "malformed", reason: null }, startedAt, message.attempts);
     message.ack();
     return;
   }
   try {
     const report = failureReport("checks_failed_to_complete");
     const outcome = await markRejected(env.DB, job.versionId, report, Date.now());
-    console.warn("checks: gave up on", job.versionId, outcome);
+    // `reason`: whether this rejected the version or found it already done.
+    const result = { outcome: "dead_letter", reason: outcome };
+    finished(env, result, startedAt, message.attempts, job.versionId);
     message.ack();
   } catch (error) {
-    console.error("checks: dead letter failed", job.versionId, error);
+    const reason = error instanceof Error ? error.message : String(error);
+    finished(env, { outcome: "failed", reason }, startedAt, message.attempts, job.versionId, error);
     message.retry();
   }
 }
 
 /**
  * Cron: rejects versions that have been `validating` for {@link STALE_AFTER_MS} since queueing,
- * and those never queued {@link UNQUEUED_AFTER_MS} after being created.
+ * and those never queued {@link UNQUEUED_AFTER_MS} after being created, `REAP_LIMIT` of
+ * each per run (one `checks.finished` point each, under Analytics Engine's 250 an invocation).
  */
-export async function reapStaleVersions(env: Pick<Env, "DB">, now = Date.now()): Promise<string[]> {
+export async function reapStaleVersions(
+  env: Pick<ChecksEnv, "DB" | "METRICS">,
+  now = Date.now(),
+): Promise<string[]> {
   const [stale, unqueued] = await Promise.all([
     rejectStale(env.DB, now - STALE_AFTER_MS, failureReport("checks_failed_to_complete"), now),
     rejectUnqueued(env.DB, now - UNQUEUED_AFTER_MS, failureReport("enqueue_failed"), now),
   ]);
-  if (stale.length) console.warn("checks: rejected stale versions", stale);
-  if (unqueued.length) console.warn("checks: rejected versions never queued", unqueued);
+  for (const [ids, reason] of [
+    [stale, "checks_failed_to_complete"],
+    [unqueued, "enqueue_failed"],
+  ] as const) {
+    for (let i = 0; i < ids.length; i++) {
+      writeMetric(env.METRICS, "checks.finished", {
+        outcome: "reaped",
+        reason,
+        durationMs: 0,
+        attempt: 0,
+      });
+    }
+    if (ids.length) log("warn", "checks.reaped", { reason, versionIds: ids });
+  }
   return [...stale, ...unqueued];
 }
 

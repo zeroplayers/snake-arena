@@ -31,6 +31,8 @@ export interface HarnessOptions {
   /** Classes the worker exports behind `ROOMS` and `MATCHMAKER`. */
   rooms?: string;
   matchmaker?: string;
+  /** A test `METRICS` binding that keeps (`record`) or refuses (`throw`) points; none if unset. */
+  metrics?: "record" | "throw";
 }
 
 export interface Harness {
@@ -59,6 +61,7 @@ export async function createHarness({
   worker = "worker.ts",
   rooms = "RoomDO",
   matchmaker = "TestMatchmaker",
+  metrics,
 }: HarnessOptions = {}): Promise<Harness> {
   writeFileSync(OUTPUT, houseBundlesModule(await bundleHouseBots()));
   const out = await build({
@@ -100,6 +103,7 @@ export async function createHarness({
             ROOMS: { type: "durable-object", worker: "arena", exportName: rooms },
             MATCHMAKER: { type: "durable-object", worker: "arena", exportName: matchmaker },
             SHOWCASE: { type: "durable-object", worker: "arena", exportName: "ShowcaseDO" },
+            ...(metrics && { TEST_METRICS: { type: "json", value: metrics } }),
           },
           exports: {
             [rooms]: { type: "durable-object", storage: "sqlite" },

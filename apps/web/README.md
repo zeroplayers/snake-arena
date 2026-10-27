@@ -314,9 +314,13 @@ saving.
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
 | Site errors             | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'http.error'`                                                                                             | `> 0`     |
 | No lives recorded       | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'arena.liveness' AND blob3 = 'stalled'`                                                                   | `> 0`     |
-| Room crashed            | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'room.crashed'` (once apps/arena writes it)                                                               | `> 0`     |
+| Room crashed            | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'room.crashed' AND blob4 != 'restart'`                                                                    | `> 0`     |
 | Auth failures spike     | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'auth.failure'`                                                                                           | `> 50`    |
 | Arena worker exceptions | the Workers logs dataset (`logs.workersLogs`) in the visual builder: script `zerosnake-arena-staging`, error-level logs or exception outcomes. Field names are listed by `cf sql datasets --include-columns` | `> 0`     |
+
+**Room crashed** leaves out `restart`: a deploy or an eviction interrupting a batch is one, and
+counts for nothing. The arena's other alerts (rooms stuck, consumer failing, kill storms) are in
+[`apps/arena/README.md`](../arena/README.md#alerts).
 
 **No lives recorded** comes from the Cron Trigger (`*/5 * * * *`, `src/server/liveness.ts`). It
 reads D1: the newest `lives` rows (by `rowid`, a few rows, not a scan), the latest activation of a

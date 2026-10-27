@@ -120,23 +120,33 @@ export async function markRejected(
 export const STALE_AFTER_MS = 60 * 60 * 1000;
 
 /**
- * Rejects every version queued before `queuedBefore` (Unix ms) that is still `validating`: its
- * job was lost, or is stuck far longer than retries and the dead-letter queue take. Versions
- * not queued yet (`enqueued_at` null) are {@link rejectUnqueued}'s.
+ * The reaper rejects at most this many versions of each kind per run; the rest wait for the next
+ * (half an hour later). Each one is a `checks.finished` point, and a Worker invocation may write
+ * at most 250.
+ */
+export const REAP_LIMIT = 100;
+
+/**
+ * Rejects versions queued before `queuedBefore` (Unix ms) that are still `validating`, the oldest
+ * `limit`: their job was lost, or is stuck far longer than retries and the dead-letter queue
+ * take. Versions not queued yet (`enqueued_at` null) are {@link rejectUnqueued}'s.
  */
 export async function rejectStale(
   db: D1Database,
   queuedBefore: number,
   report: VersionReport,
   now: number,
+  limit = REAP_LIMIT,
 ): Promise<string[]> {
   const { results } = await db
     .prepare(
       `UPDATE versions SET status = 'rejected', report = ?2, updated_at = ?3
-       WHERE status = 'validating' AND enqueued_at IS NOT NULL AND enqueued_at < ?1
+       WHERE id IN (SELECT id FROM versions
+         WHERE status = 'validating' AND enqueued_at IS NOT NULL AND enqueued_at < ?1
+         ORDER BY enqueued_at LIMIT ?4)
        RETURNING id`,
     )
-    .bind(queuedBefore, JSON.stringify(report), now)
+    .bind(queuedBefore, JSON.stringify(report), now, limit)
     .all<{ id: string }>();
   return results.map((r) => r.id);
 }
@@ -149,8 +159,8 @@ export async function rejectStale(
 export const UNQUEUED_AFTER_MS = 60_000;
 
 /**
- * Rejects every version created before `createdBefore` (Unix ms) that is still `validating` and
- * was never queued, as the deploy API's `abandon` does: `enqueued_at` stays null, so it doesn't
+ * Rejects versions created before `createdBefore` (Unix ms) that are still `validating` and were
+ * never queued (the oldest `limit`), as the deploy API's `abandon` does: `enqueued_at` stays null, so it doesn't
  * count against the daily quota, and the Idempotency-Key is released so a retry starts over.
  * Without this, a deploy that died without a keyed retry would stay `validating` forever.
  */
@@ -159,14 +169,17 @@ export async function rejectUnqueued(
   createdBefore: number,
   report: VersionReport,
   now: number,
+  limit = REAP_LIMIT,
 ): Promise<string[]> {
   const { results } = await db
     .prepare(
       `UPDATE versions SET status = 'rejected', report = ?2, idempotency_key = NULL, updated_at = ?3
-       WHERE status = 'validating' AND enqueued_at IS NULL AND created_at < ?1
+       WHERE id IN (SELECT id FROM versions
+         WHERE status = 'validating' AND enqueued_at IS NULL AND created_at < ?1
+         ORDER BY created_at LIMIT ?4)
        RETURNING id`,
     )
-    .bind(createdBefore, JSON.stringify(report), now)
+    .bind(createdBefore, JSON.stringify(report), now, limit)
     .all<{ id: string }>();
   return results.map((r) => r.id);
 }

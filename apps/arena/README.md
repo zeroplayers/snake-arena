@@ -12,6 +12,7 @@ Queue consumer, and a cron. Deployed to `api.arena.surninsynergy.dev` (`wrangler
 | `src/protocol.ts`          | the room ↔ matchmaker RPC                                         |
 | `src/checks.ts`            | the checks Queue consumer (versions become `ready` or `rejected`) |
 | `src/db.ts`                | the arena's D1 writes (`lives`, quarantines, named kills)         |
+| `src/room/metrics.ts`      | a room's `room.batch` sums (see "Metrics, logs and alerts")       |
 
 ## Matchmaker
 
@@ -81,6 +82,170 @@ outbox (retried until delivered, so at least once):
 Every ticket a room got ends in exactly one `lifeEnded` or `lifeDropped`, except a `join` the
 matchmaker made itself and saw refused.
 
+## Metrics, logs and alerts
+
+The arena writes Workers Analytics Engine events through `@zerosnake/observability`
+(`writeMetric`), to the `METRICS` binding: dataset `zerosnake_dev` locally, `zerosnake_staging`
+on staging, the same dataset as `apps/web`. Field order and column layout (`blob1` = event name,
+`blob2` = `arena`, then the event's blobs from `blob3` and doubles from `double2`; `double1` = 1)
+are fixed in [`packages/observability`](../../packages/observability/README.md). Without the
+binding (tests, a Worker deployed without it) nothing is written, and a write that throws is
+ignored: metrics never stop a room, the matchmaker or the consumer.
+
+| event                 | written by                                                | columns used below                                                                                                                                                                                                                                                          |
+| --------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `room.started`        | `RoomDO.start` (a new room)                               | `blob3` roomId, `blob4` mode, `double2` maxSnakes                                                                                                                                                                                                                           |
+| `room.batch`          | `RoomDO`, sums of its batches, at most every 30 s a room  | `blob3` roomId, `blob4` mode; `double2` ticks, `double5` botTicks, `double6` batches, `double7` livesStarted, `double8` livesEnded, `double9` wallMs, `double10` maxWallMs, `double11` periodMs, `double12` spectators, `double13` watched, `double14` cut, `double15` tick |
+| `room.crashed`        | `RoomDO`: each backstop incident, and alarms that threw   | `blob3` roomId, `blob4` cause (`restart`, `overrun`, `suspect`, `evicted`, `overran`, `exception`), `blob5` versionId; `double2` incidents in 24 h                                                                                                                          |
+| `room.evicted`        | `RoomDO`: the backstop evicted a life                     | `blob3` roomId, `blob4` versionId                                                                                                                                                                                                                                           |
+| `version.quarantined` | `RoomDO` (`room`, `kills`), `MatchmakerDO` (`matchmaker`) | `blob3` versionId, `blob4` by                                                                                                                                                                                                                                               |
+| `life.ended`          | `RoomDO`, once the life is delivered                      | `blob3` versionId, `blob4` deathCause (`evicted` and `retired` included), `blob5` roomId                                                                                                                                                                                    |
+| `room.closed`         | `RoomDO`                                                  | `blob3` roomId, `blob4` reason (`empty`, `kill_switch`)                                                                                                                                                                                                                     |
+| `arena.gauge`         | `MatchmakerDO` alarm, once a minute                       | `double2` rooms, `double3` lives in flight, `double4` lives waiting, `double5` playable bots, `double6` bots out of today's quota, `double7` paused                                                                                                                         |
+| `room.stalled`        | `MatchmakerDO` room check (every minute per room)         | `blob3` roomId, `blob4` reason (`no_progress`, `outbox_full`), `double3` stalledMs                                                                                                                                                                                          |
+| `checks.finished`     | checks consumer and its cron                              | `blob3` outcome (`ready`, `superseded`, `rejected`, `unchanged`, `missing`, `failed`, `dead_letter`, `malformed`, `reaped`), `blob4` reason; `double2` durationMs, `double3` attempt                                                                                        |
+
+Overhead: nothing per tick. A room adds its batches up in memory and writes one `room.batch` per
+`RoomLimits.metricsMs` (30 s; an eviction loses at most that much of a room's counts), so 200
+rooms write ~7 points a second whatever their batch rate. Lives, incidents and check jobs write
+one point each; the matchmaker one a minute. Analytics Engine takes at most 250 points per
+invocation, so a room's cycle delivers at most `RoomLimits.outboxPerCycle` (100) outbox items,
+and so at most 100 `life.ended`, and the cron reaps at most `REAP_LIMIT` (100) versions of each
+kind; a backlog (after an outage) waits for the next cycle or run instead of being undercounted.
+
+**CPU.** Workers freeze the clock during CPU work, so code can't measure its own CPU. `wallMs`
+is the wall time of a batch's simulation, from its first bot call to its saved result (a timer
+moves the clock there): the bots, the engine, the commit and, in watch mode, the markers' syncs
+and random waits. The I/O around it (deliveries, the kill switch read, labels for spectators,
+loading bundles after a restart) is not in it. `workUnits` (`double4`) is the sandbox's
+deterministic cost of the bot code. DO CPU itself is in the dashboard (Workers & Pages →
+`zerosnake-arena-staging` → Metrics → Durable Objects) and the GraphQL dataset
+`durableObjectsInvocationsAdaptiveGroups` (`cpuTime`). `room.crashed` with cause `overrun` /
+`suspect` / `evicted` is a batch killed by (or suspected of) the CPU limit, `overran` a watched
+call that ran past the room's budget, `cut` a batch watch mode ended early.
+
+**Logs.** Incidents are also structured logs (`log()`, indexed by Workers Logs): `room.crashed`
+(`error`, `warn` for `restart`), `room.evicted`, `version.quarantined`, `room.outbox_full`,
+`room.outbox_failed`, `room.stalled`, `room.closed`, `checks.finished` (`error` for `failed`),
+`checks.malformed`, `checks.reaped`, `matchmaker.alarm_failed`, `matchmaker.room_start_failed`.
+Filter on `event` and `roomId` (Workers & Pages → `zerosnake-arena-staging` → Logs).
+
+### Dashboard
+
+Queries for the Analytics Engine SQL API (see the package README for `curl`), or as panels in
+Grafana's Cloudflare Analytics Engine data source. In a Cloudflare Monitor write the table as
+`events.analyticsEngine.zerosnake_staging`. Sums weigh each row by `_sample_interval`.
+
+```sql
+-- Rooms by mode (rooms that ran a batch in the last 2 minutes)
+SELECT blob4 AS mode, count(DISTINCT blob3) AS rooms
+FROM zerosnake_staging WHERE blob1 = 'room.batch' AND timestamp > NOW() - INTERVAL '2' MINUTE
+GROUP BY mode
+
+-- Ticks per second, the whole arena, per minute
+SELECT toStartOfInterval(timestamp, INTERVAL '1' MINUTE) AS t,
+       SUM(_sample_interval * double2) / 60 AS ticks_per_s
+FROM zerosnake_staging WHERE blob1 = 'room.batch' AND timestamp > NOW() - INTERVAL '6' HOUR
+GROUP BY t ORDER BY t
+
+-- Ticks per second per room, slowest first (last 10 minutes)
+SELECT blob3 AS room, argMax(blob4, timestamp) AS mode,
+       SUM(_sample_interval * double2) * 1000 / SUM(_sample_interval * double11) AS ticks_per_s,
+       max(double12) AS spectators
+FROM zerosnake_staging WHERE blob1 = 'room.batch' AND timestamp > NOW() - INTERVAL '10' MINUTE
+GROUP BY room ORDER BY ticks_per_s LIMIT 20
+
+-- Lives started per hour
+SELECT toStartOfInterval(timestamp, INTERVAL '1' HOUR) AS hour,
+       SUM(_sample_interval * double7) AS started
+FROM zerosnake_staging WHERE blob1 = 'room.batch' AND timestamp > NOW() - INTERVAL '1' DAY
+GROUP BY hour ORDER BY hour
+
+-- Lives ended per hour, by cause (evicted and retired included)
+SELECT toStartOfInterval(timestamp, INTERVAL '1' HOUR) AS hour, blob4 AS cause,
+       SUM(_sample_interval) AS lives
+FROM zerosnake_staging WHERE blob1 = 'life.ended' AND timestamp > NOW() - INTERVAL '1' DAY
+GROUP BY hour, cause ORDER BY hour, lives DESC
+
+-- Batches: wall time, watch mode, cut short (per 5 minutes)
+SELECT toStartOfInterval(timestamp, INTERVAL '5' MINUTE) AS t,
+       SUM(_sample_interval * double6) AS batches,
+       SUM(_sample_interval * double9) / SUM(_sample_interval * double6) AS avg_wall_ms,
+       max(double10) AS max_wall_ms,
+       SUM(_sample_interval * double13) AS watched, SUM(_sample_interval * double14) AS cut,
+       SUM(_sample_interval * double4) / SUM(_sample_interval * double5) AS work_per_bot_tick
+FROM zerosnake_staging WHERE blob1 = 'room.batch' AND timestamp > NOW() - INTERVAL '6' HOUR
+GROUP BY t ORDER BY t
+
+-- Backstop incidents by cause, per hour
+SELECT toStartOfInterval(timestamp, INTERVAL '1' HOUR) AS hour, blob4 AS cause,
+       SUM(_sample_interval) AS n
+FROM zerosnake_staging WHERE blob1 = 'room.crashed' AND timestamp > NOW() - INTERVAL '1' DAY
+GROUP BY hour, cause ORDER BY hour
+
+-- Evictions and quarantines, per version (last 7 days)
+SELECT blob1 AS event, if(blob1 = 'room.evicted', blob4, blob3) AS version,
+       SUM(_sample_interval) AS n
+FROM zerosnake_staging
+WHERE blob1 IN ('room.evicted', 'version.quarantined') AND timestamp > NOW() - INTERVAL '7' DAY
+GROUP BY event, version ORDER BY n DESC
+
+-- Matchmaker: rooms, lives in flight and waiting, quota exhaustion (per 5 minutes)
+SELECT toStartOfInterval(timestamp, INTERVAL '5' MINUTE) AS t,
+       max(double2) AS rooms, max(double3) AS live, max(double4) AS waiting,
+       max(double5) AS playable_bots, max(double6) AS out_of_quota, max(double7) AS paused
+FROM zerosnake_staging WHERE blob1 = 'arena.gauge' AND timestamp > NOW() - INTERVAL '1' DAY
+GROUP BY t ORDER BY t
+
+-- Checks consumer: outcomes and durations per hour
+SELECT toStartOfInterval(timestamp, INTERVAL '1' HOUR) AS hour, blob3 AS outcome,
+       SUM(_sample_interval) AS jobs,
+       quantileExactWeighted(0.5)(double2, _sample_interval) AS p50_ms,
+       quantileExactWeighted(0.95)(double2, _sample_interval) AS p95_ms
+FROM zerosnake_staging WHERE blob1 = 'checks.finished' AND timestamp > NOW() - INTERVAL '1' DAY
+GROUP BY hour, outcome ORDER BY hour
+
+-- Why versions are rejected (last 7 days)
+SELECT blob4 AS reason, SUM(_sample_interval) AS n
+FROM zerosnake_staging
+WHERE blob1 = 'checks.finished' AND blob3 IN ('rejected', 'reaped', 'dead_letter')
+  AND timestamp > NOW() - INTERVAL '7' DAY
+GROUP BY reason ORDER BY n DESC
+```
+
+### Alerts
+
+Set up as Cloudflare **Monitors** (Alerts → Monitors → Create a Monitor → Threshold → custom SQL
+returning one column `value`, Automatic time range, every 5 minutes), as in
+[`apps/web/README.md`](../web/README.md#alerts). Monitors and the SQL API are in beta, so check
+the query preview when saving. `<window>` is the Monitor's time range.
+
+| alert             | query (`FROM events.analyticsEngine.zerosnake_staging WHERE timestamp > NOW() - <window> AND …`)                                                                                                      | fire when |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| Room crashed      | `SELECT SUM(_sample_interval) AS value … blob1 = 'room.crashed' AND blob4 != 'restart'`                                                                                                               | `> 0`     |
+| Rooms stuck       | `SELECT SUM(_sample_interval) AS value … blob1 = 'room.stalled'`                                                                                                                                      | `> 0`     |
+| Arena not ticking | `SELECT if(max(if(blob1 = 'arena.gauge', double2, 0)) > 0 AND SUM(if(blob1 = 'room.batch', _sample_interval * double2, 0)) = 0, 1, 0) AS value … blob1 IN ('arena.gauge', 'room.batch')` (10 minutes) | `> 0`     |
+| Consumer failing  | `SELECT SUM(_sample_interval) AS value … blob1 = 'checks.finished' AND blob3 IN ('failed', 'dead_letter')` (15 minutes)                                                                               | `> 3`     |
+| Consumer gave up  | `SELECT SUM(_sample_interval) AS value … blob1 = 'checks.finished' AND blob3 IN ('dead_letter', 'reaped')`                                                                                            | `> 0`     |
+| Kill storm        | `SELECT SUM(_sample_interval) AS value … blob1 = 'room.crashed' AND blob4 IN ('overrun', 'suspect', 'evicted', 'overran')` (15 minutes)                                                               | `> 5`     |
+| Quarantines       | `SELECT SUM(_sample_interval) AS value … blob1 = 'version.quarantined'` (1 hour)                                                                                                                      | `> 2`     |
+- **Room crashed** is #30's "an alert fires when a room crashes". `restart` is left out: a deploy
+  or an eviction interrupting a batch is one, and counts for nothing. An alarm that threw is
+  one `exception`: the recovery from its batch marker logs, but doesn't write, a second point.
+- **Rooms stuck** fires when the matchmaker finds a running room whose tick didn't move for a
+  minute or more: `outbox_full` means D1, R2 or the matchmaker keep failing for that room (its
+  `room.outbox_failed` logs say which), `no_progress` that its alarm stopped. **Arena not
+  ticking** catches the case where no room writes anything while the matchmaker counts rooms
+  open (e.g. every room stuck before the matchmaker checks them, or the alarms not running).
+  The site's **No lives recorded** liveness alert covers the matchmaker itself.
+- **Consumer failing**: jobs erroring on our side (R2, D1) and retried; each one's
+  `checks.finished` log has the error. A burst of `dead_letter` / `reaped` means versions are
+  being rejected with `checks_failed_to_complete`: usually jobs killed by the CPU limit.
+- **Kill storm**: the CPU backstop firing in many rooms, i.e. a bot the sandbox's meter can't
+  charge. Group the same query by `blob5` (the version a kill named) and `blob3` (room) to find
+  it; evictions and quarantines follow by themselves, and the kill switch (`/admin`) stops the
+  arena if they don't.
+
 ## Tests
 
 `pnpm test` runs everything in workerd through Miniflare (`src/testing/harness.ts`): D1 migrated
@@ -88,3 +253,6 @@ from `apps/web`, R2 and Durable Object storage persisted to a temp dir, so `rest
 like an eviction. `src/matchmaker.test.ts` runs the real matchmaker against `FakeRoom`s
 (`src/testing/matchmaker-worker.ts`: rooms without a simulation, stepped by the test, that record
 any second snake of an author) for the 200-bot simulation, and against real rooms end to end.
+The harnesses' `metrics` option puts a test `METRICS` binding in place
+(`src/testing/metrics.ts`) that keeps every point (`record`) or throws on each write (`throw`);
+without it there is none, as in most tests. `*.metrics.test.ts` check the points' fields.

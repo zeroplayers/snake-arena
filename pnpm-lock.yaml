@@ -32,6 +32,9 @@ importers:
       '@zerosnake/house-bots':
         specifier: workspace:*
         version: link:../../bots/house
+      '@zerosnake/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
       '@zerosnake/sandbox':
         specifier: workspace:*
         version: link:../../packages/sandbox

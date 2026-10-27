@@ -60,6 +60,9 @@
       { "name": "SHOWCASE", "class_name": "ShowcaseDO" }
     ]
   },
+  // Metrics (`@zerosnake/observability`): one Analytics Engine dataset per environment, shared
+  // with apps/web. Without the binding nothing is written.
+  "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "zerosnake_dev" }],
   // Rejects versions whose check job was lost (`reapStaleVersions`). Inherited by environments.
   "triggers": { "crons": ["*/30 * * * *"] },
 
@@ -102,7 +105,8 @@
           { "name": "ROOMS", "class_name": "RoomDO" },
           { "name": "SHOWCASE", "class_name": "ShowcaseDO" }
         ]
-      }
+      },
+      "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "zerosnake_staging" }]
     }
   }
 }

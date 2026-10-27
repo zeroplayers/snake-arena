@@ -18,6 +18,7 @@ import type {
 import type { LifeStarter } from "../room/sim.ts";
 import { RoomDO as BaseRoomDO } from "../room.ts";
 import { handleShowcase } from "../showcase.ts";
+import { type DataPoint, sqlPoints, withTestMetrics } from "./metrics.ts";
 
 export { ShowcaseDO } from "../showcase.ts";
 
@@ -43,13 +44,27 @@ function spin(ms: number): void {
 const INSTRUMENT_DELAY_KEY = "test:instrumentDelayMs";
 /** Storage key of how many more trace uploads `failTraces` makes fail. */
 const TRACE_FAILURES_KEY = "test:traceFailures";
+/** Storage key of `slowTraces`'s delay. */
+const TRACE_DELAY_KEY = "test:traceDelayMs";
+/** Storage key of how many more bundles `failInstrument` makes fail to instrument. */
+const INSTRUMENT_FAILURES_KEY = "test:instrumentFailures";
 
 /**
  * The real room, but each bot tick may ask the host to burn CPU through its log. That's what an
  * operation the sandbox's meter can't charge looks like to the room: a call that doesn't return.
  * The tests don't depend on which such holes the sandbox still has (#62 closed the string ones).
+ * With the harness's `metrics` option, its `METRICS` is the test binding (`metrics.ts`).
  */
 export class RoomDO extends BaseRoomDO {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, withTestMetrics(env, sqlPoints(ctx.storage.sql).write));
+  }
+
+  /** The metric points the room wrote (with the harness's `metrics: "record"`). */
+  async metricPoints(): Promise<DataPoint[]> {
+    return sqlPoints(this.ctx.storage.sql).read();
+  }
+
   /**
    * Makes instrumenting each bundle take `ms` longer (wall time), as on a slow machine, for this
    * room from now on.
@@ -63,16 +78,33 @@ export class RoomDO extends BaseRoomDO {
     await this.ctx.storage.put(TRACE_FAILURES_KEY, n);
   }
 
+  /** Makes each trace upload to R2 take `ms` longer (wall time) from now on. */
+  async slowTraces(ms: number): Promise<void> {
+    await this.ctx.storage.put(TRACE_DELAY_KEY, ms);
+  }
+
+  /** Makes the next `n` bundles fail to instrument: the batch throws after its marker is saved. */
+  async failInstrument(n: number): Promise<void> {
+    await this.ctx.storage.put(INSTRUMENT_FAILURES_KEY, n);
+  }
+
   protected override async putTrace(key: string, json: Uint8Array): Promise<void> {
     const failures = (await this.ctx.storage.get<number>(TRACE_FAILURES_KEY)) ?? 0;
     if (failures > 0) {
       await this.ctx.storage.put(TRACE_FAILURES_KEY, failures - 1);
       throw new Error("R2 is down (test)");
     }
+    const ms = (await this.ctx.storage.get<number>(TRACE_DELAY_KEY)) ?? 0;
+    if (ms > 0) await new Promise((r) => setTimeout(r, ms));
     return super.putTrace(key, json);
   }
 
   protected override async instrumentBundle(source: string): Promise<InstrumentResult> {
+    const failures = (await this.ctx.storage.get<number>(INSTRUMENT_FAILURES_KEY)) ?? 0;
+    if (failures > 0) {
+      await this.ctx.storage.put(INSTRUMENT_FAILURES_KEY, failures - 1);
+      throw new Error("instrumenting failed (test)");
+    }
     const ms = (await this.ctx.storage.get<number>(INSTRUMENT_DELAY_KEY)) ?? 0;
     if (ms > 0) await new Promise((r) => setTimeout(r, ms));
     return super.instrumentBundle(source);

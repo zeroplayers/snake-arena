@@ -1,4 +1,5 @@
 import { type CheckJob, handleChecks, reapStaleVersions } from "./checks";
+import { sweepTraces } from "./traces";
 
 export { MatchmakerDO } from "./matchmaker";
 export { RoomDO } from "./room";
@@ -22,6 +23,11 @@ export default {
   queue: handleChecks,
 
   async scheduled(_controller, env) {
-    await reapStaleVersions(env);
+    const [reaped, swept] = await Promise.allSettled([
+      reapStaleVersions(env),
+      sweepTraces(env.TRACES, Date.now()),
+    ]);
+    if (swept.status === "rejected") console.error("trace sweep failed", swept.reason);
+    if (reaped.status === "rejected") throw reaped.reason;
   },
 } satisfies ExportedHandler<Env, CheckJob>;

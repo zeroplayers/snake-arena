@@ -43,6 +43,16 @@ To apply by hand:
 cd apps/web && pnpm exec wrangler d1 migrations apply DB --env staging --remote
 ```
 
+**Trace retention**: life traces (R2 `zerosnake-staging-traces`, `apps/web/src/shared/trace.ts`) are
+kept 7 days. Add the lifecycle rule once per bucket:
+
+```bash
+cd apps/arena && pnpm exec wrangler r2 bucket lifecycle add zerosnake-staging-traces expire-traces --expire-days 7
+```
+
+Without it the arena's cron (every 30 minutes, `apps/arena/src/traces.ts`) deletes them anyway, up to
+10,000 per run; the rule just makes that a no-op.
+
 **Admins, rate limits, metrics and alerts**: see "Operations" in
 [`apps/web/README.md`](apps/web/README.md#operations). Set `ADMIN_USER_IDS` / `ADMIN_GITHUB_IDS`
 in `env.staging.vars` for `/admin`. The rate limit and Analytics Engine bindings need nothing

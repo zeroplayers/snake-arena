@@ -47,6 +47,11 @@ export interface LifeResult {
    * The object exists before the row is written. Earlier chunks of the room precede it by tick.
    */
   replayKey: string;
+  /**
+   * R2 key (TRACES) of the life's trace (apps/web `src/shared/trace.ts`), or null if none was
+   * recorded. Like the replay chunk, the object exists before the row is written.
+   */
+  traceKey?: string | null;
   /** Wall-clock ms. */
   startedAt: number;
   endedAt: number;

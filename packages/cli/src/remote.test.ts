@@ -5,9 +5,16 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatReport, runChecks } from "@zerosnake/checks";
-import type { DeployRequest, CheckReport as WebCheckReport } from "@zerosnake/web/shared";
+import {
+  type DeployRequest,
+  printable,
+  type TraceResponse,
+  type TraceTick,
+  type CheckReport as WebCheckReport,
+} from "@zerosnake/web/shared";
 import { afterAll, describe, expect, it } from "vitest";
 import { main } from "./cli.ts";
+import { DEFAULT_CONTEXT } from "./commands/logs.ts";
 import { Credentials } from "./remote/config.ts";
 import { apiError, FakeArena, htmlNotFound, SERVER } from "./testing/fake-arena.ts";
 import {
@@ -613,7 +620,7 @@ describe("zerosnake logs", () => {
     expect(r.out).toContain("my-snake v1 · ready (active)");
     expect(r.out).toContain('"eat more"');
     expect(r.out).toContain("✓ loads");
-    expect(r.out).toContain("The CLI can't list lives yet (zeroplayers/snake-arena#25)");
+    expect(r.out).toContain("This server can't list lives yet.");
     expect(r.out).toContain(`${SERVER}/@ada/my-snake?v=1`);
   });
 
@@ -650,9 +657,108 @@ describe("zerosnake logs", () => {
 
     const deaths = await run(["logs", "--deaths", "--version", "1"]);
     expect(deaths.out).not.toContain("alive");
-    expect(arena.calls("GET", /lives/).at(-1)?.path).toBe(
+    expect(arena.calls("GET", /\/lives\?/).at(-1)?.path).toBe(
       "/api/bots/my-snake/versions/1/lives?limit=20&deaths=1",
     );
+  });
+
+  it("--deaths shows what the bot saw, returned, spent and logged before its latest deaths", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("my-snake");
+    expect((await run(["deploy", "--skip-local-checks"])).code).toBe(0);
+    arena.livesEndpoint = true;
+    const life = { startedAt: "2026-10-27T10:00:00Z", score: 3, lengthMax: 9, kills: 0 };
+    arena.lives = [
+      {
+        ...life,
+        id: "l4",
+        endedAt: "2026-10-27T10:09:00Z",
+        deathCause: "wall",
+        killer: null,
+        hasTrace: true,
+      },
+      {
+        ...life,
+        id: "l3",
+        endedAt: "2026-10-27T10:08:00Z",
+        deathCause: "collision",
+        killer: "@bob/viper v2",
+        hasTrace: true,
+      },
+      {
+        ...life,
+        id: "l2",
+        endedAt: "2026-10-27T10:07:00Z",
+        deathCause: "wall",
+        killer: null,
+        hasTrace: false,
+      },
+      {
+        ...life,
+        id: "l1",
+        endedAt: "2026-10-27T10:06:00Z",
+        deathCause: "wall",
+        killer: null,
+        hasTrace: true,
+      },
+    ];
+    arena.traces = {
+      l3: traceFixture(),
+      l4: apiError(410, "trace_expired", "This life's trace is gone: traces are kept 7 days."),
+    };
+    const r = await run(["logs", "--deaths", "--context", "2"]);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("Life l4: This life's trace is gone");
+    expect(r.out).toContain("Life l3: ran into @bob/viper v2 at room tick 160, after 60 ticks");
+    expect(r.out).toContain(
+      "60 bot calls, 0 errors, 1 timeouts; cost per tick: peak 90%, mean 4.0%",
+    );
+    expect(r.out).toContain("The room restarted at tick 120");
+    expect(r.out).toContain("init log: hello");
+    expect(r.out).toContain("Last 2 ticks");
+    expect(r.out).toContain(
+      "[58] head (1.5, -2) angle 0.3 length 12 wall 40.2 | 2 snakes, nearest @bob HEAD (length 30) gap 0.4 | 5 food, nearest 3.1 | turn -0.25 boost | 90%, 9 ops timeout",
+    );
+    expect(r.out).toContain("log: dodging bob");
+    expect(r.out).toContain("error: over budget");
+    expect(r.out).toContain("[59] head");
+    expect(r.out).not.toContain("[57] head");
+    // Three deaths with a trace at most, never one without.
+    const asked = arena.calls("GET", /\/api\/lives\//).map((c) => c.path);
+    expect(asked).toEqual(["/api/lives/l4/trace", "/api/lives/l3/trace", "/api/lives/l1/trace"]);
+  });
+
+  it("prints no control or bidi characters from a trace's logs", async () => {
+    const { arena, run } = setUp();
+    const trace = traceFixture();
+    const nasty = "a\x1b[2Jb\x9b31mc\x7fd\u202ee\u2066f\ud800g\r\nh";
+    trace.load = { log: [nasty], error: nasty };
+    trace.full[59] = { ...(trace.full[59] as TraceTick), log: [nasty], error: nasty };
+    arena.traces = { l3: trace };
+    const r = await run(["logs", "--life", "l3"]);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("init log: a?[2Jb?31mc?d?e?f?g??h");
+    expect(r.out).toContain("init error: a?[2Jb");
+    expect(r.out).toContain("log: a?[2Jb?31mc?d?e?f?g??h");
+    expect(r.out).toContain("error: a?[2Jb");
+    for (const line of r.out.split("\n")) expect(printable(line)).toBe(line);
+  });
+
+  it("--life shows one life's death context, and why it can't", async () => {
+    const { arena, run } = setUp();
+    arena.traces = {
+      l3: traceFixture(),
+      theirs: apiError(403, "not_life_owner", "That life is someone else's bot's."),
+    };
+    const r = await run(["logs", "--life", `${SERVER}/replay/l3`]);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("Life l3: ran into @bob/viper v2");
+    expect(r.out.match(/\] head/g)).toHaveLength(DEFAULT_CONTEXT);
+    expect(r.out).toContain(`replay: ${SERVER}/replay/l3`);
+    const other = await run(["logs", "--life", "theirs"]);
+    expect(other.code).toBe(1);
+    expect(other.err).toContain("someone else's");
+    expect((await run(["logs", "--life", "x", "--context", "101"])).code).toBe(2);
   });
 
   it("shows why a version was rejected", async () => {
@@ -685,3 +791,79 @@ describe("help", () => {
     expect(io.stdout()).not.toContain("Coming soon: login");
   });
 });
+
+/** A life of 60 ticks that ran into @bob's head after a timeout. */
+function traceFixture(): TraceResponse {
+  const tick = (lifeTick: number): TraceTick => ({
+    tick: 100 + lifeTick,
+    lifeTick,
+    turn: 0.1,
+    boost: false,
+    outcome: "ok",
+    work: 1_000_000,
+    ops: 1,
+    log: [],
+    seen: {
+      x: 1,
+      y: 2,
+      angle: 0,
+      length: 12,
+      wall: 41,
+      snakes: 1,
+      food: 0,
+      nearest: null,
+      foodDist: null,
+    },
+  });
+  const full = Array.from({ length: 60 }, (_, i) => tick(i));
+  full[58] = {
+    ...tick(58),
+    turn: -0.25,
+    boost: true,
+    outcome: "timeout",
+    error: "over budget",
+    work: 9_000_000,
+    ops: 9,
+    log: ["dodging bob"],
+    seen: {
+      x: 1.5,
+      y: -2,
+      angle: 0.3,
+      length: 12,
+      wall: 40.2,
+      snakes: 2,
+      food: 5,
+      nearest: { id: "lb", author: "bob", gap: 0.4, length: 30, head: true },
+      foodDist: 3.1,
+    },
+  };
+  return {
+    format: 1,
+    lifeId: "l3",
+    versionId: "v1",
+    roomId: "r",
+    startTick: 100,
+    endTick: 160,
+    cause: "collision",
+    killer: "v-bob",
+    killerName: "@bob/viper v2",
+    budget: { ops: 10, work: 10_000_000, logBytes: 1024 },
+    totals: {
+      ticks: 60,
+      timeouts: 1,
+      errors: 0,
+      skipped: 0,
+      maxWork: 9_000_000,
+      sumWork: 24_000_000,
+      maxOps: 9,
+      logTicks: 1,
+      logBytes: 11,
+    },
+    load: { log: ["hello"] },
+    restarts: [120],
+    sampleEvery: 1,
+    sampled: [],
+    events: [],
+    full,
+  };
+}

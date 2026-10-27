@@ -131,6 +131,39 @@ describe("ReplaySource", () => {
     expect(source.trace(rec.frames.at(-1)?.[0]?.id ?? "", source.lastTick)).toBeUndefined();
   });
 
+  it("adds a life's recorded logs and cost to its trace", () => {
+    const own = new ReplaySource(rec.chunks);
+    const id = rec.frames[10]?.[0]?.id as string;
+    const tick = (t: number) => ({
+      tick: t,
+      lifeTick: t,
+      turn: 0,
+      boost: false,
+      outcome: "ok" as const,
+      work: 5,
+      ops: t,
+      log: [`at ${t}`],
+      seen: {
+        x: 0,
+        y: 0,
+        angle: 0,
+        length: 1,
+        wall: 1,
+        snakes: 0,
+        food: 0,
+        nearest: null,
+        foodDist: null,
+      },
+    });
+    own.setTrace(id, [tick(10), { ...tick(11), logCut: true }]);
+    expect(own.trace(id, 10)).toMatchObject({ logs: ["at 10"], ops: 10 });
+    expect(own.trace(id, 10)?.action?.turn).toBeCloseTo(rec.turns[10]?.get(id) ?? NaN, 12);
+    expect(own.trace(id, 11)).toMatchObject({ logs: ["at 11"], logTruncated: true });
+    // Downsampled away: the recorded action only.
+    expect(own.trace(id, 12)?.logs).toBeUndefined();
+    expect(source.trace(id, 10)?.logs).toBeUndefined();
+  });
+
   it("labels lives with the caller's names and colours", () => {
     const labelled = new ReplaySource(rec.chunks, {
       label: (s, i) => ({ bot: `bot ${s.author}`, author: `@${s.author}`, color: `#00000${i}` }),

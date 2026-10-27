@@ -87,9 +87,12 @@ export interface LifeRow {
   ticks: number | null;
   deathCause: DeathCauseColumn | null;
   killer: Killer | null;
+  startedAt: string;
   endedAt: string | null;
   /** Whether `/replay/{id}` has a recording to show. */
   hasReplay: boolean;
+  /** Whether a trace was recorded (its owner can read it for `TRACE_RETENTION_DAYS`). */
+  hasTrace: boolean;
 }
 
 export type Killer =
@@ -212,9 +215,9 @@ function rejection(report: CheckReport | null): string | null {
   return failed.message ? `${failed.name}: ${failed.message}` : failed.name;
 }
 
-const killerVersion = alias(versions, "killer_version");
-const killerBot = alias(bots, "killer_bot");
-const killerUser = alias(users, "killer_user");
+export const killerVersion = alias(versions, "killer_version");
+export const killerBot = alias(bots, "killer_bot");
+export const killerUser = alias(users, "killer_user");
 
 /** Latest finished lives of a version (`lives_version_ended_idx`), killers resolved. */
 export async function recentLives(db: Db, versionId: string, limit = RECENT_LIVES) {
@@ -229,6 +232,8 @@ export async function recentLives(db: Db, versionId: string, limit = RECENT_LIVE
       deathCause: lives.deathCause,
       killer: lives.killer,
       replayKey: lives.replayKey,
+      traceKey: lives.traceKey,
+      startedAt: lives.startedAt,
       endedAt: lives.endedAt,
       killerAuthor: killerUser.username,
       killerBotName: killerBot.name,
@@ -252,13 +257,15 @@ export async function recentLives(db: Db, versionId: string, limit = RECENT_LIVE
       ticks: r.endTick === null ? null : r.endTick - r.startTick,
       deathCause: r.deathCause,
       killer: killer(r),
+      startedAt: r.startedAt.toISOString(),
       endedAt: r.endedAt?.toISOString() ?? null,
       hasReplay: r.replayKey !== null,
+      hasTrace: r.traceKey !== null,
     }),
   );
 }
 
-function killer(r: {
+export function killer(r: {
   killer: string | null;
   killerAuthor: string | null;
   killerBotName: string | null;

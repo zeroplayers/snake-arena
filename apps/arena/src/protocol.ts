@@ -130,6 +130,8 @@ export interface RoomLimits {
    * `SPECTATOR_GRACE_MS` (30 s).
    */
   spectatorGraceMs?: number;
+  /** A spectator that acks nothing for this long is closed. Default `ACK_TIMEOUT_MS` (30 s). */
+  spectatorAckTimeoutMs?: number;
 }
 
 export type JoinResult =

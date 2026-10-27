@@ -44,7 +44,10 @@ class FakeSocket extends EventTarget {
 function room(stream = 1) {
   const world = createWorld({ seed: 4, config: { arenaRadius: 60 } });
   for (const id of ["a", "b", "c"]) spawnSnake(world, { id, author: `${id}-author` });
-  const encoder = new BroadcastEncoder(world, { stream, room: "r1", bot: (id) => `v-${id}` });
+  const encoder = new BroadcastEncoder(world, {
+    stream,
+    label: (id) => ({ author: `${id}-author`, bot: `bot-${id}`, version: 2, house: id === "c" }),
+  });
   return {
     world,
     encoder,
@@ -64,7 +67,7 @@ function room(stream = 1) {
 
 function expectFrame(source: BroadcastSource, world: World): void {
   const snap = source.snapshot(world.tick);
-  expect(snap?.frame.snakes.map((s) => s.id)).toEqual(world.snakes.map((s) => s.id));
+  expect(snap?.frame.snakes).toHaveLength(world.snakes.length);
   snap?.frame.snakes.forEach((s, i) => {
     const w = world.snakes[i] as World["snakes"][number];
     expect(s.segments).toHaveLength(w.segments.length);
@@ -99,7 +102,8 @@ describe("BroadcastSource", () => {
     const source = await opening;
     expect(source.status).toBe("live");
     expect(source.info).toMatchObject({ tps: 10, arenaRadius: 60, liveDelay: DEFAULT_LIVE_DELAY });
-    expect(source.info.title).toBe("r1");
+    // The room sends no name of its own.
+    expect(source.info.title).toBeUndefined();
     expect(source.firstTick).toBe(0);
     expect(source.lastTick).toBe(0);
     expectFrame(source, r.world);
@@ -111,13 +115,15 @@ describe("BroadcastSource", () => {
     // Acked what it applied.
     expect(latest().acks()).toEqual([0, 10]);
 
-    expect(source.snapshot(1)?.deaths).toEqual(["c"]);
-    expect(source.life("c")?.death).toMatchObject({ tick: 1, cause: "error", killerId: null });
+    // Lives are known by their slot in the stream; bots by slug and version.
+    expect(source.snapshot(1)?.deaths).toEqual(["1.2"]);
+    expect(source.life("1.2")?.death).toMatchObject({ tick: 1, cause: "error", killerId: null });
     expect(source.lives().map((l) => [l.id, l.bot, l.author])).toEqual([
-      ["a", "v-a", "a-author"],
-      ["b", "v-b", "b-author"],
-      ["c", "v-c", "c-author"],
+      ["1.0", "bot-a v2", "a-author"],
+      ["1.1", "bot-b v2", "b-author"],
+      ["1.2", "bot-c", "c-author"],
     ]);
+    expect(source.snapshot(0)?.snakes.map((s) => s.id)).toEqual(["1.0", "1.1", "1.2"]);
     expect(new Set(source.lives().map((l) => l.color)).size).toBe(3);
     source.dispose();
   });
@@ -235,6 +241,66 @@ describe("BroadcastSource", () => {
     for (let i = 0; i < 10; i++) latest().deliver(r.ticks(10));
     followLive(playback);
     expect(source.lastTick - playback.position).toBe(DEFAULT_LIVE_DELAY);
+    source.dispose();
+  });
+
+  it("suspend closes the socket until resume, which skips to the newest tick", async () => {
+    const r = room();
+    const statuses: string[] = [];
+    const opening = BroadcastSource.open({
+      connect,
+      timeoutMs: 1000,
+      onStatus: (status) => statuses.push(status),
+    });
+    latest().deliver(r.keyframe());
+    const source = await opening;
+    latest().deliver(r.ticks(10));
+    const ws = latest();
+
+    source.suspend();
+    expect(source.status).toBe("suspended");
+    expect(ws.closedWith).toBe(1000);
+    // No reconnect while suspended, however long.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(sockets).toHaveLength(1);
+    expect(source.snapshot(10)).toBeDefined();
+
+    r.ticks(50); // happened while away
+    source.resume();
+    expect(sockets).toHaveLength(2);
+    expect(source.status).toBe("reconnecting");
+    latest().deliver(r.keyframe());
+    expect(source.status).toBe("live");
+    expect(source.firstTick).toBe(60);
+    expectFrame(source, r.world);
+    expect(statuses).toEqual(["live", "suspended", "reconnecting", "live"]);
+    source.dispose();
+  });
+
+  it("reports each failed attempt in a row, so the page can give up", async () => {
+    const r = room();
+    const seen: [string, number][] = [];
+    const opening = BroadcastSource.open({
+      connect,
+      timeoutMs: 1000,
+      onStatus: (status, failures) => seen.push([status, failures]),
+    });
+    latest().deliver(r.keyframe());
+    const source = await opening;
+    latest().drop();
+    await vi.advanceTimersByTimeAsync(1000);
+    latest().drop();
+    await vi.advanceTimersByTimeAsync(2000);
+    latest().drop();
+    expect(seen).toEqual([
+      ["live", 0],
+      ["reconnecting", 1],
+      ["reconnecting", 2],
+      ["reconnecting", 3],
+    ]);
+    await vi.advanceTimersByTimeAsync(4000);
+    latest().deliver(r.keyframe());
+    expect(seen.at(-1)).toEqual(["live", 0]);
     source.dispose();
   });
 });

@@ -4,6 +4,7 @@ import {
   BroadcastEncoder,
   BroadcastFormatError,
   BroadcastGapError,
+  type BroadcastLabel,
   BroadcastView,
   decodeBroadcast,
   encodeBroadcast,
@@ -16,7 +17,14 @@ import { place } from "./testing/setup.ts";
 import type { Fault, World } from "./types.ts";
 import { createWorld, spawnSnake } from "./world.ts";
 
-const options = { stream: 7, room: "room-1", bot: (id: string) => `v-${id}` };
+/** Public labels made from the (internal) life id, so tests can tell lives apart by them. */
+const label = (id: string) => ({
+  author: `user-of-${id}`,
+  bot: `bot-${id}`,
+  version: 3,
+  house: false,
+});
+const options = { stream: 7, label };
 
 /** A room as the arena runs it: `snakes` bots, the dead replaced, the odd fault. */
 function room(seed: number, snakes = 15) {
@@ -50,11 +58,11 @@ function room(seed: number, snakes = 15) {
 /** What a spectator must show equals the world, up to float32 rounding. */
 function expectMatches(view: BroadcastView, world: World): void {
   expect(view.tick).toBe(world.tick);
-  expect(view.snakes.map((v) => v.life.id)).toEqual(world.snakes.map((s) => s.id));
+  expect(view.snakes.map((v) => v.life.bot)).toEqual(world.snakes.map((s) => `bot-${s.id}`));
   view.snakes.forEach((v, i) => {
     const s = world.snakes[i] as World["snakes"][number];
-    expect(v.life.author).toBe(s.author);
-    expect(v.life.bot).toBe(`v-${s.id}`);
+    expect(v.life).toMatchObject({ ...label(s.id), slot: expect.any(Number) });
+    expect(v.snake.id).toBe(`${view.stream}.${v.life.slot}`);
     expect(v.life.bornTick).toBe(s.bornTick);
     expect(v.snake.lifeTick).toBe(s.lifeTick);
     expect(v.snake.boosting).toBe(s.boosting);
@@ -129,8 +137,8 @@ describe("broadcast", () => {
     expect(died?.deaths).toEqual([
       expect.objectContaining({ slot: 1, cause: "collision", killerSlot: 0 }),
     ]);
-    expect(view.deaths.map((d) => [d.life.id, d.cause])).toEqual([["b", "collision"]]);
-    expect(view.snakes.map((v) => v.life.id)).toEqual(["a"]);
+    expect(view.deaths.map((d) => [d.life.bot, d.cause])).toEqual([["bot-b", "collision"]]);
+    expect(view.snakes.map((v) => v.life.bot)).toEqual(["bot-a"]);
 
     const late = new BroadcastView();
     late.apply(decodeBroadcast(encodeBroadcast(encoder.keyframe(world))));
@@ -204,15 +212,79 @@ describe("broadcast", () => {
     while (world.food.length < world.config.maxFood) {
       world.food.push({ id: world.nextFoodId++, x: 1, y: 1, value: 1, kind: "remains" });
     }
-    const encoder = new BroadcastEncoder(world, options);
+    const encoder = new BroadcastEncoder(world, {
+      stream: 7,
+      label: (id) => ({
+        author: id.startsWith("big-0-") ? "é".repeat(300) : `a${"🐍".repeat(150)}`,
+        bot: id,
+        version: 1,
+        house: false,
+      }),
+    });
     const bytes = encodeBroadcast(encoder.keyframe(world));
     expect(bytes.length).toBeLessThan(400_000);
     const back = decodeBroadcast(bytes);
     if (back.kind !== "keyframe") throw new Error("not a keyframe");
     // Labels are cut to 100 code units, never inside a character.
     expect(back.snakes[0]?.life?.author).toBe("é".repeat(100));
-    expect(back.snakes[0]?.life?.id).toHaveLength(100);
+    expect(back.snakes[0]?.life?.bot).toHaveLength(100);
     expect(back.snakes[1]?.life?.author).toBe(`a${"🐍".repeat(49)}`);
     expect(back.food).toHaveLength(world.config.maxFood);
   });
+
+  it("sends public labels only: no life, user, version or room ids", () => {
+    const world = createWorld({ seed: 9 });
+    const secret = (i: number) => ({ id: `life-0f3a-${i}`, author: `user-77c1-${i}` });
+    for (let i = 0; i < 4; i++) spawnSnake(world, secret(i));
+    const labels: Record<string, BroadcastLabel> = {
+      "life-0f3a-0": { author: "ada", bot: "ouroboros", version: 12, house: false },
+      "life-0f3a-1": { author: "house", bot: "hard", version: 0, house: true },
+    };
+    const encoder = new BroadcastEncoder(world, {
+      stream: 1,
+      label: (id) => ({
+        ...(labels[id] ?? { author: "", bot: "", version: 0, house: false }),
+        // Whatever else the room's object holds stays home.
+        versionId: "v-secret",
+      }),
+    });
+    const sent = [encodeBroadcast(encoder.keyframe(world))];
+    for (let i = 4; i < 6; i++) {
+      step(world, {});
+      spawnSnake(world, secret(i));
+      sent.push(encodeBroadcast({ kind: "ticks", stream: 1, ticks: [encoder.step(world)] }));
+    }
+    for (const bytes of sent) {
+      for (const leak of ["life-0f3a", "user-77c1", "v-secret"]) {
+        expect(utf16Includes(bytes, leak), leak).toBe(false);
+      }
+    }
+    const view = new BroadcastView();
+    for (const bytes of sent) view.apply(decodeBroadcast(bytes));
+    expect(view.snakes[0]?.life).toEqual({
+      slot: 0,
+      author: "ada",
+      bot: "ouroboros",
+      version: 12,
+      house: false,
+      bornTick: 0,
+    });
+    expect(view.snakes[1]?.life).toMatchObject({ author: "house", bot: "hard", house: true });
+    expect(view.snakes.map((v) => v.snake.id)).toEqual(view.snakes.map((v) => `1.${v.life.slot}`));
+    expect(view.snakes.map((v) => v.snake.author)).not.toContain("user-77c1-0");
+  });
 });
+
+/** Whether `text` appears in `bytes` as the wire writes strings (UTF-16LE code units). */
+function utf16Includes(bytes: Uint8Array, text: string): boolean {
+  const needle = new Uint8Array(text.length * 2);
+  for (let i = 0; i < text.length; i++) {
+    needle[2 * i] = text.charCodeAt(i) & 0xff;
+    needle[2 * i + 1] = text.charCodeAt(i) >> 8;
+  }
+  outer: for (let i = 0; i + needle.length <= bytes.length; i++) {
+    for (let k = 0; k < needle.length; k++) if (bytes[i + k] !== needle[k]) continue outer;
+    return true;
+  }
+  return false;
+}

@@ -1,9 +1,9 @@
 import { type CheckJob, handleChecks, reapStaleVersions } from "./checks";
-import { handleShowcase } from "./showcase";
 
 export { MatchmakerDO } from "./matchmaker";
 export { RoomDO } from "./room";
-export { ShowcaseDO } from "./showcase";
+// The live showcase's spectators: only the site's `SHOWCASE` service binding reaches the entrypoint.
+export { ShowcaseDO, ShowcaseEntrypoint } from "./showcase";
 
 export default {
   async fetch(request, env) {
@@ -16,7 +16,6 @@ export default {
         matchmaker: await matchmaker.ping(),
       });
     }
-    if (url.pathname === "/showcase") return handleShowcase(request, env);
     return new Response("Not found", { status: 404 });
   },
 

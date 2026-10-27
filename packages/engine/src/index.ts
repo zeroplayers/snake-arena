@@ -24,6 +24,7 @@ export {
   type BroadcastFood,
   BroadcastFormatError,
   BroadcastGapError,
+  type BroadcastLabel,
   type BroadcastLife,
   type BroadcastMessage,
   type BroadcastSnake,

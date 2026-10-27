@@ -1,11 +1,13 @@
 /**
  * Test entry for `room.test.ts`: the real `RoomDO` (with a sandbox that can be told to burn CPU),
  * a scriptable matchmaker in place of the stub, and `POST /rpc` to call either from Node
- * (`{ target, name, method, args }`). Spectators: `/showcase` as in production, and
- * `/spectate/<room name>` straight to a room.
+ * (`{ target, name, method, args }`). Spectators: `/showcase` as the site's proxy reaches it
+ * (`ShowcaseEntrypoint` runs `handleShowcase`), `/spectate/<room name>` straight to a room, and
+ * `/public/<path>` the production Worker's public `fetch`.
  */
 import { DurableObject } from "cloudflare:workers";
 import type { BotLife, InstrumentResult } from "@zerosnake/sandbox";
+import production from "../index.ts";
 import type { LifeResult, LifeTicket, MatchmakerRpc, QuarantineRecord } from "../protocol.ts";
 import type { LifeStarter } from "../room/sim.ts";
 import { RoomDO as BaseRoomDO } from "../room.ts";
@@ -162,8 +164,13 @@ export class TestMatchmaker extends DurableObject<Env> implements MatchmakerRpc 
 
 export default {
   async fetch(request, env) {
-    const path = new URL(request.url).pathname;
+    const url = new URL(request.url);
+    const path = url.pathname;
     if (path === "/showcase") return handleShowcase(request, env);
+    if (path.startsWith("/public/")) {
+      const publicUrl = new URL(path.slice("/public".length) + url.search, url);
+      return production.fetch(new Request(publicUrl, request), env);
+    }
     if (path.startsWith("/spectate/")) {
       const name = decodeURIComponent(path.slice("/spectate/".length));
       return env.ROOMS.get(env.ROOMS.idFromName(name)).fetch(request);

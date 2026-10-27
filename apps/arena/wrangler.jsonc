@@ -1,6 +1,7 @@
 /**
  * Arena worker: MatchmakerDO, RoomDO, the version-checks Queue consumer, spectator WebSockets
- * (`/showcase`; ShowcaseDO picks the rooms) and later MCP. Top level is local dev (`pnpm dev`);
+ * (`ShowcaseEntrypoint`, reached only by apps/web's `SHOWCASE` service binding; ShowcaseDO picks
+ * the room) and later MCP. Top level is local dev (`pnpm dev`);
  * `env.staging` is what CI deploys to api.arena.surninsynergy.dev.
  *
  * Bindings are not inherited by environments, so every binding is declared twice.

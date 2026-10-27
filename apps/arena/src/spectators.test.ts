@@ -2,7 +2,12 @@ import { type BroadcastMessage, BroadcastView, decodeBroadcast } from "@zerosnak
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { bundleHouseBots } from "../scripts/house-bundles.ts";
 import type { LifeTicket, RoomStatus } from "./protocol.ts";
-import { MAX_UNACKED_TICKS } from "./room/spectators.ts";
+import {
+  MAX_SPECTATORS_PER_CLIENT,
+  MAX_UNACKED_TICKS,
+  SPECTATOR_CLIENT_HEADER,
+} from "./room/spectators.ts";
+import { SHOWCASE_CLIENT_HEADER } from "./showcase/rule.ts";
 import { createHarness, type Harness, seedVersion } from "./testing/harness.ts";
 
 let h: Harness;
@@ -44,6 +49,7 @@ interface Spectator {
   messages: BroadcastMessage[];
   /** Bytes of each message. */
   sizes: number[];
+  bytes: Uint8Array[];
   view: BroadcastView;
   /** Acks every message while set. */
   acking: boolean;
@@ -53,17 +59,27 @@ interface Spectator {
   close(): void;
 }
 
-async function spectate(path: string): Promise<Spectator> {
-  const res = await h.fetch(path, { headers: { Upgrade: "websocket" } });
+/** An upgrade as the site's proxy sends it, from `client`. */
+const viaSite = (client = "198.51.100.1") => ({
+  Upgrade: "websocket",
+  [SHOWCASE_CLIENT_HEADER]: client,
+});
+
+async function spectate(path: string, headers: Record<string, string> = {}): Promise<Spectator> {
+  const res = await h.fetch(path, { headers: { Upgrade: "websocket", ...headers } });
   const ws = (res as Response & { webSocket: WebSocket | null }).webSocket;
   if (!ws) throw new Error(`no WebSocket: ${res.status} ${await res.text()}`);
   const s: Spectator = {
     messages: [],
     sizes: [],
+    bytes: [],
     view: new BroadcastView(),
     acking: true,
     closed: null,
-    ack: () => ws.send(JSON.stringify({ ack: s.view.tick })),
+    ack: () => {
+      // A message can still arrive after this side closed.
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ack: s.view.tick }));
+    },
     send: (text) => ws.send(text),
     close: () => ws.close(1000, "bye"),
   };
@@ -72,6 +88,7 @@ async function spectate(path: string): Promise<Spectator> {
     const message = decodeBroadcast(bytes);
     s.messages.push(message);
     s.sizes.push(bytes.length);
+    s.bytes.push(bytes);
     s.view.apply(message);
     if (s.acking) s.ack();
   });
@@ -85,22 +102,79 @@ async function spectate(path: string): Promise<Spectator> {
 const kinds = (s: Spectator) => s.messages.map((m) => m.kind);
 
 describe("spectators", () => {
-  it("the showcase route hands spectators to a running room", async () => {
+  it("the showcase route hands spectators to a running room, a few per client", async () => {
     // No room has reported yet (manual rooms don't, and this test runs first).
-    const none = await h.fetch("/showcase", { headers: { Upgrade: "websocket" } });
+    const none = await h.fetch("/showcase", { headers: viaSite() });
     expect(none.status).toBe(503);
     expect((await h.fetch("/showcase")).status).toBe(426);
 
     await startRoom("show", { manual: false });
     await until("reported", async () => (await h.call<string[]>("showcase", "rooms")).length > 0);
-    const s = await spectate("/showcase");
-    await until("keyframe", () => s.messages.length >= 1);
-    expect(s.view.room).toBe("show");
-    expect((await status("show")).spectators).toBe(1);
-    s.close();
+    // Only through the site: an upgrade that doesn't say who the client is goes nowhere.
+    const direct = await h.fetch("/showcase", { headers: { Upgrade: "websocket" } });
+    expect(direct.status).toBe(403);
+    // Nor does the slot the site never used (`?slot=` is ignored: there is one room).
+    expect(await h.call<string[]>("showcase", "rooms")).toHaveLength(1);
+
+    const crowd: Spectator[] = [];
+    for (let i = 0; i < MAX_SPECTATORS_PER_CLIENT; i++) {
+      crowd.push(await spectate("/showcase?slot=1", viaSite()));
+    }
+    await until("keyframes", () => crowd.every((s) => s.messages.length >= 1));
+    expect((await status("show")).spectators).toBe(MAX_SPECTATORS_PER_CLIENT);
+    const extra = await h.fetch("/showcase", { headers: viaSite() });
+    expect(extra.status).toBe(429);
+    // Another client still gets in; the client key the room sees is a hash, not the IP.
+    const other = await spectate("/showcase", viaSite("2001:db8::/64"));
+    await until("keyframe", () => other.messages.length >= 1);
+    expect((await status("show")).spectators).toBe(MAX_SPECTATORS_PER_CLIENT + 1);
+    // One leaves: a place for that client again.
+    crowd[0]?.close();
+    await until(
+      "left",
+      async () => (await status("show")).spectators === MAX_SPECTATORS_PER_CLIENT,
+    );
+    crowd[0] = await spectate("/showcase", viaSite());
+    await until("keyframe", () => (crowd[0]?.messages.length ?? 0) >= 1);
+    for (const s of [...crowd, other]) s.close();
     // Unattended rooms run on in the background: keep it from racing.
     await h.room("show", "setMode", "realtime");
   }, 60_000);
+
+  it("the Worker's public URL has no showcase route", async () => {
+    const res = await h.fetch("/public/showcase", { headers: viaSite() });
+    expect(res.status).toBe(404);
+    expect((res as Response & { webSocket: WebSocket | null }).webSocket ?? null).toBeNull();
+  });
+
+  it("caps sockets per client in the room itself", async () => {
+    await startRoom("capped");
+    const client = { [SPECTATOR_CLIENT_HEADER]: "abc123" };
+    const crowd = await Promise.all(
+      Array.from({ length: MAX_SPECTATORS_PER_CLIENT }, () => spectate("/spectate/capped", client)),
+    );
+    await until("keyframes", () => crowd.every((s) => s.messages.length === 1));
+    const res = await h.fetch("/spectate/capped", { headers: { Upgrade: "websocket", ...client } });
+    expect(res.status).toBe(429);
+    for (const s of crowd) s.close();
+  }, 30_000);
+
+  it("closes spectators that stop acking", async () => {
+    await startRoom("silent", { limits: { spectatorAckTimeoutMs: 500 } });
+    const quiet = await spectate("/spectate/silent");
+    const busy = await spectate("/spectate/silent");
+    await until("keyframes", () => quiet.messages.length === 1 && busy.messages.length === 1);
+    quiet.acking = false;
+    for (let i = 0; i < 4; i++) {
+      await sleep(200);
+      await h.room("silent", "runBatch");
+    }
+    await until("closed", () => quiet.closed !== null);
+    expect(quiet.closed?.code).toBe(4002);
+    expect(busy.closed).toBeNull();
+    expect((await status("silent")).spectators).toBe(1);
+    busy.close();
+  }, 30_000);
 
   it("get a keyframe, then each batch's ticks, and match the room", async () => {
     await startRoom("watch");
@@ -111,7 +185,6 @@ describe("spectators", () => {
     expect(first.spectators).toBe(1);
     expect(first.mode).toBe("realtime");
     expect(s.view.tick).toBe(first.tick);
-    expect(s.view.room).toBe("watch");
 
     for (let i = 0; i < 5; i++) await h.room("watch", "runBatch");
     await until("five batches", () => s.messages.length === 6);
@@ -120,12 +193,24 @@ describe("spectators", () => {
     // Watched, a batch is a second of real time.
     expect(now.lastBatchTicks).toBeLessThanOrEqual(10);
     expect(s.view.tick).toBe(now.tick);
-    expect(s.view.snakes.map((v) => v.life.id).sort()).toEqual(
-      now.snakes.map((x) => x.lifeId).sort(),
-    );
-    const bots = Object.fromEntries(s.view.snakes.map((v) => [v.life.id, v.life.bot]));
-    expect(bots["life-watch-a-1"]).toBe("v-watch-a");
-    expect(Object.values(bots).filter((b) => b.startsWith("house:")).length).toBeGreaterThan(0);
+    expect(s.view.snakes).toHaveLength(now.snakes.length);
+    // Public names only: the username, the bot's slug and the version's number.
+    const lives = s.view.snakes.map(({ life: { slot: _, bornTick: __, ...label } }) => label);
+    expect(lives).toContainEqual({
+      author: "watch-a-name",
+      bot: "watch-a",
+      version: 1,
+      house: false,
+    });
+    expect(lives).toContainEqual({
+      author: "watch-b-name",
+      bot: "watch-b",
+      version: 1,
+      house: false,
+    });
+    const houses = lives.filter((l) => l.house);
+    expect(houses.length).toBe(now.snakes.filter((x) => x.house !== null).length);
+    for (const l of houses) expect(l).toMatchObject({ author: "house", version: 0 });
     // A second of ticks: a few KB.
     expect(Math.max(...s.sizes.slice(1))).toBeLessThan(16_000);
     s.close();
@@ -197,6 +282,38 @@ describe("spectators", () => {
     fast.close();
     slow.close();
   }, 60_000);
+
+  it("sends no internal ids: not of lives, users, bots, versions or the room", async () => {
+    const db = await h.d1();
+    await db.batch([
+      db
+        .prepare("INSERT INTO users (id, name, email, username) VALUES (?, ?, ?, ?)")
+        .bind("u-9f1c", "Ada", "ada@example.com", "ada"),
+      db
+        .prepare("INSERT INTO bots (id, owner_id, name, slug) VALUES (?, ?, ?, ?)")
+        .bind("b-77aa", "u-9f1c", "Ouroboros", "ouroboros"),
+      db
+        .prepare(
+          `INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key)
+           VALUES (?, ?, 4, 'ready', 'b', 's')`,
+        )
+        .bind("v-31d0", "b-77aa"),
+    ]);
+    await h.room("ids", "start", { roomId: "room-c0de", seed: 5, manual: true });
+    const ticket = { lifeId: "life-5e2b", versionId: "v-31d0", author: "u-9f1c" };
+    expect(await h.room("ids", "join", { ...ticket, source: house.hard })).toEqual({ ok: true });
+    const s = await spectate("/spectate/ids");
+    for (let i = 0; i < 3; i++) await h.room("ids", "runBatch");
+    await until("batches", () => s.messages.length >= 3);
+    const ada = s.view.snakes.find((v) => v.life.author === "ada");
+    expect(ada?.life).toMatchObject({ bot: "ouroboros", version: 4, house: false });
+    for (const bytes of s.bytes) {
+      for (const id of ["u-9f1c", "b-77aa", "v-31d0", "life-5e2b", "room-c0de", "house:"]) {
+        expect(utf16Includes(bytes, id), id).toBe(false);
+      }
+    }
+    s.close();
+  }, 30_000);
 
   it("closes spectators that send anything but acks", async () => {
     await startRoom("rude");
@@ -278,3 +395,17 @@ describe("spectators", () => {
     for (const c of crowd) c.close();
   }, 60_000);
 });
+
+/** Whether `text` appears in `bytes` as the wire writes strings (UTF-16LE code units). */
+function utf16Includes(bytes: Uint8Array, text: string): boolean {
+  const needle = new Uint8Array(text.length * 2);
+  for (let i = 0; i < text.length; i++) {
+    needle[2 * i] = text.charCodeAt(i) & 0xff;
+    needle[2 * i + 1] = text.charCodeAt(i) >> 8;
+  }
+  outer: for (let i = 0; i + needle.length <= bytes.length; i++) {
+    for (let k = 0; k < needle.length; k++) if (bytes[i + k] !== needle[k]) continue outer;
+    return true;
+  }
+  return false;
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { noRateLimit, type RateLimiter } from "./rate-limit";
-import { handleShowcase } from "./showcase";
+import { handleShowcase, SHOWCASE_CLIENT_HEADER } from "./showcase";
 
 const upgrade = { Upgrade: "websocket", "cf-connecting-ip": "203.0.113.9" };
 
@@ -17,16 +17,28 @@ function arena() {
 }
 
 describe("/api/showcase", () => {
-  it("hands the upgrade to the arena's /showcase, slot and headers included", async () => {
+  it("hands the upgrade to the arena with the client it came from, and nothing else", async () => {
     const a = arena();
     const request = new Request("https://arena.surninsynergy.dev/api/showcase?slot=1", {
-      headers: upgrade,
+      // A browser can't speak for another client.
+      headers: { ...upgrade, [SHOWCASE_CLIENT_HEADER]: "192.0.2.1" },
     });
     const response = await handleShowcase(request, a.fetcher, noRateLimit);
     expect(await response.text()).toBe("from the arena");
     expect(a.requests).toHaveLength(1);
-    expect(a.requests[0]?.url).toBe("https://arena/showcase?slot=1");
+    // One showcase room: the slot the page never used isn't passed on.
+    expect(a.requests[0]?.url).toBe("https://arena/showcase");
     expect(a.requests[0]?.headers.get("upgrade")).toBe("websocket");
+    expect(a.requests[0]?.headers.get(SHOWCASE_CLIENT_HEADER)).toBe("203.0.113.9");
+  });
+
+  it("names an IPv6 client by its /64, as the rate limit does", async () => {
+    const a = arena();
+    const request = new Request("https://arena.surninsynergy.dev/api/showcase", {
+      headers: { Upgrade: "websocket", "cf-connecting-ip": "2001:db8:1:2:3:4:5:6" },
+    });
+    await handleShowcase(request, a.fetcher, noRateLimit);
+    expect(a.requests[0]?.headers.get(SHOWCASE_CLIENT_HEADER)).toBe("2001:db8:1:2::/64");
   });
 
   it("refuses plain requests and rate-limited clients without bothering the arena", async () => {

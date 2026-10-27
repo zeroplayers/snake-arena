@@ -16,7 +16,7 @@ import { SHOWCASE_PATH } from "./site";
 export default {
   fetch(request, env) {
     if (new URL(request.url).pathname === SHOWCASE_PATH) {
-      return handleShowcase(request, env.ARENA, getRateLimiter());
+      return handleShowcase(request, env.SHOWCASE, getRateLimiter());
     }
     return handleEdge(request, env, getRateLimiter(), async (r) => handler.fetch(r));
   },

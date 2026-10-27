@@ -34,7 +34,10 @@ export interface Harness {
   room<T = unknown>(name: string, method: string, ...args: unknown[]): Promise<T>;
   /** Starts a call without waiting for it (it may never finish). */
   fire(name: string, method: string, ...args: unknown[]): Promise<unknown>;
-  /** A request to the test worker (`/showcase`, `/spectate/<room>`), e.g. a WebSocket upgrade. */
+  /**
+   * A request to the test worker (`/showcase`, `/spectate/<room>`, `/public/<path>`), e.g. a
+   * WebSocket upgrade.
+   */
   fetch(path: string, init?: RequestInit): Promise<Response>;
   /** Restarts workerd: every object loses its memory and in-flight requests; storage stays. */
   restart(): Promise<void>;
@@ -144,8 +147,8 @@ export async function seedVersion(
   const versionId = `v-${author}`;
   await db.batch([
     db
-      .prepare("INSERT OR IGNORE INTO users (id, name, email) VALUES (?, ?, ?)")
-      .bind(author, author, `${author}@example.com`),
+      .prepare("INSERT OR IGNORE INTO users (id, name, email, username) VALUES (?, ?, ?, ?)")
+      .bind(author, author, `${author}@example.com`, `${author}-name`),
     db
       .prepare("INSERT OR IGNORE INTO bots (id, owner_id, name, slug) VALUES (?, ?, ?, ?)")
       .bind(`bot-${author}`, author, author, author),

@@ -1,5 +1,6 @@
 import {
   BroadcastGapError,
+  type BroadcastLife,
   type BroadcastMessage,
   BroadcastView,
   DEFAULT_CONFIG,
@@ -32,9 +33,15 @@ export interface BroadcastSourceOptions {
   readonly maxRetryMs?: number;
   /** Keepalive ping interval (the room answers without waking up). Default 30 s. */
   readonly pingMs?: number;
+  /**
+   * Told every status change, and each failed attempt while connecting or reconnecting
+   * (`failures` attempts in a row so far; 0 once live), so the page can give up on it.
+   */
+  readonly onStatus?: (status: BroadcastStatus, failures: number) => void;
 }
 
-export type BroadcastStatus = "connecting" | "live" | "reconnecting" | "closed";
+/** `suspended`: closed by `suspend()` until `resume()`. */
+export type BroadcastStatus = "connecting" | "live" | "reconnecting" | "suspended" | "closed";
 
 type MutableLife = { -readonly [K in keyof LifeInfo]: LifeInfo[K] };
 
@@ -49,6 +56,13 @@ type MutableLife = { -readonly [K in keyof LifeInfo]: LifeInfo[K] };
  * restarted, or the showcase moved to another room) starts the history over from it. It acks every
  * message it applied: a spectator that stops acking is skipped by the room until it catches up,
  * then gets the newest keyframe (`apps/arena/src/room/spectators.ts`).
+ *
+ * `suspend()` closes the socket while nobody looks (a hidden tab, the player scrolled away), so an
+ * idle page doesn't keep a room in real time; `resume()` reconnects and skips to the newest tick.
+ *
+ * Lives are known by their slot in the room's stream (the room sends no life ids), so a life's
+ * `id` is `<stream>.<slot>`; `bot` is the bot's slug and version (`ouroboros v12`, a house bot's
+ * kind), `author` the username.
  */
 export class BroadcastSource implements MatchSource {
   readonly endTick = undefined;
@@ -66,6 +80,8 @@ export class BroadcastSource implements MatchSource {
   private readonly foodCache = new Map<number, RenderFood>();
   private socket: WebSocket | null = null;
   private retryMs: number;
+  /** Failed attempts in a row since the last keyframe. */
+  private failures = 0;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private pingTimer: ReturnType<typeof setInterval> | undefined;
   private disposed = false;
@@ -148,6 +164,28 @@ export class BroadcastSource implements MatchSource {
     this.readyReject?.(new Error("disposed"));
   }
 
+  /** Closes the socket until `resume()`; the history stays readable. */
+  suspend(): void {
+    if (this.disposed || this.status === "suspended") return;
+    clearTimeout(this.retryTimer);
+    clearInterval(this.pingTimer);
+    const ws = this.socket;
+    this.socket = null;
+    try {
+      ws?.close(1000, "hidden");
+    } catch {}
+    this.setStatus("suspended");
+  }
+
+  /** Reconnects after `suspend()`; the room's keyframe takes it to the newest tick. */
+  resume(): void {
+    if (this.disposed || this.status !== "suspended") return;
+    this.retryMs = this.options.retryMs ?? 1000;
+    this.failures = 0;
+    this.setStatus(this.last >= 0 ? "reconnecting" : "connecting");
+    this.open();
+  }
+
   /** Applies one message from the room (exposed for tests; the socket calls it). */
   receive(message: BroadcastMessage): void {
     if (message.kind === "keyframe") {
@@ -199,12 +237,14 @@ export class BroadcastSource implements MatchSource {
   private dropped(reason: unknown): void {
     this.socket = null;
     clearInterval(this.pingTimer);
-    if (this.disposed) return;
+    if (this.disposed || this.status === "suspended") return;
     if (this.status === "connecting") {
       // Never got a keyframe: whoever waits on `ready` decides whether to keep trying.
       this.readyReject?.(reason instanceof Error ? reason : new Error("broadcast unavailable"));
     }
-    this.status = this.status === "connecting" ? "connecting" : "reconnecting";
+    // A live connection that drops is the first failure; each attempt that fails, one more.
+    this.failures++;
+    this.setStatus(this.status === "connecting" ? "connecting" : "reconnecting");
     clearTimeout(this.retryTimer);
     this.retryTimer = setTimeout(() => this.open(), this.retryMs);
     this.retryMs = Math.min(this.retryMs * 2, this.options.maxRetryMs ?? 15_000);
@@ -214,7 +254,8 @@ export class BroadcastSource implements MatchSource {
     const continues = this.view.stream === k.stream && this.view.tick === k.tick && this.last >= 0;
     this.view.applyKeyframe(k);
     this.retryMs = this.options.retryMs ?? 1000;
-    this.status = "live";
+    this.failures = 0;
+    this.setStatus("live");
     this.infoValue = this.makeInfo(k);
     if (!continues) {
       this.snapshots.clear();
@@ -226,6 +267,12 @@ export class BroadcastSource implements MatchSource {
     this.readyResolve?.();
   }
 
+  private setStatus(status: BroadcastStatus): void {
+    const changed = status !== this.status;
+    this.status = status;
+    if (changed || this.failures > 0) this.options.onStatus?.(status, this.failures);
+  }
+
   /** Turns the view's current tick into a snapshot. */
   private record(): void {
     const view = this.view;
@@ -234,8 +281,8 @@ export class BroadcastSource implements MatchSource {
     const snakes: SnakeTick[] = [];
     const renderSnakes: RenderSnake[] = [];
     for (const { life: l, snake } of view.snakes) {
-      this.slotIds.set(l.slot, l.id);
-      const life = this.lifeOf(l.id, l.bot, l.author, l.bornTick);
+      this.slotIds.set(l.slot, snake.id);
+      const life = this.lifeOf(snake.id, l);
       snakes.push({
         id: snake.id,
         score: snake.score,
@@ -256,8 +303,9 @@ export class BroadcastSource implements MatchSource {
     }
     const deaths: string[] = [];
     for (const d of view.deaths) {
-      deaths.push(d.life.id);
-      const life = this.lifeOf(d.life.id, d.life.bot, d.life.author, d.life.bornTick);
+      const id = lifeId(view.stream, d.slot);
+      deaths.push(id);
+      const life = this.lifeOf(id, d.life);
       life.death = {
         tick,
         cause: d.cause,
@@ -296,11 +344,12 @@ export class BroadcastSource implements MatchSource {
     while (this.last - this.first >= maxTicks) this.snapshots.delete(this.first++);
   }
 
-  private lifeOf(id: string, bot: string, author: string, bornTick: number): MutableLife {
+  private lifeOf(id: string, l: BroadcastLife): MutableLife {
     let life = this.lifeById.get(id);
     if (!life) {
       const color = SNAKE_PALETTE[this.lifeList.length % SNAKE_PALETTE.length] as string;
-      life = { id, bot, author, color, bornTick };
+      const bot = l.house || l.version === 0 ? l.bot : `${l.bot} v${l.version}`;
+      life = { id, bot, author: l.author, color, bornTick: l.bornTick };
       this.lifeList.push(life);
       this.lifeById.set(id, life);
       // Keep the list to lives the history can still show, plus some.
@@ -320,11 +369,14 @@ export class BroadcastSource implements MatchSource {
       arenaRadius: config.arenaRadius,
       visionRadius: vision ?? DEFAULT_VISION_RADIUS,
       liveDelay: this.options.liveDelay ?? DEFAULT_LIVE_DELAY,
-      ...((this.options.title ?? k?.room) !== undefined && {
-        title: this.options.title ?? (k?.room as string),
-      }),
+      ...(this.options.title !== undefined && { title: this.options.title }),
     };
   }
+}
+
+/** A life's id in the viewer: its slot in the stream, as `BroadcastView` names its snake. */
+function lifeId(stream: number | null, slot: number): string {
+  return `${stream}.${slot}`;
 }
 
 /**

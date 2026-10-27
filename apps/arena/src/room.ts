@@ -83,7 +83,13 @@ import {
   type LifeStarter,
   RoomSim,
 } from "./room/sim.ts";
-import { SPECTATOR_GRACE_MS, type SpectatedRoom, Spectators } from "./room/spectators.ts";
+import {
+  ACK_TIMEOUT_MS,
+  labelsFromD1,
+  SPECTATOR_GRACE_MS,
+  type SpectatedRoom,
+  Spectators,
+} from "./room/spectators.ts";
 import {
   type BatchMarker,
   type LifeEntry,
@@ -146,7 +152,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.store = new RoomStore(ctx.storage);
-    this.spectators = new Spectators(ctx, () => this.spectated());
+    this.spectators = new Spectators(ctx, () => this.spectated(), labelsFromD1(env.DB));
   }
 
   // --- Spectators ----------------------------------------------------------------------------
@@ -175,10 +181,12 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     return {
       roomId: meta.roomId,
       idleWorld: () => (this.busy ? null : (this.sim?.world ?? this.store.getJson<World>("world"))),
-      bot: (lifeId) => {
-        const entry = this.findLife(lifeId) ?? this.sim?.roster.find((e) => e.lifeId === lifeId);
-        return entry?.versionId ?? `house:${entry?.house ?? "unknown"}`;
-      },
+      life: (lifeId) =>
+        this.findLife(lifeId) ?? this.sim?.roster.find((e) => e.lifeId === lifeId) ?? null,
+      versionIds: () =>
+        [...this.store.roster(), ...this.store.pending()].flatMap((e) =>
+          e.versionId === null ? [] : [e.versionId],
+        ),
     };
   }
 
@@ -214,6 +222,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
           arenaControlPollMs: limits.arenaControlPollMs ?? ARENA_CONTROL_POLL_MS,
           killWindowTicks: limits.killWindowTicks ?? KILL_WINDOW_TICKS,
           spectatorGraceMs: limits.spectatorGraceMs ?? SPECTATOR_GRACE_MS,
+          spectatorAckTimeoutMs: limits.spectatorAckTimeoutMs ?? ACK_TIMEOUT_MS,
         },
         livesEnded: 0,
         lastBatchTicks: 0,
@@ -375,6 +384,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     const maxPendingSeq = this.store.lastPendingSeq();
     const plan = this.plan(meta, sim.roster, sim.world.tick, sim.idleLives, maxPendingSeq);
     const watch = watching(meta.watch, sim.world.tick, Date.now());
+    // Labels of the lives spectators are about to see (D1 only for versions not seen yet).
+    await this.spectators.prepare();
     const marker: BatchMarker = {
       fromTick: sim.world.tick,
       maxPendingSeq,
@@ -400,7 +411,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       const counted = this.countIncident(verdict, true, sim.world.tick, now);
       console.error("room call overran", meta.roomId, verdict, counted);
     });
-    this.spectators.commit(sim.world);
+    this.spectators.commit(sim.world, meta.limits.spectatorAckTimeoutMs ?? ACK_TIMEOUT_MS);
     // Some bots ran a tick the world never stepped (or one was evicted): restart them from the
     // saved frame.
     if (result.aborted || blamed) this.dropSim();
@@ -919,7 +930,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
 
   /**
    * Tells the showcase registry about the room, at most every `SHOWCASE_REPORT_MS` (`showcase.ts`
-   * picks the rooms the home page shows from these reports).
+   * picks the rooms the home page shows from these reports). A room that isn't the showcase (any
+   * more: its turn is over) lets its spectators go, so it doesn't stay in real time.
    */
   private async reportShowcase(): Promise<void> {
     const now = Date.now();
@@ -931,7 +943,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     const world = this.sim?.world ?? this.store.getJson<World>("world");
     const roster = this.store.roster();
     try {
-      await showcase(this.env).report({
+      const { showcase: shown } = await showcase(this.env).report({
         objectId: this.ctx.id.toString(),
         roomId: meta.roomId,
         tick: world?.tick ?? 0,
@@ -941,6 +953,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         spectators: this.spectators.count,
         at: now,
       });
+      if (!shown && this.spectators.count > 0) this.spectators.release("showcase moved");
     } catch (e) {
       console.error("room showcase report", meta.roomId, e);
     }

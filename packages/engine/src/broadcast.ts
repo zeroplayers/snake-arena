@@ -13,7 +13,7 @@ import { layoutSegments } from "./world.ts";
  * size and segment count; `BroadcastView` lays the body out along that trail exactly as the
  * engine does (`layoutSegments`). Pellets are sent once, when they appear, and by id when eaten.
  *
- *   const encoder = new BroadcastEncoder(world, { stream, room, bot: (id) => versionOf(id) });
+ *   const encoder = new BroadcastEncoder(world, { stream, label: (id) => publicLabelOf(id) });
  *   send(encodeBroadcast(encoder.keyframe(world)));             // a new spectator
  *   step(world, actions);
  *   const delta = encoder.step(world);                          // after every step
@@ -23,6 +23,10 @@ import { layoutSegments } from "./world.ts";
  *   view.apply(decodeBroadcast(bytes));                         // keyframe, then deltas
  *   view.snakes; view.food; view.deaths;
  *
+ * **Only public fields go on the wire.** Lives are known by their slot, and labelled with what the
+ * site shows anyway (`BroadcastLabel`: username, bot slug, version number), never by the internal
+ * ids of lives, users, versions or rooms.
+ *
  * A **stream** is one encoder's sequence of ticks: deltas apply only on top of the same stream's
  * previous tick. A spectator that misses a tick (or joins, or meets a new stream after the room
  * restarted) needs a keyframe.
@@ -31,7 +35,7 @@ import { layoutSegments } from "./world.ts";
  * and masses are float32, so a spectator's bodies match the room's to ~1e-5 units. Strings are
  * UTF-16 code units (as in replays; the engine has no text codecs), labels cut to 100 of them.
  */
-export const BROADCAST_VERSION = 1;
+export const BROADCAST_VERSION = 2;
 
 const MAGIC = 0x5a;
 const KIND_KEYFRAME = 1;
@@ -42,7 +46,7 @@ const KIND_TICKS = 2;
  * (20 snakes and `maxFood` pellets) under ~400 KB.
  */
 export const MAX_TRAIL_POINTS = 2048;
-/** Longest id, author or bot label sent, in UTF-16 code units. */
+/** Longest author or bot label sent, in UTF-16 code units. */
 const MAX_LABEL_UNITS = 100;
 
 const CAUSES: readonly DeathCause[] = ["collision", "wall", "timeout", "error", "retired"];
@@ -50,14 +54,25 @@ const FOOD_KINDS: readonly FoodKind[] = ["ambient", "boost", "remains"];
 const BOOSTING = 1;
 const NEW_SNAKE = 2;
 const NO_SLOT = 0xffff;
+const HOUSE = 1;
 
-/** A life as spectators know it. `slot` is its short id within the stream. */
-export interface BroadcastLife {
-  readonly slot: number;
-  readonly id: string;
+/**
+ * What spectators are told about a life: the public names the site shows, nothing internal.
+ * Empty strings and version 0 when the room couldn't look them up.
+ */
+export interface BroadcastLabel {
+  /** The owner's username; `house` for a house bot. */
   readonly author: string;
-  /** What drives it: a version id, or `house:<kind>`. */
+  /** The bot's slug; a house bot's kind. */
   readonly bot: string;
+  /** The version's number (`versions.n`); 0 for a house bot. */
+  readonly version: number;
+  readonly house: boolean;
+}
+
+/** A life as spectators know it. `slot` is its only id, and only within the stream. */
+export interface BroadcastLife extends BroadcastLabel {
+  readonly slot: number;
   readonly bornTick: number;
 }
 
@@ -114,8 +129,6 @@ export interface Keyframe {
   readonly kind: "keyframe";
   readonly stream: number;
   readonly tick: number;
-  /** The room's id (for the title; spectators don't address rooms by it). */
-  readonly room: string;
   readonly config: EngineConfig;
   /** Every living snake, with its life and trail. */
   readonly snakes: readonly BroadcastSnake[];
@@ -144,9 +157,8 @@ export class BroadcastGapError extends Error {
 export interface BroadcastEncoderOptions {
   /** Distinguishes this encoder's ticks from any other's (e.g. before a room restarted). */
   readonly stream: number;
-  readonly room: string;
-  /** The bot label of a life (`BroadcastLife.bot`). */
-  readonly bot: (lifeId: string) => string;
+  /** The public label of a life, by its engine id (which isn't sent). */
+  readonly label: (lifeId: string) => BroadcastLabel;
 }
 
 /**
@@ -184,7 +196,6 @@ export class BroadcastEncoder {
       kind: "keyframe",
       stream: this.stream,
       tick: world.tick,
-      room: this.options.room,
       config: world.config,
       snakes: world.snakes.map((s) => this.snake(s, true)),
       food: world.food.map(food),
@@ -245,7 +256,7 @@ export class BroadcastEncoder {
     if (!full) return base;
     return {
       ...base,
-      life: { slot, id: s.id, author: s.author, bot: this.options.bot(s.id), bornTick: s.bornTick },
+      life: { ...label(this.options.label(s.id)), slot, bornTick: s.bornTick },
       trail: s.trail.slice(-MAX_TRAIL_POINTS),
     };
   }
@@ -263,6 +274,11 @@ export class BroadcastEncoder {
   }
 }
 
+/** Just the label's fields, whatever else the caller's object holds. */
+function label(l: BroadcastLabel): BroadcastLabel {
+  return { author: l.author, bot: l.bot, version: l.version, house: l.house };
+}
+
 function food(f: Food): BroadcastFood {
   return { id: f.id, x: f.x, y: f.y, kind: f.kind };
 }
@@ -277,7 +293,6 @@ export function encodeBroadcast(message: BroadcastMessage): Uint8Array {
     w.u8(KIND_KEYFRAME);
     w.u32(message.stream);
     w.u32(message.tick);
-    w.str(message.room);
     w.str(JSON.stringify(message.config), 0xffff);
     writeSnakes(w, message.snakes);
     w.u32(message.food.length);
@@ -321,12 +336,11 @@ export function decodeBroadcast(bytes: Uint8Array): BroadcastMessage {
     if (kind === KIND_KEYFRAME) {
       const stream = r.u32();
       const tick = r.u32();
-      const room = r.str();
       const config = JSON.parse(r.str()) as EngineConfig;
       const snakes = readSnakes(r);
       const food: BroadcastFood[] = [];
       for (let n = r.count(r.u32(), 13); n > 0; n--) food.push(readFood(r));
-      message = { kind: "keyframe", stream, tick, room, config, snakes, food };
+      message = { kind: "keyframe", stream, tick, config, snakes, food };
     } else if (kind === KIND_TICKS) {
       const stream = r.u32();
       const ticks: TickDelta[] = [];
@@ -381,9 +395,10 @@ function writeSnakes(w: Writer, snakes: readonly BroadcastSnake[]): void {
     w.u16(Math.min(s.kills, 0xffff));
     w.f32(s.score);
     if (full && s.life && s.trail) {
-      w.str(s.life.id);
       w.str(s.life.author);
       w.str(s.life.bot);
+      w.u32(s.life.version);
+      w.u8(s.life.house ? HOUSE : 0);
       w.u32(s.life.bornTick);
       const trail = s.trail.slice(-MAX_TRAIL_POINTS);
       w.u16(trail.length);
@@ -418,9 +433,10 @@ function readSnakes(r: Reader): BroadcastSnake[] {
     }
     const life: BroadcastLife = {
       slot,
-      id: r.str(),
       author: r.str(),
       bot: r.str(),
+      version: r.u32(),
+      house: (r.u8() & HOUSE) !== 0,
       bornTick: r.u32(),
     };
     const trail: Vec2[] = [];
@@ -538,7 +554,10 @@ class Reader {
 
 // --- The spectator's side -----------------------------------------------------------------------
 
-/** A living snake as a spectator sees it: its life and an engine snake rebuilt from the stream. */
+/**
+ * A living snake as a spectator sees it: its life and an engine snake rebuilt from the stream.
+ * The snake's `id` is `<stream>.<slot>` (life ids aren't sent), its `author` the username.
+ */
 export interface ViewSnake {
   readonly life: BroadcastLife;
   /** Laid out by the engine's own `layoutSegments`; fields spectators aren't sent are zero. */
@@ -556,7 +575,6 @@ export interface ViewDeath extends BroadcastDeath {
 export class BroadcastView {
   stream: number | null = null;
   tick = 0;
-  room = "";
   config: EngineConfig | null = null;
   /** Living snakes in world order. */
   snakes: ViewSnake[] = [];
@@ -574,7 +592,6 @@ export class BroadcastView {
   applyKeyframe(k: Keyframe): void {
     this.stream = k.stream;
     this.tick = k.tick;
-    this.room = k.room;
     this.config = k.config;
     this.bySlot.clear();
     this.snakes = k.snakes.map((s) => this.spawn(s, k.tick));
@@ -616,7 +633,7 @@ export class BroadcastView {
   private spawn(s: BroadcastSnake, tick: number): ViewSnake {
     if (!s.life || !s.trail) throw new BroadcastGapError(`snake ${s.slot} sent without its life`);
     const snake: Snake = {
-      id: s.life.id,
+      id: `${this.stream}.${s.slot}`,
       author: s.life.author,
       seed: 0,
       head: { x: s.x, y: s.y },

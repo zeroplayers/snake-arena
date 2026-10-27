@@ -1,7 +1,7 @@
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, sql } from "drizzle-orm";
 import type { BotSummary, LeaderboardEntry, LeaderboardQuery, Profile } from "../lib/api";
 import type { Db } from ".";
-import { bots, lives, ratings, users, versions } from "./schema";
+import { bots, ratings, users, versions } from "./schema";
 
 /** A version enters the leaderboard after this many lives. */
 export const RANKED_MIN_LIVES = 30;
@@ -23,12 +23,14 @@ export async function getProfile(db: Db, username: string): Promise<Profile | nu
     .select({
       id: bots.id,
       name: bots.name,
+      slug: bots.slug,
       activeVersion: versions.n,
       rating: ratings.mean,
+      ratingCi: ratings.ci,
+      ratedLives: ratings.nLives,
+      // Per-version counters (kept by triggers), not a count over `lives`.
       lives: sql<number>`(
-        SELECT count(*) FROM ${lives}
-        JOIN ${versions} AS v ON v.id = ${lives.versionId}
-        WHERE v.bot_id = ${bots.id}
+        SELECT coalesce(sum(v.lives_count), 0) FROM ${versions} AS v WHERE v.bot_id = ${bots.id}
       )`,
     })
     .from(bots)
@@ -46,7 +48,11 @@ export async function getProfile(db: Db, username: string): Promise<Profile | nu
 }
 
 /**
- * `CROSS JOIN` pins `ratings` as SQLite's outer loop, so rows come out of `ratings_mean_idx`
+ * Ranked by the lower bound of the rating, `mean - ci`, then the narrower interval, more lives
+ * and the version id: the order of `leaderboard()` in `@zerosnake/rating`. Ranking by the mean
+ * alone rewards redeploying until one version gets a lucky 30 lives.
+ *
+ * `CROSS JOIN` pins `ratings` as SQLite's outer loop, so rows come out of `ratings_rank_idx`
  * already in order and `LIMIT` stops early. With a plain join the planner prefers scanning every
  * active version and sorting them all.
  */
@@ -55,11 +61,14 @@ export function leaderboardQuery(db: Db, { limit = 50, offset = 0 }: Leaderboard
     .select({
       botId: bots.id,
       botName: bots.name,
+      botSlug: bots.slug,
       author: users.username,
       version: versions.n,
       rating: ratings.mean,
       ratingCi: ratings.ci,
-      lives: ratings.nLives,
+      lowerBound: ratings.lowerBound,
+      ratedLives: ratings.nLives,
+      lives: versions.livesCount,
     })
     .from(ratings)
     .crossJoin(versions)
@@ -72,7 +81,12 @@ export function leaderboardQuery(db: Db, { limit = 50, offset = 0 }: Leaderboard
         gte(ratings.nLives, RANKED_MIN_LIVES),
       ),
     )
-    .orderBy(desc(ratings.mean))
+    .orderBy(
+      desc(ratings.lowerBound),
+      asc(ratings.ci),
+      desc(ratings.nLives),
+      asc(ratings.versionId),
+    )
     .limit(limit)
     .offset(offset);
 }
@@ -81,6 +95,11 @@ export async function getLeaderboard(db: Db, query: LeaderboardQuery = {}) {
   const offset = query.offset ?? 0;
   const rows = await leaderboardQuery(db, query);
   return rows.map(
-    (row, i): LeaderboardEntry => ({ ...row, author: row.author ?? "", rank: offset + i + 1 }),
+    (row, i): LeaderboardEntry => ({
+      ...row,
+      author: row.author ?? "",
+      lowerBound: row.lowerBound ?? row.rating - row.ratingCi,
+      rank: offset + i + 1,
+    }),
   );
 }

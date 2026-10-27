@@ -12,19 +12,32 @@ export interface LeaderboardEntry {
   rank: number;
   botId: string;
   botName: string;
+  /** `/@{author}/{botSlug}`. */
+  botSlug: string;
   author: string;
   version: number;
   rating: number;
   /** Half-width of the confidence interval around `rating`. */
   ratingCi: number;
+  /** `rating - ratingCi`: what the leaderboard is sorted by. */
+  lowerBound: number;
+  /** Lives behind `rating` (`ratings.n_lives`). */
+  ratedLives: number;
+  /** Every life the version played. */
   lives: number;
 }
 
 export interface BotSummary {
   id: string;
   name: string;
+  /** `/@{username}/{slug}`. */
+  slug: string;
   activeVersion: number | null;
+  /** The active version's rating, `null` while it has none. */
   rating: number | null;
+  ratingCi: number | null;
+  /** Lives behind `rating` (at most the last 200). */
+  ratedLives: number | null;
   lives: number;
 }
 

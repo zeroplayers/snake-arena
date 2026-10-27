@@ -7,12 +7,42 @@ The site: TanStack Start on Workers, Better Auth (GitHub + device flow for `zero
 ```bash
 cp .dev.vars.example .dev.vars   # fill in a secret and a GitHub OAuth app (see the file)
 pnpm db:migrate                  # apply migrations/ to the local D1
-pnpm db:seed                     # three authors, five bots, ~600 lives
+pnpm db:seed                     # four authors, six bots, ~650 lives, a recorded replay
 pnpm dev                         # http://localhost:3000
 ```
 
 Local D1/R2 state lives in the repo's `.wrangler/state`, shared with `apps/arena`. `pnpm db:reset`
 wipes the local database and runs migrate + seed again.
+
+`pnpm db:seed` runs `seed/dev.sql`, then `seed/pages.ts`, which plays a two-minute match of house
+bots standing in for the seed versions, records it with the engine's `ReplayRecorder` and writes
+the replay chunk, its lives and every seed version's sources to the local D1/R2. Every public page
+has something to show: `/leaderboard`, `/@ada`, `/@ada/greedy`, `/replay/seed-replay-greedy-1`,
+and the empty cases `/@newbie`, `/@linus/draft`, `/@grace/wip`.
+
+## Public pages
+
+| Route                | Data                                                                                                                                                                |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/leaderboard`       | `leaderboardQuery` (`src/db/queries.ts`): stored `ratings`, ≥ 30 lives                                                                                              |
+| `/@{username}`       | `getProfile`: bots, active version, its rating                                                                                                                      |
+| `/@{username}/{bot}` | `src/queries/bot.ts`: versions, rating chart, recent lives; `?v=N` picks the version. Sources from `SOURCES` (`src/queries/sources.ts`), shown as escaped text only |
+| `/replay/{lifeId}`   | `src/queries/replay.ts` + the life's chunk from `REPLAYS`, played by `ReplaySource`                                                                                 |
+
+Ratings are read, never computed here: when `packages/rating` lands, only `leaderboardQuery` and
+the `ratings` columns it reads are involved. `ratings.lower_bound` is a generated column for now;
+the rating work can make it a stored one with the same name.
+
+Page views never aggregate `lives`: totals come from `versions.lives_count`, which triggers on
+`lives` keep current (`migrations/0002_page_counters.sql`), and every `lives` query is an index
+range with a `LIMIT` (latest 20 lives, death causes over the latest 200).
+
+`src/replay/ReplaySource.ts` is the `MatchSource` the viewer plays replays from: it runs the chunks
+once through `ReplayPlayer` (checking hashes; on a mismatch it plays on and the page warns), keeps
+a world copy every 100 ticks and at each chunk start, and rebuilds any tick from the copy before
+it. The page loads the chunk, `@zerosnake/viewer` and three.js only in the browser, after
+hydration. It assumes the room spawns each life with the engine snake id equal to `lives.id`, and
+that `lives.replay_key` is the chunk holding the death.
 
 ## Database
 

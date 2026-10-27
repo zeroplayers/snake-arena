@@ -264,16 +264,19 @@ per-tick budget; and qualification: a mean score per life at least that of the `
 put in your seat on the same seeds. A failing report says what to fix. `deploy` runs the same checks
 before uploading: a bot that fails isn't uploaded and costs no deploy.
 
-- **The seeds come from the bundle's hash.** The same code bundles to the same bytes on any
-  machine, so the server plays the same seeds and reaches the same verdict. Any change to the code
-  gives other seeds; comments and formatting don't (the bundle drops them).
+- **The seeds come from the bundle's hash.** The server judges the bundle `deploy` uploads, so it
+  plays the same seeds as your `test` and reaches the same verdict. The same code bundles to the
+  same bytes in any folder or machine with the same CLI version. Any change to the code gives other
+  seeds; comments (all of them, `/*!` and `@license` ones too) and formatting don't: the bundle
+  drops them.
 - **Keep a margin over `easy`.** easy's own score swings a lot from one set of seeds to the next
-  (it dies often, and now and then has a long lucky life), so a bot close to easy's score can pass
-  on one version and fail on the next, by luck of the seeds. The starter bot scores about 4.5×
-  easy's mean score per life on typical seeds, and at least 1.5× on 997 of 1000 seed sets (lowest
-  1.1×): aim for a margin like that. One passing `test` doesn't prove a bot is good enough: if a
-  pass is narrow (look at "mean score per life … easy in your seat" seed by seed), make the bot
-  clearly better, e.g. fewer early deaths, rather than re-rolling seeds.
+  (it dies often, and now and then has a long lucky life with kills), so a bot close to easy's
+  score can pass on one version and fail on the next, by luck of the seeds. The starter bot scores
+  about 4.6× easy's mean score per life on typical seeds and at least 1.5× on about 99% of seed
+  sets, but even it failed 1 of the 3600 seed sets we measured (easy got kills there): aim for a
+  margin like that. One passing `test` doesn't prove a bot is good enough: if a pass is narrow
+  (look at "mean score per life … easy in your seat" seed by seed), make the bot clearly better,
+  e.g. fewer early deaths, rather than re-rolling seeds.
 - **Usually a few seconds.** `test` warns when the checks take 20 s or more: the server runs them
   under a CPU time limit, possibly on a slower machine, so a slow bot can pass here and still be
   rejected there ("the checks didn't finish"). Make the ticks cheaper.

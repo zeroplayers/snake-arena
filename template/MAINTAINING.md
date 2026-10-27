@@ -63,8 +63,8 @@ reads every constant at runtime, so it keeps working; the docs are what goes sta
 ## The starter bot must win by a margin, on any seeds
 
 `zerosnake test` and the server judge a bundle on the 5 seeds its hash gives. A fresh
-`zerosnake init` + `zerosnake test`, and the CLI's tests (`packages/cli`), play the starter bot's
-own seeds. Bundles are reproducible (same sources, same bytes in any folder or machine:
+`zerosnake init` + `zerosnake test` plays the starter bot's own seeds. Bundles are reproducible
+(same sources, same bytes in any folder or machine with the same CLI and its pinned esbuild:
 `packages/cli/src/bundle.ts`), but any change to `src/bot.ts`, or to the SDK it bundles, re-rolls
 those seeds. So the bot has to qualify whatever the seeds, with room to spare. After changing it
 (or the SDK, engine, sandbox or house bots), measure:
@@ -74,12 +74,19 @@ pnpm --filter zerosnake margin --sets 1000    # the real checks on 1000 seed set
 ```
 
 It prints the distribution of the margin (mean score per life / easy's in the same seat) and the
-budget used. The current bot (October 2026): no failures on 1000 seed sets, at least 1.5× on 997
-of them (1% 1.73×, median 4.5×, lowest 1.1×); at most 0.7× of the per-tick budget on its costliest
-tick and 0.2× of the suite's average allowance, minified or not. `easy`'s own mean score per life
-ranges from under 10 to over 150 between seed sets (median 28), so the lowest sets say more about
-easy than about the bot: watch the 1% figure and the failures. `cli.test.ts` checks three seed sets
-at ≥ 1.5×. When the numbers change, update "Keep a margin over `easy`" in `CLAUDE.md`.
+budget used. Use `--from` for seed sets nobody tuned on. The current bot (October 2026), with the
+real checks: no failures on 600 seed sets (`--from 100000`: lowest 1.19×, 1% 1.55×, median 4.71×)
+nor on 600 more minified (`--from 200000 --minify`: lowest 1.26×, 1% 1.54×, median 4.58×); at most
+0.7× of the per-tick budget on its costliest tick and 0.2× of the suite's average allowance. On
+2400 more sets, played in-process (same matches, budget not metered): one failure, set 50159 at
+0.93× (easy 139.7 per life, with kills), and 1.1% below 1.5×: 1 failure in 3600 sets.
+`easy`'s own mean score per life ranges from under 10 to over 150 between seed sets (median about
+30), and its best sets come from kills, which a bot that avoids everyone can't match: none of the
+house bots, nor variants of this one that hunt or boost, cleared set 50159. Watch the 1% figure
+and the failures. `cli.test.ts` checks three fixed seed sets at ≥ 1.5×; the CLI's other tests use
+a bot whose seeds never change (`packages/cli/src/testing/passing-bot.ts`), so a change here
+doesn't put them at risk. When the numbers change, update "Keep a margin over `easy`" in
+`CLAUDE.md`.
 
 The bot must also stay well inside the per-tick budget (the smoke test wants at most half of it
 on its seeds). QuickJS counts interrupts per ~10 000 branches or calls, and the sandbox's metering

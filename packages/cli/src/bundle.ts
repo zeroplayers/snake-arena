@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { checkSource } from "@zerosnake/sandbox";
@@ -34,8 +34,11 @@ const OUTFILE = "bot.js";
  * `@zerosnake/sdk` resolves from the project when it is installed there, and falls back to the
  * CLI's own copy otherwise, so a fresh `zerosnake init` can `sim` before any `npm install`.
  *
- * The same sources give the same bytes on any machine and in any folder (see {@link stableNames}):
- * the check seeds come from the bundle's hash, so `test` here and the server must agree.
+ * The same sources give the same bytes on any machine and in any folder (see {@link stableNames}),
+ * with the same esbuild: the check seeds come from the bundle's hash, so `test` here and the
+ * server must agree. esbuild is pinned to an exact version in package.json for that reason;
+ * another version may print the same code differently. Comments and formatting don't count: all
+ * of them are dropped, `/*!` and `@license` ones too.
  */
 export async function bundleBot(entry: string, options: BundleOptions = {}): Promise<BundledBot> {
   const cwd = resolve(options.cwd ?? process.cwd());
@@ -100,6 +103,9 @@ function bundle(file: string, cwd: string) {
     platform: "neutral",
     target: "es2023",
     mainFields: ["module", "main"],
+    // esbuild keeps `/*!`, `//!`, `@license` and `@preserve` comments by default: they would
+    // change the bytes (and the seeds), and `checkSource` reads words like "async" in them.
+    legalComments: "none",
     logLevel: "silent",
     plugins: [stableNames(cwd)],
   });
@@ -123,6 +129,9 @@ const NESTED = Symbol("nested");
  * Also resolves `@zerosnake/sdk` from the project, else from the CLI.
  */
 function stableNames(root: string): Plugin {
+  // esbuild resolves symlinks, so the files it hands us are real paths: compare them with the
+  // real project folder (on macOS the temp folder /var/… is really /private/var/…).
+  const realRoot = realpathSync(root);
   const packages = new Map<string, { id: string; dir: string } | null>();
   return {
     name: "zerosnake-stable-names",
@@ -144,7 +153,7 @@ function stableNames(root: string): Plugin {
         } else if (found.namespace !== "file" || !isAbsolute(path)) {
           return found;
         }
-        const pkg = packageOf(path, root, packages);
+        const pkg = packageOf(path, realRoot, packages);
         if (!pkg) return { path, sideEffects: found.sideEffects };
         return {
           path: `${pkg.id}/${relative(pkg.dir, path).split(sep).join("/")}`,
@@ -168,7 +177,7 @@ function stableNames(root: string): Plugin {
 /**
  * The package a file belongs to: the nearest `package.json` above it with a name, as
  * `name@version`. `null` for the project's own files (inside `root`, not in a package of its own)
- * and for files outside any package.
+ * and for files outside any package. `file` and `root` are real paths (no symlinks).
  */
 function packageOf(
   file: string,

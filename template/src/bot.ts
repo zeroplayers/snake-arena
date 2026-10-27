@@ -34,7 +34,7 @@ const BODY_MARGIN = 1;
 /** Extra space to keep from the road ahead of another head. */
 const HEAD_MARGIN = 1;
 /** Other heads can turn: the space kept from their road grows by this share of a tick's move per tick. */
-const HEAD_SPREAD = 0.3;
+const HEAD_SPREAD = 0.2;
 /** Head back toward the centre when the wall is closer than this many turning radii. */
 const WALL_TURN_RADII = 1;
 

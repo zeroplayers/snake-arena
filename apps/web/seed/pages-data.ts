@@ -78,7 +78,7 @@ const RESPAWN_DELAY = 30;
 /** Plays the match and records it, as RoomDO would. */
 export function recordSeedReplay(): SeedReplay {
   // A small arena, so a two-minute match has a few deaths to look at.
-  const world = createWorld({ seed: 2026, config: { arenaRadius: 55 } });
+  const world = createWorld({ seed: 2026, config: { arenaHalfSize: 49 } });
   const chunks: Uint8Array[] = [];
   // One chunk for the whole match.
   const recorder = new ReplayRecorder(world, {
@@ -167,12 +167,13 @@ const SOURCES: Record<string, string> = {
   "seed-greedy-2": `// v2: same as v1, but stay away from the wall.
 // Escaped on the site, never rendered: <script>alert("not run")</script>
 export default defineBot({
-  init: () => ({ ticks: 0 }),
+  init: (info) => ({ ticks: 0, half: info.worldHalfSize }),
   tick(state, mem, log) {
     mem.ticks++;
-    if (state.wallDistance < 8) {
-      log("wall at", state.wallDistance.toFixed(1));
-      return { turn: steerToward(state.self, CENTER) };
+    const wall = nearestWall(state.self.head, mem.half, 18);
+    if (wall.distance < 8) {
+      log("wall at", wall.distance.toFixed(1));
+      return { turn: turnToward(state.self, Math.atan2(wall.normal.y, wall.normal.x)) };
     }
     const food = nearestFood(state);
     return { turn: food ? steerToward(state.self, food) : 0, boost: mem.ticks % 50 === 0 };
@@ -211,7 +212,7 @@ export default defineBot({
 });`,
 };
 
-const IMPORTS = `import { CENTER, defineBot, nearestDanger, nearestFood, steerAway, steerToward } from "@zerosnake/sdk";\n\n`;
+const IMPORTS = `import {\n  defineBot,\n  nearestDanger,\n  nearestFood,\n  nearestWall,\n  steerAway,\n  steerToward,\n  turnToward,\n} from "@zerosnake/sdk";\n\n`;
 
 export const sourceKey = (versionId: string) => `seed/sources/${versionId}.json`;
 

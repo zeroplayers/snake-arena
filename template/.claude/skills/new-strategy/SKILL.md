@@ -24,7 +24,8 @@ this session: rules, API, coordinate convention and limits are there.
 Pin down, in terms of the real mechanics:
 
 - **Safety layer** (never skip it, whatever the style): wall margin from the turning radius
-  (`self.speed / self.turnRate`, doubled while boosting), body avoidance by simulating candidate
+  (`self.speed / self.turnRate`, doubled while boosting) and a bigger one in the square's corners,
+  body avoidance by simulating candidate
   turns a few ticks ahead (see `safeTicks` in the template), extra margin around heads of snakes
   as long as or longer than you.
 - **Food:** which pellets (nearest reachable, best value per distance, remains of dead snakes are

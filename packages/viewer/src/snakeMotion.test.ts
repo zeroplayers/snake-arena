@@ -40,7 +40,7 @@ describe("engine snakes in the renderer", () => {
       const world = createWorld({
         seed: 1,
         config: {
-          arenaRadius: 5000,
+          arenaHalfSize: 5000,
           foodBase: 0,
           foodSpawnPerTick: 0,
           hungerFlat: 0,

@@ -95,9 +95,94 @@ export function project(origin: Vec, angle: number, dist: number): Vec {
   return { x: origin.x + Math.cos(angle) * dist, y: origin.y + Math.sin(angle) * dist };
 }
 
-/** Distance from `point` to the arena edge (negative if outside). */
-export function distanceToWall(point: Vec, worldRadius: number): number {
-  return worldRadius - Math.hypot(point.x, point.y);
+/**
+ * Distance from `point` to the nearest edge of the square arena (negative if outside):
+ * `worldHalfSize - max(|x|, |y|)`. For your head this is `state.wallDistance`.
+ */
+export function distanceToWall(point: Vec, worldHalfSize: number): number {
+  return worldHalfSize - Math.max(Math.abs(point.x), Math.abs(point.y));
+}
+
+/** Result of {@link nearestWall}. */
+export interface Wall {
+  /** Same as {@link distanceToWall}, or to the rounded edge when corners are rounded off. */
+  distance: number;
+  /**
+   * Unit vector pointing away from that wall, into the arena: e.g. `{ x: -1, y: 0 }` for the
+   * east wall; diagonal-ish in a rounded-off corner.
+   */
+  normal: Vec;
+}
+
+/**
+ * The arena edge closest to `point` and the direction straight away from it. To leave a wall,
+ * turn to the heading `Math.atan2(normal.y, normal.x)` ({@link turnToward}) rather than toward
+ * {@link CENTER}: away from the axes, the shorter turn toward the centre can swing your head
+ * through the wall first.
+ *
+ * `corner` (default 0) rounds the arena's corners off to that radius (at most `worldHalfSize`):
+ * heading into a corner you have two walls ahead, and getting out takes far more room than
+ * leaving a straight wall, so treating the corners as rounded off to a few turning radii
+ * (`speed / turnRate`) keeps you out of them. In a corner `distance` is then measured to the
+ * rounded edge (negative inside the cut-off part) and `normal` points at the middle of the
+ * rounding.
+ */
+export function nearestWall(point: Vec, worldHalfSize: number, corner = 0): Wall {
+  const ax = Math.abs(point.x);
+  const ay = Math.abs(point.y);
+  const r = Math.min(Math.max(corner, 0), worldHalfSize);
+  const inner = worldHalfSize - r;
+  if (r > 0 && ax > inner && ay > inner) {
+    const dx = ax - inner;
+    const dy = ay - inner;
+    const d = Math.hypot(dx, dy);
+    return {
+      distance: r - d,
+      normal: { x: (point.x > 0 ? -dx : dx) / d, y: (point.y > 0 ? -dy : dy) / d },
+    };
+  }
+  const normal = ax >= ay ? { x: point.x > 0 ? -1 : 1, y: 0 } : { x: 0, y: point.y > 0 ? -1 : 1 };
+  return { distance: worldHalfSize - Math.max(ax, ay), normal };
+}
+
+/**
+ * How far `origin` can travel straight along heading `angle` before its centre crosses an
+ * arena edge (0 if already outside). Unlike {@link distanceToWall}, this is what you have left
+ * on your current road: heading along a wall, it is large even when the wall is close.
+ *
+ * `corner` rounds the corners off as in {@link nearestWall}, so a road into a corner ends early.
+ * Starting inside a rounded-off part, only the real square counts.
+ */
+export function distanceToWallAlong(
+  origin: Vec,
+  angle: number,
+  worldHalfSize: number,
+  corner = 0,
+): number {
+  const h = worldHalfSize;
+  const ax = Math.abs(origin.x);
+  const ay = Math.abs(origin.y);
+  if (Math.max(ax, ay) >= h) return 0;
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  let t = Number.POSITIVE_INFINITY;
+  if (dx !== 0) t = Math.min(t, ((dx > 0 ? h : -h) - origin.x) / dx);
+  if (dy !== 0) t = Math.min(t, ((dy > 0 ? h : -h) - origin.y) / dy);
+  const r = Math.min(Math.max(corner, 0), h);
+  const inner = h - r;
+  if (r <= 0 || (ax > inner && ay > inner && (ax - inner) ** 2 + (ay - inner) ** 2 > r * r)) {
+    return t;
+  }
+  // The square's exit point, if it lies in a corner zone, is beyond the rounded edge: the road
+  // leaves through that corner's arc instead (the rounded square is convex).
+  const ex = origin.x + dx * t;
+  const ey = origin.y + dy * t;
+  if (Math.abs(ex) <= inner || Math.abs(ey) <= inner) return t;
+  const px = origin.x - Math.sign(ex) * inner;
+  const py = origin.y - Math.sign(ey) * inner;
+  const b = px * dx + py * dy;
+  const c = px * px + py * py - r * r;
+  return Math.max(0, -b + Math.sqrt(Math.max(0, b * b - c)));
 }
 
 /** The item closest to `from`, or `undefined` if `items` is empty. Works on food or points. */

@@ -1,4 +1,3 @@
-import { cos, sin, TAU } from "./math.ts";
 import type { Rng } from "./rng.ts";
 import type { Food, FoodKind, World } from "./types.ts";
 
@@ -22,9 +21,9 @@ class FoodIndex {
   nextId: number;
 
   constructor(world: World) {
-    const { arenaRadius, gridCellSize } = world.config;
+    const { arenaHalfSize, gridCellSize } = world.config;
     this.cellSize = gridCellSize;
-    this.origin = arenaRadius + gridCellSize;
+    this.origin = arenaHalfSize + gridCellSize;
     this.cols = Math.max(1, Math.ceil((2 * this.origin) / gridCellSize));
     this.cells = new Array(this.cols * this.cols);
     this.array = world.food;
@@ -126,7 +125,8 @@ export function removeFood(world: World, slots: readonly number[]): void {
 
 /** One ambient pellet uniformly inside the arena (slightly in from the wall). */
 export function spawnAmbientFood(world: World, rng: Rng): Food {
-  const r = world.config.arenaRadius * 0.98 * Math.sqrt(rng.next());
-  const theta = rng.next() * TAU;
-  return addFood(world, r * cos(theta), r * sin(theta), world.config.foodValue, "ambient");
+  const h = world.config.arenaHalfSize * 0.98;
+  const x = rng.range(-h, h);
+  const y = rng.range(-h, h);
+  return addFood(world, x, y, world.config.foodValue, "ambient");
 }

@@ -8,8 +8,11 @@
  */
 export interface EngineConfig {
   // --- Arena ---------------------------------------------------------------------------------
-  /** Radius of the circular arena, centred on (0, 0). A head beyond it dies by `wall`. */
-  arenaRadius: number;
+  /**
+   * Half the side of the square arena, centred on (0, 0). A head beyond its edge
+   * (`max(|x|, |y|) > arenaHalfSize`) dies by `wall`.
+   */
+  arenaHalfSize: number;
 
   // --- Movement ------------------------------------------------------------------------------
   /** Distance a head covers per tick (original: 0.015 u/ms × 100 ms). */
@@ -85,8 +88,8 @@ export interface EngineConfig {
   killBonus: number;
 
   // --- Spawning ------------------------------------------------------------------------------
-  /** New snakes spawn within arenaRadius × this. */
-  spawnRadiusFactor: number;
+  /** New snakes spawn within the centred square of half-side arenaHalfSize × this. */
+  spawnHalfSizeFactor: number;
   /** Preferred clear distance from other snakes' segments at spawn. */
   spawnClearance: number;
   /** Random positions tried before settling for the last one. */
@@ -113,7 +116,9 @@ export interface EngineConfig {
 export const TICK_RATE = 10;
 
 export const DEFAULT_CONFIG: Readonly<EngineConfig> = Object.freeze({
-  arenaRadius: 100,
+  // About the area of the disc of radius 100 it replaced (100 × √π / 2 ≈ 88.6), so food
+  // density and balance stay the same.
+  arenaHalfSize: 89,
 
   speed: 1.5,
   boostMultiplier: 2,
@@ -152,7 +157,7 @@ export const DEFAULT_CONFIG: Readonly<EngineConfig> = Object.freeze({
   massScoreFactor: 0.001,
   killBonus: 50,
 
-  spawnRadiusFactor: 0.8,
+  spawnHalfSizeFactor: 0.8,
   spawnClearance: 10,
   spawnAttempts: 30,
 

@@ -45,8 +45,8 @@ export interface RenderFood {
 /** One simulation tick, as the renderer sees it. */
 export interface RenderFrame {
   readonly tick: number;
-  /** The arena is a disc of this radius centred at the origin. */
-  readonly arenaRadius: number;
+  /** The arena is a square centred at the origin: `x` and `y` both lie in ±this. */
+  readonly arenaHalfSize: number;
   readonly snakes: readonly RenderSnake[];
   readonly food: readonly RenderFood[];
 }

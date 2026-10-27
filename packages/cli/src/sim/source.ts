@@ -160,7 +160,7 @@ export class RecordedMatchSource implements MatchSource {
       tick,
       frame: {
         tick,
-        arenaRadius: world.config.arenaRadius,
+        arenaHalfSize: world.config.arenaHalfSize,
         snakes: renderSnakes,
         food: this.renderFood(world),
       },

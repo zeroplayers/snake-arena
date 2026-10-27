@@ -30,7 +30,7 @@ export function bundleExampleBot(minify = false): Promise<string> {
 export function makeInfo(overrides: Partial<BotInfo> = {}): BotInfo {
   return {
     snakeId: "me",
-    worldRadius: 1000,
+    worldHalfSize: 1000,
     visionRadius: 300,
     tickRate: 10,
     maxLifeTicks: 6000,

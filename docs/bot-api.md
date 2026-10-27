@@ -83,7 +83,7 @@ hard-coding them.
 | Field           | Default | Meaning                                                                               |
 | --------------- | ------- | ------------------------------------------------------------------------------------- |
 | `snakeId`       |         | your snake's id for this life; equals `state.self.id`                                 |
-| `worldRadius`   | 100     | the arena is a disc of this radius around (0, 0)                                      |
+| `worldHalfSize` | 89      | the arena is a square around (0, 0): `x` and `y` both lie in ±`worldHalfSize`         |
 | `visionRadius`  | 40      | you see snake points and food at most this far from your head                         |
 | `tickRate`      | 10      | ticks per second of game time (rooms may run faster in wall-clock time)               |
 | `maxLifeTicks`  | 6000    | the life retires after this many ticks                                                |
@@ -100,14 +100,14 @@ hard-coding them.
 
 Passed to every `tick`. Plain JSON data.
 
-| Field          | Meaning                                                                                   |
-| -------------- | ----------------------------------------------------------------------------------------- |
-| `tick`         | the room's tick counter; keeps counting across lives (don't expect it to start at 0)      |
-| `lifeTick`     | ticks since this life started; `0` on the first `tick()` call                             |
-| `self`         | your snake, see below                                                                     |
-| `snakes`       | other snakes with at least one point in vision, nearest first                             |
-| `food`         | pellets in vision, nearest first: `{ x, y, value }`                                       |
-| `wallDistance` | `worldRadius − distance of your head from the centre`; you die when it would drop below 0 |
+| Field          | Meaning                                                                                           |
+| -------------- | ------------------------------------------------------------------------------------------------- |
+| `tick`         | the room's tick counter; keeps counting across lives (don't expect it to start at 0)              |
+| `lifeTick`     | ticks since this life started; `0` on the first `tick()` call                                     |
+| `self`         | your snake, see below                                                                             |
+| `snakes`       | other snakes with at least one point in vision, nearest first                                     |
+| `food`         | pellets in vision, nearest first: `{ x, y, value }`                                               |
+| `wallDistance` | distance from your head to the nearest edge, `worldHalfSize − max(\|x\|, \|y\|)`; you die below 0 |
 
 ### `self`
 
@@ -191,20 +191,22 @@ print as they are, everything else as JSON (or `String()` if JSON fails). `conso
 All exported from `@zerosnake/sdk` ([`geometry.ts`](../packages/sdk/src/geometry.ts)). They have no
 dependencies and run inside the sandbox.
 
-| Helper                          | Returns                                                                       |
-| ------------------------------- | ----------------------------------------------------------------------------- |
-| `turnToward(self, angle)`       | the `turn` that rotates toward a heading as fast as allowed without overshoot |
-| `steerToward(self, point)`      | the `turn` toward a point                                                     |
-| `steerAway(self, point)`        | the `turn` directly away from a point                                         |
-| `angleTo(from, to)`             | heading from one point to another                                             |
-| `angleDiff(from, to)`           | signed smallest rotation, positive = counter-clockwise (left)                 |
-| `normalizeAngle(a)`             | `a` wrapped into (−π, π]                                                      |
-| `distance(a, b)`, `distanceSq`  | distance between points (squared)                                             |
-| `distanceToWall(point, radius)` | distance from a point to the arena edge                                       |
-| `project(origin, angle, dist)`  | the point `dist` ahead along `angle`                                          |
-| `nearest(from, items)`          | the closest item of a list of points                                          |
-| `nearestFood(state)`            | the closest visible pellet                                                    |
-| `nearestDanger(state)`          | the closest visible point of another snake, with its `distance` and `gap`     |
-| `clamp`, `CENTER`, `TAU`        | small utilities                                                               |
+| Helper                                     | Returns                                                                                                                 |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `turnToward(self, angle)`                  | the `turn` that rotates toward a heading as fast as allowed without overshoot                                           |
+| `steerToward(self, point)`                 | the `turn` toward a point                                                                                               |
+| `steerAway(self, point)`                   | the `turn` directly away from a point                                                                                   |
+| `angleTo(from, to)`                        | heading from one point to another                                                                                       |
+| `angleDiff(from, to)`                      | signed smallest rotation, positive = counter-clockwise (left)                                                           |
+| `normalizeAngle(a)`                        | `a` wrapped into (−π, π]                                                                                                |
+| `distance(a, b)`, `distanceSq`             | distance between points (squared)                                                                                       |
+| `distanceToWall(point, half)`              | distance from a point to the nearest arena edge (negative outside)                                                      |
+| `nearestWall(point, half, corner?)`        | that distance and the unit `normal` pointing away from the nearest edge; `corner` rounds the corners off to that radius |
+| `distanceToWallAlong(p, a, half, corner?)` | how far `p` can go straight along heading `a` before crossing an edge (corners rounded off as above)                    |
+| `project(origin, angle, dist)`             | the point `dist` ahead along `angle`                                                                                    |
+| `nearest(from, items)`                     | the closest item of a list of points                                                                                    |
+| `nearestFood(state)`                       | the closest visible pellet                                                                                              |
+| `nearestDanger(state)`                     | the closest visible point of another snake, with its `distance` and `gap`                                               |
+| `clamp`, `CENTER`, `TAU`                   | small utilities                                                                                                         |
 
 `gap` from `nearestDanger` is `distance − self.radius − snake.radius`: you die when it reaches 0.

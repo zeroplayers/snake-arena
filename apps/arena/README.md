@@ -51,6 +51,12 @@ room checks):
   starting rooms: if that read fails, none starts), `nextLife` returns nothing, no room opens,
   and every life in flight is retired; rooms then close. On resume the matchmaker reconciles
   from D1 and opens rooms again.
+- **Engine changes.** A room saved by an older engine that this one can't run (the round arena
+  before #76: no `arenaHalfSize` in its world's config, a version 1 replay chunk) closes on its
+  next cycle instead of failing every alarm: its lives are reported as `lifeDropped` with reason
+  `outdated` (unrated, quota given back, no strike or eviction) and its open chunk is discarded.
+  The matchmaker opens new rooms. Deploy apps/arena and apps/web together after such a change:
+  the spectator stream's format (`BROADCAST_VERSION`) moves with the engine.
 - **Quarantine.** Evicted lives are counted per version across rooms, over the last 7 days and
   since the version last started playing (lifting a quarantine starts the count afresh, so late
   or redelivered reports of old evictions don't put it back); at `EVICTIONS_TO_QUARANTINE` of
@@ -71,13 +77,13 @@ deploy. `MatchmakerDO.status()` shows the queue and rooms; `configure()` overrid
 for its first lives; afterwards the room pulls. The room reports to `MatchmakerRpc`, through its
 outbox (retried until delivered, so at least once):
 
-| Call                 | When                                                                                               |
-| -------------------- | -------------------------------------------------------------------------------------------------- |
-| `nextLife`           | the room has a free slot (after each batch; after `null`, every 10 s)                              |
-| `lifeEnded`          | a life of a version ended (after its `lives` row and replay chunk)                                 |
-| `lifeDropped`        | a ticket never started: refused by `join`, dropped at spawn, `leave`d or stopped before it spawned |
-| `versionQuarantined` | the room's backstop quarantined a version (already in D1)                                          |
-| `roomClosed`         | only house bots were left and the queue was empty                                                  |
+| Call                 | When                                                                                                                           |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `nextLife`           | the room has a free slot (after each batch; after `null`, every 10 s)                                                          |
+| `lifeEnded`          | a life of a version ended (after its `lives` row and replay chunk)                                                             |
+| `lifeDropped`        | a ticket never started: refused by `join`, dropped at spawn, `leave`d or stopped before it spawned; or its room was `outdated` |
+| `versionQuarantined` | the room's backstop quarantined a version (already in D1)                                                                      |
+| `roomClosed`         | only house bots were left and the queue was empty                                                                              |
 
 Every ticket a room got ends in exactly one `lifeEnded` or `lifeDropped`, except a `join` the
 matchmaker made itself and saw refused.
@@ -100,7 +106,7 @@ ignored: metrics never stop a room, the matchmaker or the consumer.
 | `room.evicted`        | `RoomDO`: the backstop evicted a life                     | `blob3` roomId, `blob4` versionId                                                                                                                                                                                                                                           |
 | `version.quarantined` | `RoomDO` (`room`, `kills`), `MatchmakerDO` (`matchmaker`) | `blob3` versionId, `blob4` by                                                                                                                                                                                                                                               |
 | `life.ended`          | `RoomDO`, once the life is delivered                      | `blob3` versionId, `blob4` deathCause (`evicted` and `retired` included), `blob5` roomId                                                                                                                                                                                    |
-| `room.closed`         | `RoomDO`                                                  | `blob3` roomId, `blob4` reason (`empty`, `kill_switch`)                                                                                                                                                                                                                     |
+| `room.closed`         | `RoomDO`                                                  | `blob3` roomId, `blob4` reason (`empty`, `kill_switch`, `outdated`)                                                                                                                                                                                                         |
 | `arena.gauge`         | `MatchmakerDO` alarm, once a minute                       | `double2` rooms, `double3` lives in flight, `double4` lives waiting, `double5` playable bots, `double6` bots out of today's quota, `double7` paused                                                                                                                         |
 | `room.stalled`        | `MatchmakerDO` room check (every minute per room)         | `blob3` roomId, `blob4` reason (`no_progress`, `outbox_full`), `double3` stalledMs                                                                                                                                                                                          |
 | `checks.finished`     | checks consumer and its cron                              | `blob3` outcome (`ready`, `superseded`, `rejected`, `unchanged`, `missing`, `failed`, `dead_letter`, `malformed`, `reaped`), `blob4` reason; `double2` durationMs, `double3` attempt                                                                                        |

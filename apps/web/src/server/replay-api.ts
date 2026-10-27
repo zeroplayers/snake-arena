@@ -2,7 +2,8 @@
  * `GET /api/lives/:id/replay` (public, like the replay page): the chunk the life died in and who
  * played in it (`ReplayResponse`), for the site's replay player and anyone else. Errors are
  * `ApiErrorBody`s: 404 `life_not_found` / `replay_not_found`, 410 `replay_expired` once the
- * replay retention deleted the chunk (`src/shared/replay.ts`).
+ * replay retention deleted the chunk (`src/shared/replay.ts`), or once the engine can't play it (a
+ * chunk from before the square arena, #76).
  *
  * A chunk gone from R2 without the sweep marking its lives (deleted by hand, or lost) is marked
  * here, so the life stops being linked and stops holding a pinned slot.

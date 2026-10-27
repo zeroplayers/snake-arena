@@ -16,6 +16,7 @@ import type {
   QuarantineRecord,
 } from "../protocol.ts";
 import type { LifeStarter } from "../room/sim.ts";
+import { RoomStore } from "../room/store.ts";
 import { RoomDO as BaseRoomDO } from "../room.ts";
 import { handleShowcase } from "../showcase.ts";
 import { type DataPoint, sqlPoints, withTestMetrics } from "./metrics.ts";
@@ -63,6 +64,26 @@ export class RoomDO extends BaseRoomDO {
   /** The metric points the room wrote (with the harness's `metrics: "record"`). */
   async metricPoints(): Promise<DataPoint[]> {
     return sqlPoints(this.ctx.storage.sql).read();
+  }
+
+  /**
+   * Rewrites the saved world and open replay chunk as the engine before #76 saved them (a round
+   * arena: `arenaRadius`, version 1 chunks), as if this engine had just been deployed under a
+   * running room. Call between batches; the room keeps nothing in memory across a `restart`.
+   */
+  async makePreSquare(): Promise<void> {
+    const store = new RoomStore(this.ctx.storage);
+    const world = store.getJson<{ config: Record<string, number> }>("world");
+    if (world) {
+      const { arenaHalfSize: _, spawnHalfSizeFactor: __, ...config } = world.config;
+      world.config = { ...config, arenaRadius: 100, spawnRadiusFactor: 0.8 };
+      store.putJson("world", world);
+    }
+    const chunk = store.getBlob("chunk");
+    if (chunk) {
+      chunk[3] = 1;
+      store.putBlob("chunk", chunk);
+    }
   }
 
   /**

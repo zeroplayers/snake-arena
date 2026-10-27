@@ -51,6 +51,7 @@ export {
   decodeReplayChunk,
   encodeReplayChunk,
   HASH_EVERY,
+  REPLAY_VERSION,
   type ReplayChunk,
   type ReplayChunkInfo,
   ReplayDesyncError,
@@ -60,6 +61,7 @@ export {
   type ReplayRecorderOptions,
   type ReplayTick,
   replayChunkInfo,
+  replayChunkVersion,
 } from "./replay.ts";
 export { createRng, type Rng, type RngState } from "./rng.ts";
 export { quantizeTurn, step, TURN_STEPS } from "./step.ts";

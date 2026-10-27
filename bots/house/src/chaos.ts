@@ -2,7 +2,8 @@ import { angleDiff, defineBot } from "@zerosnake/sdk";
 import { collectObstacles, createRandom, steer } from "./common.ts";
 
 const OBSTACLES = { range: 20, margin: 1, headLead: 3 };
-const STEER = { rays: 16, lookahead: 20, safe: 12, dangerWeight: 10 };
+// The reversal cost keeps it from dithering between the two equally bad ways out of a corner.
+const STEER = { rays: 16, lookahead: 20, safe: 12, dangerWeight: 10, reversalCost: 0.5 };
 /** Boosting burns length; never boost below this. */
 const MIN_BOOST_LENGTH = 15;
 
@@ -13,7 +14,7 @@ const MIN_BOOST_LENGTH = 15;
  */
 export const chaos = defineBot({
   init(info) {
-    return { random: createRandom(info.seed), turn: 0, hold: 0, boost: 0 };
+    return { random: createRandom(info.seed), turn: 0, hold: 0, boost: 0, sent: 0 };
   },
   tick(state, mem) {
     const { self } = state;
@@ -27,11 +28,12 @@ export const chaos = defineBot({
 
     // Where the random turn would point us a few ticks from now.
     const desired = self.angle - mem.turn * self.turnRate * 4;
-    const s = steer(state, collectObstacles(state, OBSTACLES), desired, STEER);
+    const s = steer(state, collectObstacles(state, OBSTACLES), desired, STEER, mem.sent);
     const free = s.clearance >= STEER.safe;
     const onCourse = Math.abs(angleDiff(s.angle, desired)) < 1e-9;
+    mem.sent = free && onCourse ? mem.turn : s.turn;
     return {
-      turn: free && onCourse ? mem.turn : s.turn,
+      turn: mem.sent,
       boost: mem.boost > 0 && free && s.ahead >= STEER.lookahead && self.length >= MIN_BOOST_LENGTH,
     };
   },

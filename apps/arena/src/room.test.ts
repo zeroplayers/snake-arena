@@ -2,7 +2,7 @@ import { CHUNK_TICKS, ReplayPlayer, replayChunkInfo } from "@zerosnake/engine";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { bundleHouseBots } from "../scripts/house-bundles.ts";
 import { batchTicks } from "./limits.ts";
-import type { LifeResult, LifeTicket, QuarantineRecord, RoomStatus } from "./protocol.ts";
+import type { LifeDrop, LifeResult, LifeTicket, QuarantineRecord, RoomStatus } from "./protocol.ts";
 import {
   KILLS_TO_EVICT,
   ROOM_KILLS_TO_EVICT,
@@ -28,8 +28,13 @@ async function ticket(author: string, source: string, lifeId?: string): Promise<
   return seedVersion(await h.d1(), author, source, lifeId);
 }
 
+// The backstop tests' burning bots circle in place until they burn; on some seeds another snake
+// runs across them first (seed 7 did on the square arena, #76), and the life the test expects to
+// burn is gone.
+const ROOM_SEED = 8;
+
 async function startRoom(name: string, tickets: LifeTicket[], options: object = {}) {
-  await h.room(name, "start", { roomId: name, seed: 7, manual: true, ...options });
+  await h.room(name, "start", { roomId: name, seed: ROOM_SEED, manual: true, ...options });
   for (const t of tickets) expect(await h.room(name, "join", t)).toEqual({ ok: true });
 }
 
@@ -657,6 +662,39 @@ describe("RoomDO backstop", () => {
     } finally {
       await setPaused(0);
     }
+  }, 60_000);
+
+  it("closes a room saved by the round-arena engine, dropping its lives unrated", async () => {
+    const tickets = await Promise.all(
+      ["old1", "old2"].map((a) => ticket(a, house.medium as string)),
+    );
+    await startRoom("pre-square", tickets);
+    await spares("pre-square", 1);
+    const before = await h.room<RoomStatus>("pre-square", "runBatch");
+    const running = tickets.filter((t) => before.snakes.some((x) => x.lifeId === t.lifeId));
+    expect(running.length).toBeGreaterThan(0);
+    // The engine is deployed under the running room: its storage is from the old one.
+    await h.restart();
+    await h.room("pre-square", "makePreSquare");
+
+    const s = await h.room<RoomStatus>("pre-square", "runBatch");
+    expect(s.state).toBe("closed");
+    expect(s.snakes).toEqual([]);
+    expect(s.pending).toEqual([]);
+    expect(s.incidents).toEqual([]);
+    expect(s.evictions).toEqual([]);
+    expect(s.quarantined).toEqual([]);
+    const seen = await events();
+    const dropped = seen.filter((e) => e.kind === "lifeDropped").map((e) => e.body as LifeDrop);
+    for (const t of tickets) {
+      expect(dropped).toContainEqual(
+        expect.objectContaining({ lifeId: t.lifeId, reason: "outdated" }),
+      );
+      expect(await lifeRow(t.lifeId)).toBeNull();
+    }
+    expect(seen.some((e) => e.kind === "roomClosed" && e.body === "pre-square")).toBe(true);
+    // Nothing left that would make the next alarm fail.
+    expect((await h.room<RoomStatus>("pre-square", "runBatch")).state).toBe("closed");
   }, 60_000);
 
   it("doesn't punish a bot for being slow: watch mode keeps the room going", async () => {

@@ -6,9 +6,11 @@ import {
   distance,
   distanceSq,
   distanceToWall,
+  distanceToWallAlong,
   nearest,
   nearestDanger,
   nearestFood,
+  nearestWall,
   normalizeAngle,
   project,
   steerAway,
@@ -179,10 +181,56 @@ describe("project", () => {
 });
 
 describe("distanceToWall", () => {
-  it("measures to the circular edge", () => {
+  it("measures to the nearest edge of the square", () => {
     expect(distanceToWall({ x: 0, y: 0 }, 100)).toBe(100);
-    expect(distanceToWall({ x: 30, y: 40 }, 100)).toBe(50);
+    expect(distanceToWall({ x: 30, y: -40 }, 100)).toBe(60);
+    expect(distanceToWall({ x: 90, y: 90 }, 100)).toBe(10);
     expect(distanceToWall({ x: 0, y: 110 }, 100)).toBe(-10);
+  });
+});
+
+describe("nearestWall", () => {
+  it("points away from the closest edge", () => {
+    expect(nearestWall({ x: 90, y: 20 }, 100)).toEqual({ distance: 10, normal: { x: -1, y: 0 } });
+    expect(nearestWall({ x: -90, y: 20 }, 100).normal).toEqual({ x: 1, y: 0 });
+    expect(nearestWall({ x: 20, y: 95 }, 100)).toEqual({ distance: 5, normal: { x: 0, y: -1 } });
+    expect(nearestWall({ x: 20, y: -95 }, 100).normal).toEqual({ x: 0, y: 1 });
+  });
+
+  it("can round off the corners", () => {
+    // Corner circle of radius 20 centred on (80, 80); (92, 96) is 20 from it, on its edge.
+    const w = nearestWall({ x: 92, y: 96 }, 100, 20);
+    expect(w.distance).toBeCloseTo(0);
+    expect(w.normal.x).toBeCloseTo(-0.6);
+    expect(w.normal.y).toBeCloseTo(-0.8);
+    expect(nearestWall({ x: -86, y: -88 }, 100, 20)).toMatchObject({
+      distance: 10,
+      normal: { x: expect.closeTo(0.6), y: expect.closeTo(0.8) },
+    });
+    // Along the sides, and with no rounding, as before.
+    expect(nearestWall({ x: 50, y: 95 }, 100, 20)).toEqual(nearestWall({ x: 50, y: 95 }, 100));
+    // A radius over the half-side is clamped: the arena becomes its inscribed disc.
+    expect(nearestWall({ x: 60, y: 80 }, 100, 1000).distance).toBeCloseTo(0);
+  });
+});
+
+describe("distanceToWallAlong", () => {
+  it("is the road left on a heading, edges and corners included", () => {
+    expect(distanceToWallAlong({ x: 0, y: 0 }, 0, 100)).toBeCloseTo(100);
+    expect(distanceToWallAlong({ x: 0, y: 0 }, PI, 100)).toBeCloseTo(100);
+    expect(distanceToWallAlong({ x: 0, y: 0 }, PI / 4, 100)).toBeCloseTo(100 * Math.SQRT2);
+    // Running along the north wall, 5 below it: the east wall ends the road.
+    expect(distanceToWallAlong({ x: 50, y: 95 }, 0, 100)).toBeCloseTo(50);
+    expect(distanceToWallAlong({ x: 50, y: 95 }, PI / 2, 100)).toBeCloseTo(5);
+    expect(distanceToWallAlong({ x: 0, y: 101 }, -PI / 2, 100)).toBe(0);
+  });
+
+  it("can round off the corners", () => {
+    // Corner circle of radius 18 centred on (82, 82); from (80, 80) straight at it.
+    expect(distanceToWallAlong({ x: 80, y: 80 }, PI / 4, 100, 18)).toBeCloseTo(18 + 2 * Math.SQRT2);
+    expect(distanceToWallAlong({ x: 0, y: 90 }, PI / 2, 100, 18)).toBeCloseTo(10);
+    // Already inside a rounded-off corner: only the real square counts.
+    expect(distanceToWallAlong({ x: 98, y: 98 }, 0, 100, 18)).toBeCloseTo(2);
   });
 });
 

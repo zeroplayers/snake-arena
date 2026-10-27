@@ -43,7 +43,8 @@ export interface MatchSource {
 export interface MatchInfo {
   /** Simulation ticks per second at 1× speed. */
   readonly tps: number;
-  readonly arenaRadius: number;
+  /** Half the side of the square arena. */
+  readonly arenaHalfSize: number;
   /** How far a bot sees from its head; drawn around the selected snake. */
   readonly visionRadius: number;
   /** Shown in the viewer's header. */

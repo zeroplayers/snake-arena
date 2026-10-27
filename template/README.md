@@ -70,7 +70,7 @@ pnpm bench -- src/bot.ts .zerosnake/prev/src/bot.ts       # compare two versions
 
 ## The rules in one minute
 
-- The arena is a circle. Your snake always moves forward; each tick you choose how hard to turn
+- The arena is a square. Your snake always moves forward; each tick you choose how hard to turn
   (`turn` from -1 left to 1 right) and whether to `boost` (faster, but burns length).
 - Eat food to grow. Length slowly decays, so keep eating.
 - Hit another snake's body with your head, or the wall, and you die. Head to head, the shorter snake

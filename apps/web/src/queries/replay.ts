@@ -8,7 +8,7 @@
  * match no life (house bots) keep the author the replay recorded.
  */
 import { Buffer } from "node:buffer";
-import { replayChunkInfo } from "@zerosnake/engine";
+import { REPLAY_VERSION, replayChunkInfo, replayChunkVersion } from "@zerosnake/engine";
 import { and, eq, gte, isNull, lte, or } from "drizzle-orm";
 import type { Db } from "../db";
 import { bots, type DeathCauseColumn, lives, users, versions } from "../db/schema";
@@ -92,14 +92,16 @@ export type ReplayRead =
   /** No chunk was recorded for it (or it can't be read). */
   | { status: "none" }
   /**
-   * Recorded, but deleted by the replay retention. `marked`: `lives.replay_expired_at` says so;
-   * otherwise the chunk is just gone from R2 and the caller should mark it.
+   * Recorded, but deleted by the replay retention, or recorded by an engine this one can't play
+   * (the round arena before #76). `marked`: `lives.replay_expired_at` says so; otherwise the
+   * caller should mark it.
    */
   | { status: "expired"; marked: boolean };
 
 /**
  * The chunk `lifeId` died in, and who played in it (`GET /api/lives/:id/replay`). A chunk missing
  * from R2 counts as expired, marked or not: a life's row is written only once its chunk is in R2.
+ * So does one in another format version: no player can show it any more.
  * Read-only: `src/server/replay-api.ts` marks such a life.
  */
 export async function readLifeReplay(
@@ -115,6 +117,8 @@ export async function readLifeReplay(
   const object = key ? await bucket.get(key) : null;
   if (!object) return { status: "expired", marked: false };
   const bytes = new Uint8Array(await object.arrayBuffer());
+  const version = replayChunkVersion(bytes);
+  if (version !== null && version !== REPLAY_VERSION) return { status: "expired", marked: false };
   let range: { startTick: number; endTick: number };
   try {
     range = replayChunkInfo(bytes);

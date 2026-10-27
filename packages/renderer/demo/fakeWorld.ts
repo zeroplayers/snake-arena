@@ -21,7 +21,7 @@ interface Snake {
 
 export class FakeWorld {
   tick = 0;
-  readonly arenaRadius = 80;
+  readonly arenaHalfSize = 71;
   private snakes: Snake[] = [];
   private food: RenderFood[] = [];
   private nextFoodId = 0;
@@ -54,8 +54,8 @@ export class FakeWorld {
         turn += angleDiff(s.angle, Math.atan2(target.y - head.y, target.x - head.x)) * 0.5;
 
       // Steer back towards the centre near the wall (sometimes too late, on purpose).
-      const dist = Math.hypot(head.x, head.y);
-      if (dist > this.arenaRadius - 14)
+      const edge = Math.max(Math.abs(head.x), Math.abs(head.y));
+      if (edge > this.arenaHalfSize - 14)
         turn += angleDiff(s.angle, Math.atan2(-head.y, -head.x)) * 0.35;
 
       s.angle += Math.max(-MAX_TURN, Math.min(MAX_TURN, turn));
@@ -63,7 +63,7 @@ export class FakeWorld {
       s.path.unshift(next);
       if (s.path.length > s.length) s.path.length = Math.floor(s.length);
 
-      if (Math.hypot(next.x, next.y) + radius > this.arenaRadius) {
+      if (Math.max(Math.abs(next.x), Math.abs(next.y)) + radius > this.arenaHalfSize) {
         this.kill(i);
         continue;
       }
@@ -81,7 +81,7 @@ export class FakeWorld {
       length: s.length,
       ...(s.color && { skin: { color: s.color } }),
     }));
-    return { tick: this.tick, arenaRadius: this.arenaRadius, snakes, food: [...this.food] };
+    return { tick: this.tick, arenaHalfSize: this.arenaHalfSize, snakes, food: [...this.food] };
   }
 
   private eat(s: Snake, head: Vec2, radius: number): void {
@@ -131,9 +131,8 @@ export class FakeWorld {
   }
 
   private randomPoint(fraction: number): Vec2 {
-    const r = Math.sqrt(this.random()) * this.arenaRadius * fraction;
-    const a = this.random() * Math.PI * 2;
-    return { x: Math.cos(a) * r, y: Math.sin(a) * r };
+    const h = this.arenaHalfSize * fraction;
+    return { x: (this.random() * 2 - 1) * h, y: (this.random() * 2 - 1) * h };
   }
 }
 

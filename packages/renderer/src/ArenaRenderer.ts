@@ -118,11 +118,11 @@ export class ArenaRenderer {
     this.lastDrawTime = now;
     this.tick = lerp(prev.tick, next.tick, alpha);
 
-    const arenaRadius = next.arenaRadius;
+    const arenaHalfSize = next.arenaHalfSize;
     const onTop =
       this.highlight?.snakeId ??
       (this.cameraMode.mode === "follow" ? this.cameraMode.snakeId : undefined);
-    this.background.setArenaRadius(arenaRadius);
+    this.background.setArenaHalfSize(arenaHalfSize);
     this.background.update(dt);
     this.snakes.update(prev.snakes, next.snakes, alpha, onTop);
     this.highlighter.update(
@@ -130,7 +130,7 @@ export class ArenaRenderer {
       this.highlight && this.snakes.view(this.highlight.snakeId),
     );
     this.food.update(prev.food, next.food, alpha, this.snakes.headPositions(), dt);
-    this.updateCamera(dt, arenaRadius);
+    this.updateCamera(dt, arenaHalfSize);
     this.webgl.render(this.scene, this.camera);
   }
 
@@ -184,12 +184,13 @@ export class ArenaRenderer {
     this.domElement.remove();
   }
 
-  private updateCamera(dt: number, arenaRadius: number): void {
+  private updateCamera(dt: number, arenaHalfSize: number): void {
     const aspect = this.width / this.height;
     let x = 0;
     let y = 0;
-    // Overview fits the whole disc whichever side of the screen is shorter.
-    let height = (arenaRadius * 2 * OVERVIEW_MARGIN) / Math.min(1, aspect);
+    // Overview fits the whole square, wall glow included, whichever side of the screen is
+    // shorter: in a square view it fills the frame.
+    let height = (this.background.extent(arenaHalfSize) * 2) / Math.min(1, aspect);
 
     if (this.cameraMode.mode === "follow") {
       const view = this.snakes.view(this.cameraMode.snakeId);

@@ -1,16 +1,18 @@
 import {
   AdditiveBlending,
   CanvasTexture,
-  CircleGeometry,
   Color,
   LinearFilter,
   LinearMipMapLinearFilter,
   Mesh,
   MeshBasicMaterial,
+  Path,
+  PlaneGeometry,
   RepeatWrapping,
-  RingGeometry,
   type Scene,
   ShaderMaterial,
+  Shape,
+  ShapeGeometry,
 } from "three";
 
 export interface BackgroundOptions {
@@ -34,17 +36,21 @@ export const DEFAULT_BACKGROUND: BackgroundOptions = {
 const GRID_TEXTURE_PX = 64;
 /** Glow falloff (Gaussian sigma) in wall widths. */
 const GLOW_SIGMA_MULTIPLIER = 3;
+/** The glow mesh reaches this many sigmas each side of the wall (faded to zero by then). */
+const GLOW_REACH_SIGMAS = 3.5;
+/** How many sigmas of glow outside the wall `extent` keeps in view (~2% of its peak beyond). */
+const GLOW_VISIBLE_SIGMAS = 2.5;
 const HUE_SPEED = 0.12; // hue turns per second
 
 /**
- * Black backdrop, tiled dot grid clipped to the arena disc, and a wall that slowly cycles
- * through hues. Ported from ZeroSnake's rectangular arena to the circular one.
+ * Black backdrop, tiled dot grid clipped to the square arena, and a wall that slowly cycles
+ * through hues, with a soft glow on both sides. As in ZeroSnake, whose arena was a square too.
  */
 export class BackgroundRenderer {
-  private grid: Mesh<CircleGeometry, MeshBasicMaterial> | undefined;
-  private border: Mesh<RingGeometry, MeshBasicMaterial> | undefined;
-  private glow: Mesh<RingGeometry, ShaderMaterial> | undefined;
-  private radius = 0;
+  private grid: Mesh<PlaneGeometry, MeshBasicMaterial> | undefined;
+  private border: Mesh<ShapeGeometry, MeshBasicMaterial> | undefined;
+  private glow: Mesh<ShapeGeometry, ShaderMaterial> | undefined;
+  private halfSize = 0;
   private hue = 0;
 
   constructor(
@@ -54,33 +60,45 @@ export class BackgroundRenderer {
     scene.background = new Color(0x000000);
   }
 
-  /** Rebuilds the arena meshes when the radius changes. */
-  setArenaRadius(radius: number): void {
-    if (radius === this.radius || !(radius > 0)) return;
-    this.radius = radius;
+  /**
+   * How far from the centre (along an axis) the wall and the visible part of its glow reach:
+   * a camera showing ±this sees the whole arena.
+   */
+  extent(halfSize: number): number {
+    const { borderWidth } = this.options;
+    return halfSize + borderWidth / 2 + borderWidth * GLOW_SIGMA_MULTIPLIER * GLOW_VISIBLE_SIGMAS;
+  }
+
+  /** Rebuilds the arena meshes when its size changes. */
+  setArenaHalfSize(halfSize: number): void {
+    if (halfSize === this.halfSize || !(halfSize > 0)) return;
+    this.halfSize = halfSize;
     this.disposeMeshes();
 
     const { cellSize, borderWidth, glowOpacity } = this.options;
     const texture = this.createGridTexture();
-    // CircleGeometry UVs span its bounding square; with the texture centred, the origin
-    // lands on a dot.
-    texture.repeat.set((radius * 2) / cellSize, (radius * 2) / cellSize);
-    this.grid = new Mesh(new CircleGeometry(radius, 256), new MeshBasicMaterial({ map: texture }));
+    // PlaneGeometry UVs span the plane; with the texture centred, the origin lands on a dot.
+    texture.repeat.set((halfSize * 2) / cellSize, (halfSize * 2) / cellSize);
+    this.grid = new Mesh(
+      new PlaneGeometry(halfSize * 2, halfSize * 2),
+      new MeshBasicMaterial({ map: texture }),
+    );
     this.grid.position.z = -0.5;
     this.grid.renderOrder = -10;
 
     this.border = new Mesh(
-      new RingGeometry(radius, radius + borderWidth, 256),
+      squareFrame(halfSize, halfSize + borderWidth),
       new MeshBasicMaterial({ color: 0xff0000, transparent: true, depthWrite: false }),
     );
     this.border.renderOrder = -8;
 
-    // Soft glow: a Gaussian falloff on both sides of the wall, faded to zero well before
-    // the ring's edges so nothing looks cut off.
+    // Soft glow: a Gaussian falloff on both sides of the wall (by distance to the square, so
+    // it rounds off outside the corners), faded to zero well before the frame's edges so
+    // nothing looks cut off.
     const sigma = borderWidth * GLOW_SIGMA_MULTIPLIER;
-    const centre = radius + borderWidth / 2;
+    const centre = halfSize + borderWidth / 2;
     this.glow = new Mesh(
-      new RingGeometry(Math.max(0, centre - sigma * 3.5), centre + sigma * 3.5, 256),
+      squareFrame(centre - sigma * GLOW_REACH_SIGMAS, centre + sigma * GLOW_REACH_SIGMAS),
       new ShaderMaterial({
         uniforms: {
           color: { value: new Color(0xffffff) },
@@ -156,6 +174,27 @@ void main() {
 }
 `;
 
+/** The flat region between two centred squares of half-sides `inner` and `outer`. */
+function squareFrame(inner: number, outer: number): ShapeGeometry {
+  const shape = new Shape()
+    .moveTo(-outer, -outer)
+    .lineTo(outer, -outer)
+    .lineTo(outer, outer)
+    .lineTo(-outer, outer)
+    .closePath();
+  if (inner > 0) {
+    shape.holes.push(
+      new Path()
+        .moveTo(-inner, -inner)
+        .lineTo(-inner, inner)
+        .lineTo(inner, inner)
+        .lineTo(inner, -inner)
+        .closePath(),
+    );
+  }
+  return new ShapeGeometry(shape);
+}
+
 const GLOW_FRAGMENT = /* glsl */ `
 uniform vec3 color;
 uniform float centre;
@@ -163,7 +202,9 @@ uniform float sigma;
 uniform float opacity;
 varying vec2 vPos;
 void main() {
-  float x = (length(vPos) - centre) / sigma;
+  // Signed distance to the square of half-side centre (negative inside).
+  vec2 d = abs(vPos) - vec2(centre);
+  float x = (length(max(d, 0.0)) + min(max(d.x, d.y), 0.0)) / sigma;
   gl_FragColor = vec4(color, opacity * exp(-0.5 * x * x));
   #include <colorspace_fragment>
 }

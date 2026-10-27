@@ -29,7 +29,7 @@ describe("bundleBot", () => {
     const sandbox = await createSandbox();
     const life = sandbox.startLife(bot.code, {
       snakeId: "me",
-      worldRadius: 100,
+      worldHalfSize: 100,
       visionRadius: 40,
       tickRate: 10,
       maxLifeTicks: 6000,

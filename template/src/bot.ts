@@ -4,7 +4,8 @@
  * for the rules and API.
  *
  * Each tick it:
- *  1. picks a target: the centre when the wall is close, else the food worth the shortest detour;
+ *  1. picks a target: straight away from the wall when it is close, else the food worth the
+ *     shortest detour;
  *  2. drives there in its head for the next few ticks: would it touch a visible body, the road
  *     ahead of another head, or the arena edge?
  *  3. goes for the target if that is safe, otherwise tries a handful of headings ("feelers") all
@@ -14,10 +15,10 @@ import {
   angleDiff,
   angleTo,
   type BotState,
-  CENTER,
   defineBot,
   distance,
   type Food,
+  nearestWall,
   normalizeAngle,
   type SelfState,
   steerToward,
@@ -35,15 +36,20 @@ const BODY_MARGIN = 1;
 const HEAD_MARGIN = 1;
 /** Other heads can turn: the space kept from their road grows by this share of a tick's move per tick. */
 const HEAD_SPREAD = 0.2;
-/** Head back toward the centre when the wall is closer than this many turning radii. */
+/** Turn straight away from the wall when it is closer than this many turning radii. */
 const WALL_TURN_RADII = 1;
+/**
+ * The arena's corners count as rounded off to this many turning radii: heading into a corner
+ * there are two walls ahead, and getting out takes far more room than leaving a straight wall.
+ */
+const CORNER_TURN_RADII = 3;
 
 type Mode = "eat" | "wander" | "avoid" | "wall";
 
 export default defineBot({
-  init() {
+  init(info) {
     // Memory: whatever `init` returns is passed to every `tick` of this life.
-    return { mode: "wander" as Mode, ticksInMode: 0 };
+    return { mode: "wander" as Mode, ticksInMode: 0, worldHalfSize: info.worldHalfSize };
   },
 
   tick(state, mem, log) {
@@ -53,8 +59,12 @@ export default defineBot({
     let target: Vec | undefined;
     let mode: Mode;
     const food = bestFood(state);
-    if (state.wallDistance < turnRadius(self) * WALL_TURN_RADII) {
-      target = CENTER;
+    const wall = nearestWall(self.head, mem.worldHalfSize, turnRadius(self) * CORNER_TURN_RADII);
+    if (wall.distance < turnRadius(self) * WALL_TURN_RADII) {
+      // Straight away from the wall, not toward the centre: off the axes, the shorter turn toward
+      // the centre can swing the head through the wall first.
+      const { normal } = wall;
+      target = { x: self.head.x + normal.x * 100, y: self.head.y + normal.y * 100 };
       mode = "wall";
     } else if (food) {
       target = food;
@@ -134,7 +144,8 @@ interface Danger {
   /** Nearest first. */
   bodies: Body[];
   heads: Head[];
-  arenaRadius: number;
+  /** Half-side of the square arena. */
+  arenaHalfSize: number;
 }
 
 /** Every visible body point near our head, every visible head, and the size of the arena. */
@@ -168,8 +179,8 @@ function dangerAround(state: BotState): Danger {
     }
   }
   bodies.sort((a, b) => a.reach - b.reach);
-  const arenaRadius = Math.hypot(self.head.x, self.head.y) + state.wallDistance;
-  return { bodies, heads, arenaRadius };
+  const arenaHalfSize = Math.max(Math.abs(self.head.x), Math.abs(self.head.y)) + state.wallDistance;
+  return { bodies, heads, arenaHalfSize };
 }
 
 /**
@@ -180,7 +191,7 @@ function dangerAround(state: BotState): Danger {
  */
 function safeTicks(self: SelfState, aim: number | Vec, danger: Danger): number {
   const me = { head: { ...self.head }, angle: self.angle, turnRate: self.turnRate };
-  const wall2 = (danger.arenaRadius - self.radius) ** 2;
+  const wall = danger.arenaHalfSize - self.radius;
   for (let t = 1; t <= LOOKAHEAD_TICKS; t++) {
     // Food within reach is eaten: from there on, straight on.
     if (typeof aim !== "number" && distance(me.head, aim) < self.radius * 6) aim = me.angle;
@@ -189,7 +200,7 @@ function safeTicks(self: SelfState, aim: number | Vec, danger: Danger): number {
     me.head.x += Math.cos(me.angle) * self.speed;
     me.head.y += Math.sin(me.angle) * self.speed;
     const { x, y } = me.head;
-    if (x * x + y * y > wall2) return t - 1;
+    if (Math.abs(x) > wall || Math.abs(y) > wall) return t - 1;
     // Bodies are nearest first: stop at the first one we can't have reached yet.
     for (const b of danger.bodies) {
       if (b.reach > t * self.speed) break;

@@ -28,7 +28,9 @@ import { Route as ReplayIdRouteImport } from './routes/replay.$id'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiUsersUsernameRouteImport } from './routes/api/users/$username'
 import { Route as ApiBotsBotVersionsRouteImport } from './routes/api/bots/$bot/versions'
+import { Route as ApiLivesIdTraceRouteImport } from './routes/api/lives/$id/trace'
 import { Route as ApiBotsBotVersionsNRouteImport } from './routes/api/bots/$bot/versions/$n'
+import { Route as ApiBotsBotVersionsNLivesRouteImport } from './routes/api/bots/$bot/versions/$n/lives'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -127,11 +129,22 @@ const ApiBotsBotVersionsRoute = ApiBotsBotVersionsRouteImport.update({
   path: '/$bot/versions',
   getParentRoute: () => ApiBotsRoute,
 } as any)
+const ApiLivesIdTraceRoute = ApiLivesIdTraceRouteImport.update({
+  id: '/api/lives/$id/trace',
+  path: '/api/lives/$id/trace',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiBotsBotVersionsNRoute = ApiBotsBotVersionsNRouteImport.update({
   id: '/$n',
   path: '/$n',
   getParentRoute: () => ApiBotsBotVersionsRoute,
 } as any)
+const ApiBotsBotVersionsNLivesRoute =
+  ApiBotsBotVersionsNLivesRouteImport.update({
+    id: '/lives',
+    path: '/lives',
+    getParentRoute: () => ApiBotsBotVersionsNRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -153,7 +166,9 @@ export interface FileRoutesByFullPath {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
   '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
-  '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRoute
+  '/api/lives/$id/trace': typeof ApiLivesIdTraceRoute
+  '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRouteWithChildren
+  '/api/bots/$bot/versions/$n/lives': typeof ApiBotsBotVersionsNLivesRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -174,7 +189,9 @@ export interface FileRoutesByTo {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
   '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
-  '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRoute
+  '/api/lives/$id/trace': typeof ApiLivesIdTraceRoute
+  '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRouteWithChildren
+  '/api/bots/$bot/versions/$n/lives': typeof ApiBotsBotVersionsNLivesRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -197,7 +214,9 @@ export interface FileRoutesById {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
   '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
-  '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRoute
+  '/api/lives/$id/trace': typeof ApiLivesIdTraceRoute
+  '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRouteWithChildren
+  '/api/bots/$bot/versions/$n/lives': typeof ApiBotsBotVersionsNLivesRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -221,7 +240,9 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/users/$username'
     | '/api/bots/$bot/versions'
+    | '/api/lives/$id/trace'
     | '/api/bots/$bot/versions/$n'
+    | '/api/bots/$bot/versions/$n/lives'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -242,7 +263,9 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/users/$username'
     | '/api/bots/$bot/versions'
+    | '/api/lives/$id/trace'
     | '/api/bots/$bot/versions/$n'
+    | '/api/bots/$bot/versions/$n/lives'
   id:
     | '__root__'
     | '/'
@@ -264,7 +287,9 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/users/$username'
     | '/api/bots/$bot/versions'
+    | '/api/lives/$id/trace'
     | '/api/bots/$bot/versions/$n'
+    | '/api/bots/$bot/versions/$n/lives'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -284,6 +309,7 @@ export interface RootRouteChildren {
   AtChar123usernameChar125IndexRoute: typeof AtChar123usernameChar125IndexRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiUsersUsernameRoute: typeof ApiUsersUsernameRoute
+  ApiLivesIdTraceRoute: typeof ApiLivesIdTraceRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -421,12 +447,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiBotsBotVersionsRouteImport
       parentRoute: typeof ApiBotsRoute
     }
+    '/api/lives/$id/trace': {
+      id: '/api/lives/$id/trace'
+      path: '/api/lives/$id/trace'
+      fullPath: '/api/lives/$id/trace'
+      preLoaderRoute: typeof ApiLivesIdTraceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/bots/$bot/versions/$n': {
       id: '/api/bots/$bot/versions/$n'
       path: '/$n'
       fullPath: '/api/bots/$bot/versions/$n'
       preLoaderRoute: typeof ApiBotsBotVersionsNRouteImport
       parentRoute: typeof ApiBotsBotVersionsRoute
+    }
+    '/api/bots/$bot/versions/$n/lives': {
+      id: '/api/bots/$bot/versions/$n/lives'
+      path: '/lives'
+      fullPath: '/api/bots/$bot/versions/$n/lives'
+      preLoaderRoute: typeof ApiBotsBotVersionsNLivesRouteImport
+      parentRoute: typeof ApiBotsBotVersionsNRoute
     }
   }
 }
@@ -443,12 +483,23 @@ const DocsRouteChildren: DocsRouteChildren = {
 
 const DocsRouteWithChildren = DocsRoute._addFileChildren(DocsRouteChildren)
 
+interface ApiBotsBotVersionsNRouteChildren {
+  ApiBotsBotVersionsNLivesRoute: typeof ApiBotsBotVersionsNLivesRoute
+}
+
+const ApiBotsBotVersionsNRouteChildren: ApiBotsBotVersionsNRouteChildren = {
+  ApiBotsBotVersionsNLivesRoute: ApiBotsBotVersionsNLivesRoute,
+}
+
+const ApiBotsBotVersionsNRouteWithChildren =
+  ApiBotsBotVersionsNRoute._addFileChildren(ApiBotsBotVersionsNRouteChildren)
+
 interface ApiBotsBotVersionsRouteChildren {
-  ApiBotsBotVersionsNRoute: typeof ApiBotsBotVersionsNRoute
+  ApiBotsBotVersionsNRoute: typeof ApiBotsBotVersionsNRouteWithChildren
 }
 
 const ApiBotsBotVersionsRouteChildren: ApiBotsBotVersionsRouteChildren = {
-  ApiBotsBotVersionsNRoute: ApiBotsBotVersionsNRoute,
+  ApiBotsBotVersionsNRoute: ApiBotsBotVersionsNRouteWithChildren,
 }
 
 const ApiBotsBotVersionsRouteWithChildren =
@@ -482,6 +533,7 @@ const rootRouteChildren: RootRouteChildren = {
   AtChar123usernameChar125IndexRoute: AtChar123usernameChar125IndexRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiUsersUsernameRoute: ApiUsersUsernameRoute,
+  ApiLivesIdTraceRoute: ApiLivesIdTraceRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

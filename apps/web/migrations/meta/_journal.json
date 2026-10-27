@@ -71,6 +71,13 @@
       "when": 1793082142750,
       "tag": "0009_version_kills",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1793105646666,
+      "tag": "0010_ban_change_seq",
+      "breakpoints": true
     }
   ]
 }

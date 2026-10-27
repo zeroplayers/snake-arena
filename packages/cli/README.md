@@ -104,9 +104,11 @@ allowed only for localhost.
   `GET /api/users/:username` for each active version's rating (mean ± CI over N lives, ranked from
   30) and lives played.
 - **`logs`**: the version (`--version`, else active, else latest), its status, message and check
-  report; then `GET /api/bots/:bot/versions/:n/lives?limit=20[&deaths=1]`, an endpoint that doesn't
-  exist yet (#25; the shape the CLI expects is `LifeEntry` in `src/commands/logs.ts`). Until then it
-  links the bot's page, which lists recent lives.
+  report; then `GET /api/bots/:bot/versions/:n/lives?limit=20[&deaths=1]` (an older server without
+  it gets a link to the bot's page). With `--deaths`, the death context of the latest 3 deaths
+  from `GET /api/lives/:id/trace` (owner only; format in apps/web `src/shared/trace.ts`): totals
+  over the life, then the last `--context` ticks (default 10): what the bot saw, returned, spent
+  and logged. `--life <id or replay URL>` shows one life's.
 
 Every API failure becomes a plain-language message (`explain` in `src/remote/api.ts`): the
 server's `message` plus what to do, for each `ApiErrorBody` code and for non-JSON answers. Redirects

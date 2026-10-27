@@ -1,7 +1,10 @@
 import { Link } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import type { Participant } from "../queries/replay";
+import type { ReplaySource } from "../replay/ReplaySource";
 import { getReplayData } from "../server/pages";
+import type { ReplayTrace } from "../server/traces";
+import { type TraceTick, traceTicks } from "../shared/trace";
 import { Empty } from "./PageState";
 
 type State =
@@ -13,10 +16,32 @@ type State =
 /**
  * `@zerosnake/viewer` over a life's replay chunk. Client-only: the chunk, the viewer and
  * three.js are loaded after hydration, so none of it is in the server render or the main bundle.
+ *
+ * With the life's `trace` (its owner's), the viewer's log panel shows what the bot logged. `seek`
+ * is set to a function that shows a room tick, once the viewer is up.
  */
-export function ReplayViewer({ lifeId, title }: { lifeId: string; title: string }) {
+export function ReplayViewer({
+  lifeId,
+  title,
+  trace,
+  seek,
+}: {
+  lifeId: string;
+  title: string;
+  trace?: ReplayTrace | null;
+  seek?: RefObject<((tick: number) => void) | null>;
+}) {
   const container = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<State>({ kind: "loading" });
+  const sourceRef = useRef<ReplaySource | null>(null);
+  const ticks: TraceTick[] | null = useMemo(
+    () => (trace?.status === "ok" ? traceTicks(trace.trace) : null),
+    [trace],
+  );
+
+  useEffect(() => {
+    if (ticks && state.kind === "ready") sourceRef.current?.setTrace(lifeId, ticks);
+  }, [ticks, state.kind, lifeId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,7 +83,18 @@ export function ReplayViewer({ lifeId, title }: { lifeId: string; title: string 
         ...(life && { select: lifeId }),
       });
       if (life) viewer.playback.seek(Math.max(source.firstTick, life.bornTick));
+      sourceRef.current = source;
+      if (seek) {
+        seek.current = (tick) => {
+          viewer.select(lifeId);
+          viewer.playback.pause();
+          viewer.playback.seek(Math.min(Math.max(tick, source.firstTick), source.lastTick));
+          container.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        };
+      }
       cleanup = () => {
+        if (seek) seek.current = null;
+        sourceRef.current = null;
         viewer.destroy();
         source.dispose();
       };
@@ -72,7 +108,7 @@ export function ReplayViewer({ lifeId, title }: { lifeId: string; title: string 
       cancelled = true;
       cleanup?.();
     };
-  }, [lifeId, title]);
+  }, [lifeId, title, seek]);
 
   return (
     <>

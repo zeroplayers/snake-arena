@@ -243,6 +243,7 @@ npx zerosnake login                              # browser device flow, once
 npx zerosnake deploy -m "what changed"           # runs test here, uploads, waits for the server's checks
 npx zerosnake status                             # your bots: active version, rating, lives, deploys left today
 npx zerosnake logs                               # a version's check report and recent lives
+npx zerosnake logs --deaths                      # recent arena deaths, last ticks before each (saw, returned, cost, logs)
 ```
 
 - **Never run plain `npx zerosnake sim` yourself:** it opens the viewer in a browser and waits until

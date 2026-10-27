@@ -54,11 +54,15 @@ const death = result.lives.find((l) => l.tick === 483);
 
 Another lineup or tick count is a different match: the death will not be there.
 
-**Arena:** `npx zerosnake logs` shows a version's check report and its recent lives; until the
-lives endpoint exists it points at the bot's page, which lists them. Later, with the MCP server
-connected (`claude mcp add zerosnake https://<arena-domain>/mcp`), `list_lives(version, filter:
-"deaths")` and `get_death_context(life)` will give what the snake saw, what the bot returned and
-its logs in the last ticks. If a command is not available yet, say so; don't invent its output.
+**Arena:** `npx zerosnake logs --deaths` lists recent arena deaths and prints the death context
+of the latest 3: for each of the last ticks (`--context 30` for more, up to 100), what the snake
+saw (head, wall distance, nearest snake with its gap, food), what the bot returned, what it cost
+and what it logged, plus errors, timeouts and whether the room restarted the bot. `npx zerosnake
+logs --life <id>` shows one life (an id from the list, or its replay URL). Traces are kept 7 days.
+The arena's opponents are other people's bots, so an arena death usually can't be replayed
+locally: reason from the trace, then write a unit test with a similar state. Later, with the MCP
+server connected (`claude mcp add zerosnake https://<arena-domain>/mcp`), `get_death_context(life)`
+will give the same. If a command is not available yet, say so; don't invent its output.
 
 ## 2. Diagnose
 

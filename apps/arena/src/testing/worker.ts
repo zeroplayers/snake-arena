@@ -8,7 +8,13 @@
 import { DurableObject } from "cloudflare:workers";
 import type { BotLife, InstrumentResult } from "@zerosnake/sandbox";
 import production from "../index.ts";
-import type { LifeResult, LifeTicket, MatchmakerRpc, QuarantineRecord } from "../protocol.ts";
+import type {
+  LifeDrop,
+  LifeResult,
+  LifeTicket,
+  MatchmakerRpc,
+  QuarantineRecord,
+} from "../protocol.ts";
 import type { LifeStarter } from "../room/sim.ts";
 import { RoomDO as BaseRoomDO } from "../room.ts";
 import { handleShowcase } from "../showcase.ts";
@@ -35,6 +41,8 @@ function spin(ms: number): void {
 
 /** Storage key of `slowInstrument`'s delay (it survives restarts, like a slow machine). */
 const INSTRUMENT_DELAY_KEY = "test:instrumentDelayMs";
+/** Storage key of how many more trace uploads `failTraces` makes fail. */
+const TRACE_FAILURES_KEY = "test:traceFailures";
 
 /**
  * The real room, but each bot tick may ask the host to burn CPU through its log. That's what an
@@ -48,6 +56,20 @@ export class RoomDO extends BaseRoomDO {
    */
   async slowInstrument(ms: number): Promise<void> {
     await this.ctx.storage.put(INSTRUMENT_DELAY_KEY, ms);
+  }
+
+  /** Makes the next `n` trace uploads to R2 fail. */
+  async failTraces(n: number): Promise<void> {
+    await this.ctx.storage.put(TRACE_FAILURES_KEY, n);
+  }
+
+  protected override async putTrace(key: string, json: Uint8Array): Promise<void> {
+    const failures = (await this.ctx.storage.get<number>(TRACE_FAILURES_KEY)) ?? 0;
+    if (failures > 0) {
+      await this.ctx.storage.put(TRACE_FAILURES_KEY, failures - 1);
+      throw new Error("R2 is down (test)");
+    }
+    return super.putTrace(key, json);
   }
 
   protected override async instrumentBundle(source: string): Promise<InstrumentResult> {
@@ -90,7 +112,7 @@ interface Call {
 }
 
 export interface MatchmakerEvent {
-  kind: "nextLife" | "lifeEnded" | "versionQuarantined" | "roomClosed";
+  kind: "nextLife" | "lifeEnded" | "lifeDropped" | "versionQuarantined" | "roomClosed";
   body: unknown;
 }
 
@@ -143,6 +165,10 @@ export class TestMatchmaker extends DurableObject<Env> implements MatchmakerRpc 
 
   async lifeEnded(result: LifeResult): Promise<void> {
     this.record("lifeEnded", result);
+  }
+
+  async lifeDropped(drop: LifeDrop): Promise<void> {
+    this.record("lifeDropped", drop);
   }
 
   async versionQuarantined(record: QuarantineRecord): Promise<void> {

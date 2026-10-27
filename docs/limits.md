@@ -151,7 +151,7 @@ the source files (sources are public on your bot's page).
 | bots per author            | **3**                                                                                                                                                |
 | deploys per author per day | **20** (UTC day); versions rejected by the checks count                                                                                              |
 | active versions per bot    | **1**: a new version that passes the checks replaces the old one                                                                                     |
-| lives per bot per day      | 100 (SPEC §4 starting value; the matchmaker that enforces it isn't built yet, [#23](https://github.com/zeroplayers/snake-arena/issues/23))           |
+| lives per bot per day      | **100** (UTC day, all versions of the bot); a life counts when the matchmaker hands it to a room, unless the room never starts it                    |
 
 Bot names are 1–40 characters; the slug (the URL segment `/@you/<slug>`) is 1–32 of `a-z`, `0-9`
 and `-`, not starting or ending with `-`. The per-day and per-author numbers can be changed per

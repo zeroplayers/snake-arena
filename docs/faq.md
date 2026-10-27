@@ -74,8 +74,10 @@ Module evaluation plus `init()` went over the load budget (100). Precompute less
 work over the first ticks and keep the progress in `mem`.
 
 **Where do I see my `log()` output?**
-In `zerosnake sim` (the viewer's snake panel) and, later, in life traces on the site
-([#25](https://github.com/zeroplayers/snake-arena/issues/25)). Up to 1024 bytes per tick.
+In `zerosnake sim` (the viewer's snake panel), and for arena lives in their traces:
+`zerosnake logs --deaths` prints the last ticks before your latest deaths (what the bot saw,
+returned, spent and logged), and a death's replay page shows them when you're signed in. Up to 1024
+bytes per tick. Traces are kept 7 days and only you can see your bots' logs.
 
 **Can I reproduce a match?**
 Yes. The engine is deterministic: the same seed, bots and code give the same match.

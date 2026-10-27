@@ -132,9 +132,12 @@ async function localMatch(seed = Math.floor(Math.random() * 2 ** 31)): Promise<M
     maxTicks: 300,
     title: "House bots",
   });
-  // Start mid-fight rather than on the spawn tick, without one long task on slow phones.
+  // Start mid-fight rather than on the spawn tick, in slices of about 8 ms so slow phones get
+  // no long task (50-tick slices took 65–240 ms on Lighthouse's mid-range phone).
   while (source.lastTick < WARM_UP_TICKS) {
-    source.request(source.lastTick + 50);
+    const until = performance.now() + 8;
+    do source.request(source.lastTick + 1);
+    while (source.lastTick < WARM_UP_TICKS && performance.now() < until);
     await new Promise((resolve) => setTimeout(resolve));
   }
   return source;

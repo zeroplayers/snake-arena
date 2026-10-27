@@ -1,8 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Landing } from "../components/landing/Landing";
 import { signInWithGithub } from "../lib/auth-client";
+import { canonical } from "../lib/meta";
 
 export const Route = createFileRoute("/")({
+  head: () => canonical("/"),
   component: Home,
 });
 

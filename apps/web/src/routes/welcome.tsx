@@ -35,7 +35,12 @@ export const Route = createFileRoute("/welcome")({
       });
     }
   },
-  head: () => ({ meta: [{ title: "Choose a username · ZeroSnake Arena" }] }),
+  head: () => ({
+    meta: [
+      { title: "Choose a username · ZeroSnake Arena" },
+      { name: "robots", content: "noindex" },
+    ],
+  }),
   component: Welcome,
 });
 

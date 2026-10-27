@@ -11,10 +11,11 @@ import {
 import type { ReactNode } from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { REPO } from "../../site";
+import { REPO, SITE_URL } from "../../site";
 import { DocArticle } from "../docs/DocArticle";
+import { claudePrompt } from "./claudePrompt";
 import { Landing } from "./Landing";
-import { QUICKSTART, quickstartScript } from "./quickstart";
+import { QUICKSTART_COMMANDS, quickstartScript } from "./quickstart";
 
 const ROOT = new URL("../../../../../", import.meta.url);
 const read = (path: string) => readFileSync(new URL(path, ROOT), "utf8");
@@ -56,13 +57,13 @@ async function resolves(href: string): Promise<boolean> {
 describe("landing page", () => {
   it("renders the pitch, the arena stage and the quick start", async () => {
     const html = await renderAt("/", () => <Landing signedIn={false} onSignIn={() => {}} />);
-    expect(html).toContain("Vibe-code a snake bot with Claude.");
-    expect(html).toContain("Watch it fight 24/7.");
+    expect(html).toContain("Your snake bot vs.");
+    expect(html).toContain("every snake is a program");
     expect(html).toContain('class="hero-stage"');
     expect(html).toContain("Loading the arena");
-    for (const { cmd } of QUICKSTART) expect(html).toContain(cmd);
+    expect(html).toContain("Your bot is one function");
+    for (const { cmd } of QUICKSTART_COMMANDS) expect(html).toContain(cmd);
     expect(html).toContain("Sign in with GitHub");
-    expect(html).toContain("Before launch");
   });
 
   it("offers the bots page instead of sign-in when signed in", async () => {
@@ -90,12 +91,14 @@ describe("landing page", () => {
   it("lists commands the CLI has and the getting-started page documents", () => {
     const cli = read("packages/cli/src/cli.ts");
     const guide = read("docs/getting-started.md");
-    for (const { cmd } of QUICKSTART) {
+    for (const { cmd } of QUICKSTART_COMMANDS) {
       const sub = cmd.match(/^npx zerosnake (\w+)/)?.[1];
       if (sub) expect(cli, cmd).toContain(`case "${sub}":`);
       if (sub) expect(guide, cmd).toContain(`npx zerosnake ${sub}`);
     }
-    expect(quickstartScript().split("\n")).toHaveLength(QUICKSTART.length);
+    expect(quickstartScript()).toBe(
+      "npx zerosnake init my-snake && cd my-snake && npx zerosnake sim",
+    );
   });
 });
 
@@ -124,10 +127,29 @@ describe.each([
     cli ? "offers the commands to copy" : "shows the commands as coming at launch, with no copy",
     async () => {
       const html = await render();
-      for (const { cmd } of QUICKSTART) expect(html).toContain(cmd);
-      expect(html.includes(">Copy</button>")).toBe(cli);
+      for (const { cmd } of QUICKSTART_COMMANDS) expect(html).toContain(cmd);
+      expect(html.includes("Copy first steps")).toBe(cli);
       expect(html.includes("Coming at launch")).toBe(!cli);
-      expect(html.includes("<code>npx</code>")).toBe(!cli);
+      // On launch day nothing is left in the "not yet" box, so it's gone.
+      expect(html.includes("Not on npm yet")).toBe(!cli);
+    },
+  );
+
+  it(
+    cli || repo
+      ? "offers the Claude prompt to copy, and to read first"
+      : "says the Claude prompt comes at launch, and shows no prompt",
+    async () => {
+      const html = await render();
+      // No runnable prompt before it can work: `npx zerosnake` isn't ours on npm yet.
+      expect(html.includes("Read the prompt")).toBe(cli || repo);
+      expect(html.includes("Help me build a snake bot")).toBe(cli || repo);
+      expect(html.includes("Copy prompt for Claude")).toBe(cli || repo);
+      // The first three steps, sign-in included, are in the hero either way.
+      expect(html).toContain("opens your browser to sign in");
+      // Hero steps only offer `npx zerosnake` once it's on npm; before, a checkout.
+      expect(html.includes("<code>npx zerosnake login</code> opens")).toBe(cli);
+      expect(html.includes("build the CLI from a checkout")).toBe(repo && !cli);
     },
   );
 
@@ -140,6 +162,48 @@ describe.each([
     );
     expect(html.includes("Running the CLI from a checkout")).toBe(repo && !cli);
     expect(html.includes("from a checkout of the repository")).toBe(repo && !cli);
+  });
+});
+
+describe("Claude prompt", () => {
+  const cli = read("packages/cli/src/cli.ts");
+  const commands = (prompt: string) => [
+    ...prompt.matchAll(/(?:npx zerosnake|zerosnake\.js) (\w+)/g),
+  ];
+
+  it("walks an agent from init to deploy with the published CLI", () => {
+    const prompt = claudePrompt({ cli: true, repo: true });
+    expect(commands(prompt).map((m) => m[1])).toEqual(
+      expect.arrayContaining(["init", "sim", "test", "login", "deploy"]),
+    );
+    for (const [, sub] of commands(prompt)) expect(cli).toContain(`case "${sub}":`);
+    // The template's rules: never the blocking viewer, and login is the person's to run.
+    expect(prompt).toContain("npx zerosnake sim --headless");
+    expect(prompt).toContain("Ask me to run `npx zerosnake login` myself");
+    expect(prompt).toContain("sign in with GitHub");
+    expect(prompt).not.toContain("git clone");
+  });
+
+  it("builds the CLI from source while it isn't on npm but the repository is public", () => {
+    const prompt = claudePrompt({ cli: false, repo: true });
+    expect(prompt).toContain(`git clone ${REPO.url}`);
+    expect(prompt).toContain("npx pnpm@11 --filter zerosnake build");
+    expect(prompt).not.toContain("corepack");
+    expect(prompt).not.toContain("npx zerosnake");
+    for (const [, sub] of commands(prompt)) expect(cli).toContain(`case "${sub}":`);
+  });
+
+  it("reads as on launch day while nothing is public", () => {
+    expect(claudePrompt({ cli: false, repo: false })).toBe(
+      claudePrompt({ cli: true, repo: false }),
+    );
+  });
+});
+
+describe("site URL", () => {
+  it("is the CLI's default server, so links in previews and the CLI agree", () => {
+    const config = read("packages/cli/src/remote/config.ts");
+    expect(config).toContain(`export const DEFAULT_URL = "${SITE_URL}";`);
   });
 });
 

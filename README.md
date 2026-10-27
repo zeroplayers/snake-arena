@@ -1,11 +1,70 @@
 # ZeroSnake Arena
 
-An arena where people vibe-code slither.io-style snake bots, deploy them with one command (`npx zerosnake deploy`), and the bots compete against each other 24/7 in persistent rooms.
+**Your snake bot vs. everyone else's.** A slither.io-style arena where every snake is a program.
+Write a JavaScript or TypeScript bot with Claude, another coding agent or by hand, deploy it with
+`npx zerosnake deploy`, and it plays everyone else's bots in rooms that run around the clock. It
+earns a rating, and recent deaths come with a replay and a trace of what your bot saw.
 
-- Spec: [SPEC.md](SPEC.md)
-- MVP tasks: [Issues](../../issues) and [Milestones](../../milestones)
+Play at **[arena.surninsynergy.dev](https://arena.surninsynergy.dev)**: watch the arena, read the
+[docs](docs/README.md), see the [leaderboard](https://arena.surninsynergy.dev/leaderboard).
 
-## Environments
+```bash
+npx zerosnake init my-snake   # starter bot, CLAUDE.md, AGENTS.md and skills
+cd my-snake
+npx zerosnake sim             # your snake vs the house bots, in your browser
+npx zerosnake test            # the same checks the server runs
+npx zerosnake login           # once, with GitHub
+npx zerosnake deploy          # it joins the arena when the checks pass
+```
+
+Needs Node.js 24+. Full walkthrough: [Getting started](docs/getting-started.md). Until the
+`zerosnake` package is on npm, run the CLI from a checkout:
+[Before the packages are published](docs/getting-started.md#before-the-packages-are-published).
+
+## How it works
+
+- **Engine** ([`packages/engine`](packages/engine)): deterministic TypeScript at 10 ticks per
+  second with a seeded RNG and its own math, so the same seed and bots give the same match. A
+  replay is the seed plus every bot's actions.
+- **Sandbox** ([`packages/sandbox`](packages/sandbox)): Workers can't `eval`, so each bot runs in
+  its own QuickJS context compiled to WebAssembly, with no I/O and no clock. Bundles are
+  instrumented to count work, so the per-tick budget is the same on a laptop and on the server.
+  The same package runs in the CLI, the deploy checks and the arena.
+- **Arena** ([`apps/arena`](apps/arena)): each room is a Durable Object that simulates in batches;
+  a matchmaker fills rooms, and spectators get per-tick deltas over WebSocket.
+- **Rating** ([`packages/rating`](packages/rating)): the mean score over a version's last 200
+  lives, ranked by the low end of its interval, so a lucky streak can't beat a steady record.
+- **Site** ([`apps/web`](apps/web)): TanStack Start on Workers, with D1, R2 and GitHub sign-in.
+
+Rules, the bot API, limits and rating are documented in [`docs/`](docs/README.md); every number
+there links to the code it comes from. The product spec is [SPEC.md](SPEC.md), tasks are in
+[Issues](../../issues) and [Milestones](../../milestones), and contributing is in
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Development
+
+Requires Node 24+ and pnpm (`corepack enable`).
+
+```bash
+pnpm install
+pnpm test        # vitest across all workspaces
+pnpm typecheck
+pnpm lint        # biome; `pnpm format` to fix
+```
+
+| Path                | What                                     |
+| ------------------- | ---------------------------------------- |
+| `packages/engine`   | deterministic simulation                 |
+| `packages/sandbox`  | QuickJS bot runner                       |
+| `packages/sdk`      | bot types and helpers                    |
+| `packages/renderer` | three.js renderer                        |
+| `packages/cli`      | `npx zerosnake`                          |
+| `bots/house`        | built-in bots                            |
+| `apps/web`          | site (TanStack Start on Workers)         |
+| `apps/arena`        | arena worker (matchmaker, rooms, checks) |
+| `template/`         | starter repo for bot authors             |
+
+## Operations
 
 | Environment | Domain                                              |
 | ----------- | --------------------------------------------------- |
@@ -83,30 +142,3 @@ created beforehand.
 **Secrets** (web): `BETTER_AUTH_SECRET`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, set once with
 `pnpm exec wrangler secret put <NAME> --env staging` from `apps/web`. The staging GitHub OAuth app uses
 homepage `https://arena.surninsynergy.dev` and callback `https://arena.surninsynergy.dev/api/auth/callback/github`.
-
-## Development
-
-Requires Node 24+ and pnpm (`corepack enable`).
-
-```bash
-pnpm install
-pnpm test        # vitest across all workspaces
-pnpm typecheck
-pnpm lint        # biome; `pnpm format` to fix
-```
-
-| Path                | What                                     |
-| ------------------- | ---------------------------------------- |
-| `packages/engine`   | deterministic simulation                 |
-| `packages/sandbox`  | QuickJS bot runner                       |
-| `packages/sdk`      | bot types and helpers                    |
-| `packages/renderer` | three.js renderer                        |
-| `packages/cli`      | `npx zerosnake`                          |
-| `bots/house`        | built-in bots                            |
-| `apps/web`          | site (TanStack Start on Workers)         |
-| `apps/arena`        | arena worker (matchmaker, rooms, checks) |
-| `template/`         | starter repo for bot authors             |
-
-## Status
-
-v0 in progress. See the [v0 milestone](../../milestone/1).

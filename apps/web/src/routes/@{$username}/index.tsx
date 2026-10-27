@@ -1,6 +1,7 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { formatRating } from "../../components/format";
 import { PageError, PagePending } from "../../components/PageState";
+import { canonical, pageMeta } from "../../lib/meta";
 import { getProfileData } from "../../server/functions";
 
 export const Route = createFileRoute("/@{$username}/")({
@@ -9,7 +10,19 @@ export const Route = createFileRoute("/@{$username}/")({
     if (!profile) throw notFound();
     return profile;
   },
-  head: ({ params }) => ({ meta: [{ title: `@${params.username} · ZeroSnake Arena` }] }),
+  head: ({ params }) => {
+    const { meta, links } = canonical(`/@${params.username}`);
+    return {
+      meta: [
+        ...pageMeta(
+          `@${params.username}`,
+          `Snake bots by @${params.username} on ZeroSnake Arena, with their ratings.`,
+        ),
+        ...meta,
+      ],
+      links,
+    };
+  },
   component: ProfilePage,
   pendingComponent: PagePending,
   errorComponent: PageError,

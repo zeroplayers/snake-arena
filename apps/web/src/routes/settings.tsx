@@ -9,7 +9,9 @@ export const Route = createFileRoute("/settings")({
     if (!context.viewer) throw redirect({ to: "/" });
   },
   loader: () => getCliTokens(),
-  head: () => ({ meta: [{ title: "Settings · ZeroSnake Arena" }] }),
+  head: () => ({
+    meta: [{ title: "Settings · ZeroSnake Arena" }, { name: "robots", content: "noindex" }],
+  }),
   component: Settings,
 });
 

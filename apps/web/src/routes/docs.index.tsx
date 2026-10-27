@@ -1,6 +1,7 @@
 import { loadDoc } from "virtual:zerosnake-docs";
 import { createFileRoute } from "@tanstack/react-router";
 import { DocArticle } from "../components/docs/DocArticle";
+import { canonical, pageMeta } from "../lib/meta";
 
 export const Route = createFileRoute("/docs/")({
   loader: async () => {
@@ -8,7 +9,16 @@ export const Route = createFileRoute("/docs/")({
     if (!doc) throw new Error("docs/README.md is missing");
     return doc;
   },
-  head: () => ({ meta: [{ title: "Docs · ZeroSnake Arena" }] }),
+  head: () => ({
+    meta: [
+      ...pageMeta(
+        "Docs",
+        "Rules, bot API, sandbox limits, rating and FAQ for ZeroSnake Arena's snake bots.",
+      ),
+      ...canonical("/docs").meta,
+    ],
+    links: canonical("/docs").links,
+  }),
   component: DocsIndex,
 });
 

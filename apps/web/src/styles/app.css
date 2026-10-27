@@ -1,6 +1,8 @@
 /*
  * Dark theme carried over from the original ZeroSnake frontend (src/index.css, App.css).
  * The Silom font files aren't redistributed here; it's used when installed (macOS ships it).
+ * Only display text (headings, nav, buttons) uses it; running text is in the system UI font,
+ * which reads better at small sizes and doesn't fall back to a monospace font off macOS.
  */
 
 :root {
@@ -26,7 +28,8 @@
   --accent: var(--green-primary);
   --link: #00ffdd;
 
-  --font: Silom, ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font: Silom, var(--font-body);
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --radius: 10px;
 }
@@ -46,7 +49,7 @@ body {
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: var(--font);
+  font-family: var(--font-body);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
@@ -62,6 +65,19 @@ a:hover {
 
 code {
   font-family: var(--font-mono);
+}
+
+h1,
+h2,
+h3,
+.logo,
+.site-nav,
+.button,
+.eyebrow,
+.how-n,
+.soon-tag,
+.link-card strong {
+  font-family: var(--font);
 }
 
 /* Layout */
@@ -201,6 +217,7 @@ code {
 
 .lead {
   max-width: 640px;
+  text-wrap: pretty;
   margin: 0 0 24px;
   color: var(--gray-secondary);
   font-size: 17px;
@@ -218,14 +235,20 @@ code {
   height: 40px;
   padding: 0 20px;
   border-radius: 47px;
-  background: #00ff1acc;
+  background: var(--green-primary);
+  box-shadow: 0 0 24px -6px rgba(0, 255, 26, 0.45);
   color: #000;
   font-weight: 700;
 }
 
 .button:hover {
-  background: var(--green-primary);
+  background: #5dff6c;
   text-decoration: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
 }
 
 .panel {
@@ -268,6 +291,7 @@ code {
 button.button {
   border: 0;
   font: inherit;
+  font-family: var(--font);
   font-weight: 700;
   cursor: pointer;
 }
@@ -280,6 +304,7 @@ button.button:disabled {
 .button.ghost {
   border: 1px solid var(--border);
   background: transparent;
+  box-shadow: none;
   color: var(--text);
 }
 
@@ -294,8 +319,12 @@ button.button:disabled {
   font-size: 13px;
 }
 
-.site-nav .button.small {
-  color: #000;
+.site-nav .button.ghost {
+  color: var(--text);
+}
+
+.sign-in-more {
+  margin-left: 0.3em;
 }
 
 .form {
@@ -318,6 +347,11 @@ button.button:disabled {
 .input:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+.input:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
 }
 
 .input-prefix {
@@ -740,11 +774,25 @@ button.button:disabled {
 
   .site-header {
     flex-wrap: wrap;
+    row-gap: 8px;
+    padding-block: 14px;
+  }
+
+  .logo {
+    font-size: 17px;
+  }
+
+  .logo-tag {
+    display: none;
   }
 
   .site-nav {
-    flex-wrap: wrap;
-    gap: 12px;
+    gap: 10px;
+    font-size: 13px;
+  }
+
+  .site-nav .button.small {
+    padding: 0 10px;
   }
 
   .panel {
@@ -763,11 +811,14 @@ button.button:disabled {
 
 /* Landing */
 
-/* Phones: headline, arena, then the pitch. Wide: text left, arena right. */
+/*
+ * Headline, buttons and first steps, the arena, then the pitch, in DOM order: on phones the first
+ * screen has an action; wide, the text column is left of the arena.
+ */
 .landing-hero {
   display: grid;
-  grid-template-areas: "head" "arena" "body";
-  gap: 20px;
+  grid-template-areas: "head" "cta" "arena" "body";
+  gap: 18px;
   padding-block: 8px;
 }
 
@@ -779,6 +830,31 @@ button.button:disabled {
   margin: 0;
 }
 
+.landing-cta {
+  display: grid;
+  gap: 14px;
+  grid-area: cta;
+}
+
+/* The first three steps, right under the hero's buttons. */
+.hero-steps {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.hero-steps strong {
+  color: var(--text);
+}
+
+.hero-steps code {
+  color: var(--green-secondary);
+  font-size: 0.92em;
+}
+
 .hero-arena {
   grid-area: arena;
 }
@@ -787,12 +863,16 @@ button.button:disabled {
   grid-area: body;
 }
 
+.landing-body .lead {
+  margin: 0;
+}
+
 @media (min-width: 860px) {
   .landing-hero {
-    grid-template-areas: "head arena" "body arena";
-    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
-    grid-template-rows: auto 1fr;
-    gap: 20px 40px;
+    grid-template-areas: "head arena" "cta arena" "body arena";
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    grid-template-rows: auto auto 1fr;
+    gap: 24px 48px;
     padding-block: 32px 16px;
   }
 
@@ -803,17 +883,19 @@ button.button:disabled {
 
 .eyebrow {
   margin: 0 0 12px;
-  color: var(--light-blue);
-  font-size: 13px;
-  letter-spacing: 0.08em;
+  color: var(--green-secondary);
+  font-size: 12px;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
 .landing-title {
-  font-size: clamp(28px, 4.4vw, 42px);
+  font-size: clamp(30px, 4.6vw, 46px);
+  text-wrap: balance;
 }
 
-.lead code {
+.lead code,
+.code-accent {
   color: var(--green-secondary);
   font-size: 0.92em;
 }
@@ -833,6 +915,9 @@ button.button:disabled {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  box-shadow:
+    0 30px 80px -30px rgba(0, 255, 26, 0.2),
+    0 0 120px -40px rgba(0, 255, 242, 0.3);
   background:
     radial-gradient(circle at 35% 40%, rgba(4, 255, 0, 0.08), transparent 45%),
     radial-gradient(circle at 65% 60%, rgba(0, 255, 242, 0.08), transparent 45%), #000;
@@ -873,6 +958,12 @@ button.button:disabled {
   scroll-margin-top: 16px;
 }
 
+@media (min-width: 860px) {
+  .landing-section {
+    margin-top: 32px;
+  }
+}
+
 .how {
   display: grid;
   gap: 12px;
@@ -887,12 +978,66 @@ button.button:disabled {
   }
 }
 
+.how-step {
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
 .how-step h3 {
-  margin: 8px 0 6px;
-  font-size: 17px;
+  margin: 10px 0 6px;
+  font-size: 18px;
 }
 
 .how-step p {
+  margin: 0;
+  font-size: 15px;
+}
+
+/* "Your bot is one function": the code left, the facts right. */
+.bot-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
+}
+
+@media (min-width: 860px) {
+  .bot-section {
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+    gap: 40px;
+  }
+}
+
+.bot-section p {
+  margin: 0 0 14px;
+}
+
+.code-block {
+  margin: 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: #000;
+  color: var(--green-secondary);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.facts-list {
+  display: grid;
+  gap: 14px;
+  margin: 0 0 14px;
+}
+
+.facts-list dt {
+  font-weight: 700;
+}
+
+.facts-list dd {
+  margin: 2px 0 0;
+  font-size: 14px;
+}
+
+.doc-links {
   margin: 0;
   font-size: 14px;
 }
@@ -910,6 +1055,7 @@ button.button:disabled {
 
 .start-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -918,6 +1064,19 @@ button.button:disabled {
 
 .start-head .subtitle {
   margin: 0;
+}
+
+.start-part-title {
+  margin: 16px 0 8px;
+  color: var(--text-muted);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+}
+
+.start-head .start-part-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 18px;
 }
 
 .terminal {
@@ -933,10 +1092,15 @@ button.button:disabled {
   list-style: none;
 }
 
+/* Phones: each comment above its command, like a commented shell script. */
 .terminal li {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0 16px;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.terminal li + li {
+  margin-top: 6px;
 }
 
 /* Comments line up in a column once there's room for one. */
@@ -949,6 +1113,11 @@ button.button:disabled {
     display: grid;
     grid-column: 1 / -1;
     grid-template-columns: subgrid;
+    gap: 0 16px;
+  }
+
+  .terminal li + li {
+    margin-top: 0;
   }
 }
 
@@ -963,14 +1132,22 @@ button.button:disabled {
 }
 
 .terminal .muted {
+  order: -1;
   font-size: 13px;
+}
+
+@media (min-width: 640px) {
+  .terminal .muted {
+    order: 0;
+  }
 }
 
 .not-yet {
   margin-top: 16px;
-  padding: 12px 14px;
-  border: 1px dashed #ffb02e88;
-  border-radius: 8px;
+  padding: 10px 14px;
+  border-left: 2px solid #ffb02e;
+  border-radius: 0 8px 8px 0;
+  background: rgba(255, 176, 46, 0.05);
 }
 
 .not-yet h3 {
@@ -983,8 +1160,9 @@ button.button:disabled {
 .not-yet ul {
   display: grid;
   gap: 6px;
-  margin: 0 0 8px;
-  padding-left: 18px;
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
   color: var(--gray-secondary);
   font-size: 14px;
 }
@@ -1044,6 +1222,7 @@ button.link-card:hover {
 }
 
 .soon-tag {
+  white-space: nowrap;
   padding: 1px 6px;
   border: 1px solid #444;
   border-radius: 8px;
@@ -1055,7 +1234,8 @@ button.link-card:hover {
 
 .footer-links {
   display: flex;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 8px 16px;
 }
 
 /* Docs */
@@ -1286,4 +1466,44 @@ button.link-card:hover {
   flex-basis: 100%;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+/* Keyboard users can jump past the header. */
+.skip-link {
+  position: absolute;
+  top: -48px;
+  left: 8px;
+  z-index: 10;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #000;
+}
+
+.skip-link:focus {
+  top: 8px;
+}
+
+/* "Start with Claude": the prompt to read before copying. */
+.claude-start p {
+  margin: 0 0 10px;
+}
+
+.claude-prompt summary {
+  color: var(--link);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.prompt-text {
+  margin-top: 10px;
+  white-space: pre-wrap;
+}
+
+.by-hand {
+  margin-top: 20px;
+}
+
+.github-mark {
+  margin-right: 6px;
 }

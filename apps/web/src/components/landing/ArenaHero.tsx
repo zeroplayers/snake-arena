@@ -119,11 +119,15 @@ export function ArenaHero() {
         ref={stage}
         className="hero-stage"
         role="img"
-        aria-label="Snake bots fighting in the arena"
+        aria-label={
+          live
+            ? "Live match: snake bots playing in the arena"
+            : "Demo match: house bots playing in the arena"
+        }
       >
         {state === "failed" ? (
           <span className="muted hero-stage-note">
-            Couldn't start the arena here (it needs WebGL).
+            This demo needs WebGL, which this browser doesn't provide.
           </span>
         ) : (
           state !== "playing" &&
@@ -137,7 +141,7 @@ export function ArenaHero() {
               <span className="live-dot" aria-hidden="true" /> Live from the arena
             </>
           ) : (
-            "House bots, simulated live in your browser"
+            "Demo: house bots on the real engine, in your browser"
           )}
         </span>
         {/* Always there, so the caption doesn't jump when the arena starts. */}
@@ -145,6 +149,7 @@ export function ArenaHero() {
           type="button"
           className="button ghost small"
           disabled={state !== "playing" && state !== "paused"}
+          aria-label={state === "paused" ? "Play the arena" : "Pause the arena"}
           onClick={() => toggle.current()}
         >
           {state === "paused" ? "Play" : "Pause"}

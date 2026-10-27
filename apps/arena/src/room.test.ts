@@ -28,8 +28,13 @@ async function ticket(author: string, source: string, lifeId?: string): Promise<
   return seedVersion(await h.d1(), author, source, lifeId);
 }
 
+// The backstop tests' burning bots circle in place until they burn; on some seeds another snake
+// runs across them first (seed 7 did on the square arena, #76), and the life the test expects to
+// burn is gone.
+const ROOM_SEED = 8;
+
 async function startRoom(name: string, tickets: LifeTicket[], options: object = {}) {
-  await h.room(name, "start", { roomId: name, seed: 7, manual: true, ...options });
+  await h.room(name, "start", { roomId: name, seed: ROOM_SEED, manual: true, ...options });
   for (const t of tickets) expect(await h.room(name, "join", t)).toEqual({ ok: true });
 }
 

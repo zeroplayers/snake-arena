@@ -84,11 +84,11 @@ snakes have to keep eating to stay big, so circling in a corner doesn't pay.
 
 ## Food
 
-| Kind      | Value               | Pellet radius | Where it appears                            |
-| --------- | ------------------- | ------------- | ------------------------------------------- |
-| `ambient` | 1                   | 0.5           | uniformly at random in [−87.2, 87.2]²       |
-| `boost`   | the mass burned (1) | 0.5           | at a boosting snake's tail                  |
-| `remains` | about 10 per pellet | 1.5           | along the body of a snake that died         |
+| Kind      | Value               | Pellet radius | Where it appears                      |
+| --------- | ------------------- | ------------- | ------------------------------------- |
+| `ambient` | 1                   | 0.5           | uniformly at random in [−87.2, 87.2]² |
+| `boost`   | the mass burned (1) | 0.5           | at a boosting snake's tail            |
+| `remains` | about 10 per pellet | 1.5           | along the body of a snake that died   |
 - **Ambient food** spawns, at most 4 pellets per tick, while the arena holds fewer than
   `150 + 40 × living snakes` pellets (at most 3000). Pellets of every kind count toward that
   target, so remains and boost drops hold ambient spawning back. A new world starts with 150.

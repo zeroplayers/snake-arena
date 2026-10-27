@@ -151,14 +151,14 @@ export default defineBot({
 
 `tick(state, ...)` gets `BotState`:
 
-| Field          | Meaning                                                                         |
-| -------------- | ------------------------------------------------------------------------------- |
-| `tick`         | Room tick (keeps counting across lives).                                        |
-| `lifeTick`     | Ticks since this life started; `0` on the first call.                           |
+| Field          | Meaning                                                                           |
+| -------------- | --------------------------------------------------------------------------------- |
+| `tick`         | Room tick (keeps counting across lives).                                          |
+| `lifeTick`     | Ticks since this life started; `0` on the first call.                             |
 | `wallDistance` | Distance to the nearest edge: `worldHalfSize - max(\|x\|, \|y\|)`. Below 0: dead. |
-| `self`         | Your snake, always fully known (see below).                                     |
-| `snakes[]`     | Other snakes with at least one body point within `visionRadius`, nearest first. |
-| `food[]`       | Pellets `{ x, y, value }` within `visionRadius`, nearest first.                 |
+| `self`         | Your snake, always fully known (see below).                                       |
+| `snakes[]`     | Other snakes with at least one body point within `visionRadius`, nearest first.   |
+| `food[]`       | Pellets `{ x, y, value }` within `visionRadius`, nearest first.                   |
 
 `self` (`SelfState`): `id`, `head`, `angle`, `length`, `speed` (distance moved last tick), `radius`,
 `turnRate`, `boosting`, `segments` (head first, `segments[0]` is the head).
@@ -190,7 +190,7 @@ Return `BotAction`: `{ turn: number in [-1, 1], boost?: boolean }`. Out-of-range
 | `distance(a, b)`, `distanceSq(a, b)`         | Distances (`distanceSq` is cheaper for comparisons).                                                                            |
 | `project(origin, angle, dist)`               | The point `dist` ahead along a heading: look-ahead.                                                                             |
 | `distanceToWall(point, worldHalfSize)`       | Distance from any point to the nearest edge (negative outside).                                                                 |
-| `nearestWall(point, worldHalfSize)`          | `{ distance, normal }`: the nearest edge and the unit vector pointing away from it, into the arena.                              |
+| `nearestWall(point, worldHalfSize)`          | `{ distance, normal }`: the nearest edge and the unit vector pointing away from it, into the arena.                             |
 | `distanceToWallAlong(point, angle, half)`    | How far `point` can go straight along `angle` before crossing an edge: the road left, corners included.                         |
 | `nearest(from, items)`, `nearestFood(state)` | Closest point / pellet.                                                                                                         |
 | `nearestDanger(state)`                       | Closest visible body point of another snake: `{ snake, point, distance, gap }`; `gap` = free space, 0 = dead. Ignores the wall. |
@@ -278,9 +278,9 @@ before uploading: a bot that fails isn't uploaded and costs no deploy.
 - **Keep a margin over `easy`.** easy's own score swings a lot from one set of seeds to the next
   (it dies often, and now and then has a long lucky life with kills), so a bot close to easy's
   score can pass on one version and fail on the next, by luck of the seeds. The starter bot scores
-  about 4.6× easy's mean score per life on typical seeds and at least 1.5× on about 99% of seed
-  sets, but even it failed 1 of the 3600 seed sets we measured (easy got kills there): aim for a
-  margin like that. One passing `test` doesn't prove a bot is good enough: if a pass is narrow
+  about 4.3× easy's mean score per life on typical seeds and at least 1.5× on about 99% of seed
+  sets, but even it failed 1 of the 1200 seed sets we measured (easy had an unusually good set
+  there): aim for a margin like that. One passing `test` doesn't prove a bot is good enough: if a pass is narrow
   (look at "mean score per life … easy in your seat" seed by seed), make the bot clearly better,
   e.g. fewer early deaths, rather than re-rolling seeds.
 - **Usually a few seconds.** `test` warns when the checks take 20 s or more: the server runs them

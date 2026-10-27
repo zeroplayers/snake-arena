@@ -9,10 +9,15 @@ import { dim, green, stderrHasColor } from "../term.ts";
 export const TEST_HELP = `Usage: zerosnake test [options]
 
 Bundles your bot exactly like \`sim\` and \`deploy\` and runs the checks the server runs on every
-deploy, with the same seeds, so it gets the same verdict there: the deploy limits, loading in the
-sandbox, 5 matches × 1000 ticks against the house bots (no timeouts, exceptions or running out
-of memory, and within the CPU caps), and qualification (a mean score per life at least that of
-the easy house bot in your seat). Takes a few seconds.
+deploy: the deploy limits, loading in the sandbox, 5 matches × 1000 ticks against the house bots
+(no timeouts, exceptions or running out of memory, and on average at most half the per-tick
+budget), and qualification (a mean score per life at least that of the easy house bot in your
+seat). Takes a few seconds.
+
+The seeds come from the bundle's hash: the server uses the same ones for the same bundle, so it
+reaches the same verdict, but any edit to the bot gives other seeds. A bot close to easy's score
+can pass on one version and fail on the next; compare versions with \`sim --headless\` on many
+seeds instead.
 
 Options:
   --bot <file>   Your bot's entry file (default: src/bot.ts)

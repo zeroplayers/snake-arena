@@ -81,9 +81,10 @@ export function kvSessionStore(
       .where(eq(users.id, cached.user.id))
       .get();
     if (!row || row.revoked) return null;
-    const { sessionsRevokedAt } = row.user;
+    // Not part of the session Better Auth hands out (`/get-session` returns the user as is).
+    const { sessionsRevokedAt, ...user } = row.user;
     if (sessionsRevokedAt && new Date(cached.session.createdAt) <= sessionsRevokedAt) return null;
-    return row.user;
+    return user;
   }
 
   return {
@@ -117,8 +118,14 @@ export function kvSessionStore(
     },
     async delete(key) {
       if (key.startsWith(VERIFICATION_PREFIX)) return;
-      if (!key.startsWith(ACTIVE_SESSIONS_PREFIX)) {
-        // A session token. Revoked in D1 first: KV may serve it a while longer elsewhere.
+      if (key.startsWith(ACTIVE_SESSIONS_PREFIX)) {
+        await kv.delete(key);
+        return;
+      }
+      // A session token. Revoked in D1 first: KV may serve it a while longer elsewhere. Deleted
+      // from KV even if that fails, and the error goes on: Better Auth's `/sign-out` clears the
+      // cookie whatever happens here, and the session must not outlive it where it can help.
+      try {
         await db
           .insert(revokedSessions)
           .values({
@@ -126,8 +133,12 @@ export function kvSessionStore(
             expiresAt: new Date(Date.now() + sessionTtl * 1000),
           })
           .onConflictDoNothing();
+      } catch (error) {
+        log("error", "auth.revoke_session_failed", { error });
+        throw error;
+      } finally {
+        await kv.delete(key);
       }
-      await kv.delete(key);
     },
     // Only verification consumption and Better Auth's rate limiter use these, and neither runs
     // here (verification values stay in D1, `rateLimit` is off).

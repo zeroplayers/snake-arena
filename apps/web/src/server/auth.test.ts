@@ -300,6 +300,13 @@ describe("web sessions (KV, not the D1 that apps/arena shares)", () => {
     expect((await getSession({ jar }))?.user.username).toBe("ada");
     await d1.db.prepare("UPDATE users SET banned_at = 1 WHERE username = 'ada'").run();
     expect((await getSession({ jar }))?.user.bannedAt).toBe(new Date(1).toISOString());
+    // Revocation bookkeeping stays on the server.
+    expect((await post("/revoke-sessions", {}, { jar: await signInWithGithub(ada) })).status).toBe(
+      200,
+    );
+    const fresh = await getSession({ jar: await signInWithGithub(ada) });
+    expect(fresh?.user).toBeDefined();
+    expect(fresh?.user).not.toHaveProperty("sessionsRevokedAt");
   });
 
   it("end with the user", async () => {

@@ -80,6 +80,8 @@ describe("kvSessionStore", () => {
       session: cached.session,
       user: { id: "u1", username: "ada", email: "a@x.test", bannedAt: null },
     });
+    await revokeAllSessions(createDb(d1.db), "u1", new Date(0));
+    expect(JSON.parse(String(await store().get("t"))).user).not.toHaveProperty("sessionsRevokedAt");
 
     await d1.db.prepare("DELETE FROM users WHERE id = 'u1'").run();
     expect(await store().get("t")).toBeNull();
@@ -114,6 +116,13 @@ describe("kvSessionStore", () => {
     expect(await store().get("t")).toBeNull();
     await d1.kv.delete("t");
     await store().set("t", cachedSession("t"), 30 * 24 * 3600);
+    expect(await d1.kv.get("t")).toBeNull();
+  });
+
+  it("still deletes from KV, and fails loudly, when the revocation can't be written", async () => {
+    await store().set("t", cachedSession("t"), 3600);
+    await d1.db.prepare("DROP TABLE revoked_sessions").run();
+    await expect(store().delete("t")).rejects.toThrow(/revoked_sessions/);
     expect(await d1.kv.get("t")).toBeNull();
   });
 

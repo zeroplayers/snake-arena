@@ -8,6 +8,7 @@ import {
   explain,
   NetworkError,
   type Remote,
+  withRetries,
 } from "../remote/api.ts";
 import { DEFAULT_URL, serverUrl } from "../remote/config.ts";
 import { bold, cyan, dim, green, yellow } from "../term.ts";
@@ -114,20 +115,27 @@ export async function loginCommand(
   }
 
   const token = await pollForToken(api, code, io, remote);
-  const me = await new Api(server, remote, token)
-    .call<CliIdentity>("GET", "/api/auth/cli/me")
-    .catch((e: unknown) => {
-      throw explain(e, server);
+  const signedIn = new Api(server, remote, token);
+  let me: CliIdentity;
+  try {
+    me = await withRetries(remote, () => signedIn.call<CliIdentity>("GET", "/api/auth/cli/me"), {
+      maxWaitMs: 15_000,
     });
+  } catch (e) {
+    // Not saved, so revoke it: otherwise it stays valid (and listed in /settings) for 90 days.
+    const revoked = await revoke(signedIn);
+    throw new CliError(
+      `${explain(e, server).message}\n` +
+        (revoked
+          ? "The new login wasn't saved."
+          : `The new login wasn't saved, and couldn't be revoked: remove it at ${server}/settings.`),
+    );
+  }
   const username = me.user.username;
   store.set(server, { token, username, savedAt: new Date(remote.now()).toISOString() });
 
   // The token this one replaces would otherwise stay valid (and listed in /settings) for 90 days.
-  if (previous && previous.token !== token) {
-    await new Api(server, remote, previous.token)
-      .call("POST", "/api/auth/cli/logout", { body: {} })
-      .catch(() => {});
-  }
+  if (previous && previous.token !== token) await revoke(new Api(server, remote, previous.token));
   io.out(
     `${green("✓")} Logged in to ${server} as ${bold(username ? `@${username}` : me.user.name)}.`,
   );
@@ -135,6 +143,17 @@ export async function loginCommand(
     io.err(yellow("Note: ZEROSNAKE_TOKEN is set, and the CLI uses it instead of this login."));
   }
   return EXIT.ok;
+}
+
+/** Revokes the `api`'s token; `false` if the server couldn't be asked. Already revoked counts. */
+async function revoke(api: Api): Promise<boolean> {
+  try {
+    await api.call("POST", "/api/auth/cli/logout", { body: {} });
+    return true;
+  } catch (e) {
+    // 401: already expired or revoked (e.g. on the settings page), so there's nothing to revoke.
+    return e instanceof ApiError && e.status === 401;
+  }
 }
 
 /** Polls the token endpoint until the person approves, denies, or the code expires. */
@@ -161,7 +180,7 @@ async function pollForToken(api: Api, code: DeviceCode, io: Io, remote: Remote):
           io.progress?.(`${waiting} ${yellow("(connection trouble, retrying)")}`);
           continue;
         }
-        if (!(e instanceof ApiError)) throw e;
+        if (!(e instanceof ApiError)) throw explain(e, api.server);
         switch (e.code) {
           case "authorization_pending":
             io.progress?.(waiting);
@@ -215,13 +234,7 @@ export async function logoutCommand(
     return EXIT.ok;
   }
 
-  let revoked = true;
-  try {
-    await new Api(server, remote, saved.token).call("POST", "/api/auth/cli/logout", { body: {} });
-  } catch (e) {
-    // 401: already expired or revoked (e.g. on the settings page), so there's nothing to revoke.
-    revoked = e instanceof ApiError && e.status === 401;
-  }
+  const revoked = await revoke(new Api(server, remote, saved.token));
   store.delete(server);
   io.out(`${green("✓")} Logged out of ${server}.`);
   if (!revoked) {

@@ -8,7 +8,7 @@ import type { DeployRequest } from "@zerosnake/web/shared";
 import { afterAll, describe, expect, it } from "vitest";
 import { main } from "./cli.ts";
 import { Credentials } from "./remote/config.ts";
-import { apiError, FakeArena, SERVER } from "./testing/fake-arena.ts";
+import { apiError, FakeArena, htmlNotFound, SERVER } from "./testing/fake-arena.ts";
 import { captureIo, cleanUp, GOOD_BOT, makeProject, TUNING } from "./testing/project.ts";
 
 afterAll(cleanUp);
@@ -90,6 +90,48 @@ describe("zerosnake login", () => {
     const e = await expired.run(["login", "--no-open"]);
     expect(e.code).toBe(1);
     expect(e.err).toContain("The code expired before it was approved");
+  });
+
+  it("stops at a redirect instead of polling on", async () => {
+    const { arena, run } = setUp({ loggedIn: false });
+    arena.fail(
+      "POST",
+      /cli\/token/,
+      new Response(null, { status: 302, headers: { location: "https://elsewhere.test/" } }),
+    );
+    const r = await run(["login", "--no-open"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("redirected (HTTP 302 to https://elsewhere.test/)");
+    expect(r.err).not.toContain("Couldn't reach");
+    expect(arena.calls("POST", /cli\/token/)).toHaveLength(1);
+  });
+
+  it("revokes a new token when it can't finish the login", async () => {
+    const { arena, store, run } = setUp();
+    arena.fail("GET", /cli\/me$/, htmlNotFound());
+    const r = await run(["login", "--no-open"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("The new login wasn't saved.");
+    expect(r.all).not.toContain("zsk_");
+    expect(arena.revoked).toEqual(["zsk_secret1"]);
+    // The previous login is untouched and still works.
+    expect(store.get(SERVER)?.token).toBe("zsk_stored");
+    expect(arena.tokens.has("zsk_stored")).toBe(true);
+
+    // A dropped connection is retried; one that stays down leaves a token to remove by hand.
+    const flaky = setUp({ loggedIn: false });
+    flaky.arena.fail("GET", /cli\/me$/, "network");
+    expect((await flaky.run(["login", "--no-open"])).code).toBe(0);
+    expect(flaky.store.get(SERVER)?.token).toBe("zsk_secret1");
+
+    const down = setUp({ loggedIn: false });
+    for (let i = 0; i < 10; i++) down.arena.fail("GET", /cli\/me$/, "network");
+    down.arena.fail("POST", /cli\/logout$/, "network");
+    const d = await down.run(["login", "--no-open"]);
+    expect(d.code).toBe(1);
+    expect(d.err).toContain(`couldn't be revoked: remove it at ${SERVER}/settings`);
+    expect(d.all).not.toContain("zsk_");
+    expect(down.store.get(SERVER)).toBeNull();
   });
 
   it("revokes the token a new login replaces", async () => {
@@ -242,6 +284,38 @@ describe("zerosnake deploy", () => {
     expect(arena.calls("POST", /versions/)).toHaveLength(0);
   });
 
+  it("counts meta in the upload size, exactly as sent", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("my-snake");
+    const cwd = botProject();
+    const deploy = ["deploy", "--no-wait", "-m", "x".repeat(200)];
+    expect((await run(deploy, cwd)).code).toBe(0);
+    const sent = Buffer.byteLength(JSON.stringify(arena.calls("POST", /versions$/)[0]?.body));
+    arena.limits = { ...arena.limits, maxBodyBytes: sent };
+    expect((await run(deploy, cwd)).code).toBe(0);
+    arena.limits = { ...arena.limits, maxBodyBytes: sent - 1 };
+    const r = await run(deploy, cwd);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("✗ upload size");
+    expect(arena.calls("POST", /versions$/)).toHaveLength(2);
+  });
+
+  it("doesn't retry an upload that's redirected", async () => {
+    const { arena, slept, run } = setUp();
+    arena.addBot("my-snake");
+    arena.fail(
+      "POST",
+      /versions$/,
+      new Response(null, { status: 308, headers: { location: "https://elsewhere.test/v" } }),
+    );
+    const r = await run(["deploy"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("redirected (HTTP 308 to https://elsewhere.test/v)");
+    expect(r.err).not.toContain("retrying");
+    expect(arena.calls("POST", /versions$/)).toHaveLength(1);
+    expect(slept).toEqual([]);
+  });
+
   it("explains the server's refusals", async () => {
     const { arena, run } = setUp();
     arena.addBot("my-snake");
@@ -270,6 +344,8 @@ describe("zerosnake deploy", () => {
     const r = await run(["deploy"]);
     expect(r.code).toBe(1);
     expect(r.err).toContain("The server is still checking my-snake v1 after 10 minutes");
+    expect(r.err).toContain("the checks aren't running on this server yet");
+    expect(r.err).toContain("`--no-wait` skips the wait");
   });
 
   it("uses ZEROSNAKE_TOKEN when set (CI)", async () => {

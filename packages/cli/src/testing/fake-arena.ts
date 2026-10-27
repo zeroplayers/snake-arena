@@ -2,6 +2,7 @@ import type {
   ApiErrorBody,
   BotInfo,
   CheckReport,
+  DeployLimits,
   DeployRequest,
   MeResponse,
   VersionInfo,
@@ -37,6 +38,8 @@ export class FakeArena {
   versions: FakeVersion[] = [];
   deploysToday = 0;
   deploysPerDay: number = DEPLOY_LIMITS.deploysPerDay;
+  /** What `GET /api/me` reports as the server's limits. */
+  limits: DeployLimits = { ...DEPLOY_LIMITS };
   /** Tokens the server accepts. */
   tokens = new Set<string>();
   revoked: string[] = [];
@@ -182,7 +185,7 @@ export class FakeArena {
           };
         }),
         quota: this.quota(),
-        limits: DEPLOY_LIMITS,
+        limits: this.limits,
       } satisfies MeResponse);
     }
     if (route === "POST /api/bots") {

@@ -8,7 +8,7 @@ import type {
   MeResponse,
   VersionInfo,
 } from "@zerosnake/web/shared";
-import { formatReport, readSources, runLocalChecks } from "../artifact.ts";
+import { deployRequest, formatReport, readSources, runLocalChecks } from "../artifact.ts";
 import { bundleBot } from "../bundle.ts";
 import { CliError, EXIT, UsageError } from "../errors.ts";
 import { type Io, parse } from "../io.ts";
@@ -105,14 +105,11 @@ export async function deployCommand(
   io.out(
     `${green("✓")} bundles ${dim(`(${(bundle.bytes / 1024).toFixed(1)} KB from ${sources.length} source files)`)}`,
   );
-  await runLocalChecks(io, bundle, sources, me.limits);
+  const meta = deployMeta(project.root, values.message);
+  await runLocalChecks(io, bundle, sources, me.limits, meta);
 
   const bot = existing ?? (await createBot(api, botName(project), slug, io, remote));
-  const request: DeployRequest = {
-    bundle: bundle.code,
-    sources: sources.map(({ path, content }) => ({ path, content })),
-    meta: deployMeta(project.root, values.message),
-  };
+  const request = deployRequest(bundle, sources, meta);
   const deployed = await upload(api, bot.slug, request, io, remote).catch((e: unknown) => {
     if (e instanceof ApiError && e.code === "bot_not_found") throw noSuchBot(me, slug, server);
     throw explain(e, server);
@@ -197,6 +194,16 @@ export function upload(
   ).finally(() => io.progress?.(""));
 }
 
+/**
+ * Why a version may never leave `validating`: the API has no hint for "nobody is checking", so
+ * the wait running out is the sign. Drop or reword once the checks consumer
+ * (zeroplayers/snake-arena#22) runs on every server.
+ */
+export const CHECKS_NOT_RUNNING =
+  "If every deploy ends here, the checks aren't running on this server yet " +
+  "(zeroplayers/snake-arena#22): versions stay `validating` until they are. Your upload is " +
+  "saved, and `--no-wait` skips the wait.";
+
 /** Polls the version until it leaves `validating`, or {@link WAIT_MS} passes. */
 export async function waitForChecks(
   api: Api,
@@ -215,7 +222,8 @@ export async function waitForChecks(
       if (elapsed >= WAIT_MS) {
         throw new CliError(
           `The server is still checking ${label} after ${Math.round(elapsed / 60_000)} minutes. ` +
-            "The checks go on without the CLI: see `zerosnake status` later.",
+            "The checks go on without the CLI: see `zerosnake status` later.\n" +
+            CHECKS_NOT_RUNNING,
         );
       }
       io.progress?.(

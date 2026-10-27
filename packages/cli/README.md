@@ -54,7 +54,8 @@ allowed only for localhost.
   token goes to `credentials.json` in the config folder (`~/Library/Application Support/zerosnake`,
   `%APPDATA%\zerosnake`, `$XDG_CONFIG_HOME/zerosnake` or `~/.config/zerosnake`;
   `ZEROSNAKE_CONFIG_DIR` overrides), one per server, file `0600` in a `0700` folder, written to a
-  temporary file and renamed. Tokens are never printed. A new login revokes the token it replaces.
+  temporary file and renamed. Tokens are never printed. A new login revokes the token it replaces;
+  a token it couldn't finish with (`GET /api/auth/cli/me` failing after retries) is revoked too.
   `ZEROSNAKE_TOKEN` (CI) is used instead of the stored token when set.
 - **`logout`**: `POST /api/auth/cli/logout`, then deletes the token here even if the server can't be
   reached (and says to revoke it at `/settings`).
@@ -66,7 +67,9 @@ allowed only for localhost.
   reused by every retry): network errors, 5xx, a gateway's 429 and `409 deploy_in_progress` are
   retried with backoff for up to 90 s, which outlasts the API's one-minute takeover of a deploy
   that died half way. Then it polls `GET /api/bots/:bot/versions/:n` every 2 s (up to 10 minutes)
-  until `ready` or `rejected`, and prints the check report.
+  until `ready` or `rejected`, and prints the check report. Still `validating` after that, it exits
+  1 and says the checks may not run on this server yet (#22; the API has no hint for that). The
+  local upload-size check measures the exact body sent, `meta` included.
   The bot is `--bot <slug>`, else `"zerosnake": { "bot": "<slug>" }` in package.json, else the
   package name as a slug; `--create` creates it (`POST /api/bots`). `--entry <file>` picks the
   entry file (`sim` and `test` call that `--bot`).
@@ -79,7 +82,9 @@ allowed only for localhost.
   links the bot's page, which lists recent lives.
 
 Every API failure becomes a plain-language message (`explain` in `src/remote/api.ts`): the
-server's `message` plus what to do, for each `ApiErrorBody` code and for non-JSON answers.
+server's `message` plus what to do, for each `ApiErrorBody` code and for non-JSON answers. Redirects
+are never followed (the token stays with the server it's for) and never retried: they're reported
+as a wrong address or a misconfigured server.
 
 Tests: `src/remote.test.ts` runs the commands against `FakeArena` (an in-memory API with fault
 injection); `src/remote.integration.test.ts` runs login → deploy → status → logs → logout against

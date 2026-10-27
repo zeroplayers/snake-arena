@@ -59,6 +59,23 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The server answered with a redirect. The CLI never follows one, so the token only ever goes to
+ * the server it was issued by; a redirect means a wrong address or a misconfigured host, and
+ * asking again won't help.
+ */
+export class RedirectError extends Error {
+  constructor(
+    readonly path: string,
+    readonly status: number,
+    /** Where it pointed (absolute), if it said. */
+    readonly location: string | null,
+  ) {
+    super(`HTTP ${status} redirect from ${path}${location ? ` to ${location}` : ""}`);
+    this.name = "RedirectError";
+  }
+}
+
 /** No answer: offline, DNS, refused, reset or timed out. Always safe to retry our requests. */
 export class NetworkError extends Error {
   constructor(
@@ -98,17 +115,25 @@ export class Api {
     if (this.token) headers.authorization = `Bearer ${this.token}`;
     if (options.body !== undefined) headers["content-type"] = "application/json";
 
+    const url = `${this.server}${path}`;
     let response: Response;
     let text: string;
     try {
-      response = await this.remote.fetch(`${this.server}${path}`, {
+      // "manual", not "error": Node's fetch reports "error" as a failed connection, which looks
+      // retryable and hides what happened.
+      response = await this.remote.fetch(url, {
         method,
         headers,
-        redirect: "error",
+        redirect: "manual",
         signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
         ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
       });
-      text = await response.text();
+      if (isRedirect(response)) {
+        await response.body?.cancel();
+        text = "";
+      } else {
+        text = await response.text();
+      }
     } catch (e) {
       const cause = (e as { cause?: { code?: string; message?: string } }).cause;
       const reason =
@@ -116,6 +141,13 @@ export class Api {
           ? "timed out"
           : (cause?.code ?? cause?.message ?? (e as Error).message);
       throw new NetworkError(path, reason);
+    }
+    if (isRedirect(response)) {
+      throw new RedirectError(
+        path,
+        response.status,
+        resolve(response.headers.get("location"), url),
+      );
     }
 
     let json: unknown = null;
@@ -129,6 +161,19 @@ export class Api {
     }
     if (!response.ok || json === null) throw new ApiError(response.status, json, path);
     return json as T;
+  }
+}
+
+function isRedirect(response: Response): boolean {
+  return response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400);
+}
+
+function resolve(location: string | null, base: string): string | null {
+  if (!location) return null;
+  try {
+    return new URL(location, base).href;
+  } catch {
+    return location;
   }
 }
 
@@ -206,6 +251,14 @@ export function explain(e: unknown, server: string): CliError {
         (server === DEFAULT_URL
           ? ""
           : `\nIs ${server} the right address? Pick another with --url or ZEROSNAKE_URL.`),
+    );
+  }
+  if (e instanceof RedirectError) {
+    return new CliError(
+      `${server}${e.path} redirected (HTTP ${e.status}${e.location ? ` to ${e.location}` : ""}), and ` +
+        "the CLI doesn't follow redirects: your login only goes to the server you picked.\n" +
+        `Is ${server} the right address? Pick another with --url or ZEROSNAKE_URL. ` +
+        "If it is, the server is misconfigured.",
     );
   }
   if (!(e instanceof ApiError)) throw e;

@@ -1,6 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { afterEach, describe, expect, it } from "vitest";
 import { apiError, FakeArena, htmlNotFound, SERVER } from "../testing/fake-arena.ts";
-import { Api, ApiError, explain, isTransient, NetworkError, withRetries } from "./api.ts";
+import {
+  Api,
+  ApiError,
+  defaultRemote,
+  explain,
+  isTransient,
+  NetworkError,
+  RedirectError,
+  withRetries,
+} from "./api.ts";
 
 /** What `explain` says for a response to `GET /api/me`. */
 async function explained(response: Response): Promise<string> {
@@ -37,6 +48,56 @@ describe("Api", () => {
     expect(denied).toBeInstanceOf(ApiError);
     expect(denied.status).toBe(401);
     expect(denied.code).toBe("unauthorized");
+  });
+});
+
+describe("redirects", () => {
+  const servers: Server[] = [];
+  afterEach(() => {
+    for (const s of servers.splice(0)) s.close();
+  });
+
+  /** A real HTTP server on localhost: `fetch`'s redirect handling is what's under test. */
+  async function serve(handler: Parameters<typeof createServer>[1]): Promise<string> {
+    const server = createServer(handler);
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  }
+
+  it("never follows one, and says where it pointed", async () => {
+    const reached: (string | undefined)[] = [];
+    const elsewhere = await serve((req, res) => {
+      reached.push(req.headers.authorization);
+      res.end("{}");
+    });
+    const origin = await serve((_req, res) => {
+      res.writeHead(307, { location: `${elsewhere}/api/me` }).end();
+    });
+    const error = await new Api(origin, defaultRemote(), "zsk_t")
+      .call("GET", "/api/me")
+      .catch((e) => e);
+    expect(error).toBeInstanceOf(RedirectError);
+    expect(error).toMatchObject({ status: 307, location: `${elsewhere}/api/me` });
+    expect(reached).toEqual([]);
+    expect(isTransient(error)).toBe(false);
+  });
+
+  it("explains it as a wrong address, not a connection problem", async () => {
+    const arena = new FakeArena();
+    arena.fail(
+      "GET",
+      /^\/api\/me$/,
+      new Response(null, { status: 301, headers: { location: "/login" } }),
+    );
+    const error = await new Api(SERVER, arena.remote(), "zsk_t")
+      .call("GET", "/api/me")
+      .catch((e) => e);
+    expect(error).toMatchObject({ status: 301, location: `${SERVER}/login` });
+    const message = explain(error, SERVER).message;
+    expect(message).toContain(`${SERVER}/api/me redirected (HTTP 301 to ${SERVER}/login)`);
+    expect(message).toContain(`Is ${SERVER} the right address?`);
+    expect(message).not.toContain("Couldn't reach");
   });
 });
 

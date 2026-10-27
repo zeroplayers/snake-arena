@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createSandbox } from "@zerosnake/sandbox";
-import { DEPLOY_LIMITS, type DeployLimits } from "@zerosnake/web/shared";
+import {
+  DEPLOY_LIMITS,
+  type DeployLimits,
+  type DeployMeta,
+  type DeployRequest,
+} from "@zerosnake/web/shared";
 import type { BundledBot } from "./bundle.ts";
 import { CliError } from "./errors.ts";
 import type { Io } from "./io.ts";
@@ -40,6 +45,24 @@ export function readSources(root: string, bundle: BundledBot): SourceText[] {
   });
 }
 
+/** The body of `POST /api/bots/:bot/versions`. */
+export function deployRequest(
+  bundle: BundledBot,
+  sources: SourceText[],
+  meta?: DeployMeta,
+): DeployRequest {
+  return {
+    bundle: bundle.code,
+    sources: sources.map(({ path, content }) => ({ path, content })),
+    ...(meta ? { meta } : {}),
+  };
+}
+
+/** Bytes on the wire for `request`, as `Api.call` sends it: what the server's `maxBodyBytes` caps. */
+export function uploadBytes(request: DeployRequest): number {
+  return Buffer.byteLength(JSON.stringify(request));
+}
+
 export interface Check {
   name: string;
   ok: boolean;
@@ -71,12 +94,14 @@ export function formatBytes(n: number): string {
 
 /**
  * The deploy API's request limits (SPEC §6), checked before uploading anything. `limits` are the
- * server's (`GET /api/me`) when signed in, else the defaults.
+ * server's (`GET /api/me`) when signed in, else the defaults. `meta` is what `deploy` sends with
+ * the upload, so the upload size is exact.
  */
 export function limitChecks(
   bundle: BundledBot,
   sources: SourceText[],
   limits: DeployLimits = DEPLOY_LIMITS,
+  meta?: DeployMeta,
 ): Check[] {
   const sourceBytes = sources.reduce((sum, f) => sum + f.bytes, 0);
   const badPath = sources
@@ -89,12 +114,7 @@ export function limitChecks(
     if (other) twice ??= [other, path];
     seen.set(path.toLowerCase(), path);
   }
-  const body = Buffer.byteLength(
-    JSON.stringify({
-      bundle: bundle.code,
-      sources: sources.map(({ path, content }) => ({ path, content })),
-    }),
-  );
+  const body = uploadBytes(deployRequest(bundle, sources, meta));
   return [
     {
       name: "bundle size",
@@ -145,8 +165,9 @@ export async function runLocalChecks(
   bundle: BundledBot,
   sources: SourceText[],
   limits?: DeployLimits,
+  meta?: DeployMeta,
 ): Promise<void> {
-  const limitResults = limitChecks(bundle, sources, limits);
+  const limitResults = limitChecks(bundle, sources, limits, meta);
   const failed = limitResults.filter((c) => !c.ok);
   if (failed.length > 0) {
     throw new CliError(

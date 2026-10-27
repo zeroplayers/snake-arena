@@ -6,8 +6,8 @@ second of game time (`TICK_RATE`). Rooms without spectators are meant to run fas
 (SPEC §4; rooms are in review in [#56](https://github.com/zeroplayers/snake-arena/pull/56)).
 
 All numbers below are the defaults in
-[`packages/engine/src/config.ts`](../packages/engine/src/config.ts). Your bot should read the ones it
-is given (`info` and `state`, see [Bot API](bot-api.md)) instead of hard-coding them.
+[`packages/engine/src/config.ts`](../packages/engine/src/config.ts). Your bot should read the ones
+it is given (`info` and `state`, see [Bot API](bot-api.md)) instead of hard-coding them.
 
 Sources: [`config.ts`](../packages/engine/src/config.ts),
 [`step.ts`](../packages/engine/src/step.ts), [`growth.ts`](../packages/engine/src/growth.ts),

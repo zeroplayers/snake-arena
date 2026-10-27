@@ -1,5 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -17,18 +18,37 @@ const PAGES = [
     .filter((f) => f.endsWith(".md"))
     .map((f) => join(DOCS, f)),
   join(ROOT, "CONTRIBUTING.md"),
+  join(ROOT, "README.md"),
 ];
 
-/** Backticked text that starts like this is taken as a path from the repository root. */
-const REPO_PATH = /^(?:packages|apps|bots|template|docs|spikes|\.github)\/[\w.@$/-]*$/;
+/**
+ * The repository's top-level files and folders, as git tracks them (so a local `node_modules/` or
+ * `.claude/` doesn't count). Backticked text whose first segment is one of them is taken as a path
+ * from the repository root: `packages/engine/src/config.ts`, `SPEC.md`, `.github/workflows/ci.yml`.
+ * Paths in a bot project (`src/bot.ts`, `test/`) don't start with one and aren't checked.
+ */
+const TOP_LEVEL = new Set(
+  execFileSync("git", ["ls-files"], { cwd: ROOT, encoding: "utf8" })
+    .split("\n")
+    .filter(Boolean)
+    .map((f) => f.split("/")[0] as string),
+);
+
+/**
+ * The repository path in backticked text, or `null` if it isn't one. A `:line` or `:from-to`
+ * suffix is dropped, and so is a trailing `/`.
+ */
+function repoPath(code: string): string | null {
+  const path = code.replace(/:\d+(?:-\d+)?$/, "").replace(/\/$/, "");
+  if (!/^[\w.@$/-]+$/.test(path)) return null;
+  return TOP_LEVEL.has(path.split("/")[0] as string) ? path : null;
+}
 
 /**
  * Paths that exist only in open pull requests, by path prefix → PR number. The docs mention them
  * as "in review". When a PR merges, link the files and drop its entry.
  */
 const PENDING: Readonly<Record<string, number>> = {
-  "packages/rating/": 51,
-  "apps/web/src/shared/": 52,
   "packages/checks/": 54,
 };
 
@@ -82,6 +102,9 @@ function checkPage(file: string): { problems: Problem[]; links: number; paths: n
     links++;
     const [path = "", anchor] = target.split("#", 2);
     const resolved = path === "" ? file : resolve(dirname(file), decodeURIComponent(path));
+    // GitHub resolves a link that climbs out of the repository against its web URL:
+    // `../../issues` in the root README is the issue list.
+    if (!`${resolved}${sep}`.startsWith(`${ROOT}${sep}`)) continue;
     if (!existsSync(resolved)) {
       report(match.index, `broken link: ${target}`);
       continue;
@@ -95,8 +118,8 @@ function checkPage(file: string): { problems: Problem[]; links: number; paths: n
 
   let paths = 0;
   for (const match of text.matchAll(/`([^`\n]+)`/g)) {
-    const path = (match[1] as string).replace(/\/$/, "");
-    if (!REPO_PATH.test(path)) continue;
+    const path = repoPath(match[1] as string);
+    if (path === null) continue;
     paths++;
     if (existsSync(join(ROOT, path))) continue;
     if (pending(path) !== undefined) continue;
@@ -126,6 +149,24 @@ describe("docs", () => {
     if (merged.length > 0) {
       console.warn(`docs: these PENDING paths exist now; link them and drop them: ${merged}`);
     }
+  });
+});
+
+describe("repoPath", () => {
+  it("takes backticked text that starts at a top-level entry of the repository", () => {
+    expect(repoPath("packages/engine/src/config.ts")).toBe("packages/engine/src/config.ts");
+    expect(repoPath("apps/web/src/db/queries.ts:59-91")).toBe("apps/web/src/db/queries.ts");
+    expect(repoPath("spikes/")).toBe("spikes");
+    expect(repoPath(".github/workflows/ci.yml")).toBe(".github/workflows/ci.yml");
+    expect(repoPath("SPEC.md")).toBe("SPEC.md");
+  });
+
+  it("skips code, project paths and untracked folders", () => {
+    expect(repoPath("src/bot.ts")).toBeNull();
+    expect(repoPath("node_modules/vitest")).toBeNull();
+    expect(repoPath("pnpm --filter zerosnake build")).toBeNull();
+    expect(repoPath("@zerosnake/sdk")).toBeNull();
+    expect(repoPath("/@you/<slug>")).toBeNull();
   });
 });
 

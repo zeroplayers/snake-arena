@@ -1,19 +1,36 @@
 # Limits
 
-Your bot runs in a QuickJS (WebAssembly) sandbox, the same package in the arena, in deploy checks
-and in `zerosnake sim` / `test`, so a bot that behaves locally behaves the same on the server.
+Your bot runs in a QuickJS (WebAssembly) sandbox, `@zerosnake/sandbox`. The same package runs it
+everywhere, so a bot that behaves locally behaves the same on the server. On `main` it runs your bot
+in `zerosnake sim` / `test` ([#57](https://github.com/zeroplayers/snake-arena/pull/57)) and the
+template's tests; the arena rooms ([#56](https://github.com/zeroplayers/snake-arena/pull/56)) and
+the check suite ([#54](https://github.com/zeroplayers/snake-arena/pull/54)) that will run it on the
+server are in review.
 
 Sources: [`packages/sandbox/README.md`](../packages/sandbox/README.md),
-[`sandbox.ts`](../packages/sandbox/src/sandbox.ts), [`prelude.ts`](../packages/sandbox/src/prelude.ts),
-[`source.ts`](../packages/sandbox/src/source.ts). Deploy limits and checks come from pull requests
-still in review; those sections say which.
+[`sandbox.ts`](../packages/sandbox/src/sandbox.ts),
+[`prelude.ts`](../packages/sandbox/src/prelude.ts),
+[`source.ts`](../packages/sandbox/src/source.ts); for deploy limits,
+[`apps/web/src/shared/deploy.ts`](../apps/web/src/shared/deploy.ts) and
+[`apps/web/src/server/cli-api.ts`](../apps/web/src/server/cli-api.ts). The check suite is still in
+review; its section says so.
 
 ## Per-tick budget
 
-> **This is changing.** Issue [#60](https://github.com/zeroplayers/snake-arena/issues/60) replaces
-> the interrupt count below with a meter that bounds CPU time for any code shape. The idea (a fixed
-> budget per tick, previous action and a strike when you go over) stays; the unit and what one
-> "op" costs will change. Keep `tick()` cheap and you won't notice.
+> **Changing in [#62](https://github.com/zeroplayers/snake-arena/pull/62)** (in review, for
+> [#60](https://github.com/zeroplayers/snake-arena/issues/60)). Below is the budget on `main`. That
+> pull request makes the sandbox instrument every bundle before it runs, so the budget bounds CPU
+> time for any code shape. The strikes and deaths stay the same, and in that pull request the
+> house bots use at most 3.6% of the budget, so keep `tick()` reasonable and you won't notice. Its
+> details may still change:
+>
+> - the bot's own code is charged too, per statement and syntax node, against the same counter as
+>   native work: `opBudget × WORK_PER_OP` = 10 M units per tick, about 10 ms on an M1. The
+>   interrupt limit stays as a second limit;
+> - data-dependent costs are charged by size: each `catch` by the length of the error's `stack`,
+>   object spread and rest and `for…in` per key, `apply` / `Reflect.apply` / `Reflect.construct`
+>   per argument, `new Error()` in the prelude;
+> - the timeout message becomes `over budget: more than 10000000 cost units`.
 
 Today the budget is `info.opBudget` = **10** per `tick()` call (`DEFAULT_OP_BUDGET`), counted in
 two ways. Going over either one is a timeout:
@@ -56,10 +73,10 @@ in the same units. Going over it is a `timeout` death before the first tick.
 | array length                 | array and typed-array methods throw a `RangeError` above 100 000 elements     |
 | shared wasm heap             | 64 MiB for all bots in one sandbox (one room)                                 |
 
-When a check finds the bot over its limit, or an allocation fails, the bot dies at once with
-cause `error`. Catching the error doesn't help: the host watches the heap itself. If the shared heap runs out because
-**another** bot hogged it, that bot is killed and your tick is just discarded (outcome `skipped`:
-previous action, no strike).
+When a check finds the bot over its limit, or an allocation fails, the bot dies at once with cause
+`error`. Catching the error doesn't help: the host watches the heap itself. If the shared heap runs
+out because **another** bot hogged it, that bot is killed and your tick is just discarded (outcome
+`skipped`: previous action, no strike).
 
 ## Logs
 
@@ -81,6 +98,14 @@ These checks scan the whole bundle text, **including strings and comments**:
 - **BigInt literals** such as `10n` or `0xffn`. BigInt arithmetic runs in C without interrupt
   checks.
 
+> **More rejections in [#62](https://github.com/zeroplayers/snake-arena/pull/62)** (in review). Its
+> instrumentation parses the bundle and also rejects, with a load death (`error`): any `import`
+> (dynamic too), identifiers starting with `__zs`, destructuring in a `catch (…)` clause, object
+> rest other than `const { a, ...rest } = value` or `({ a, ...rest } = value)`, functions with more
+> than 3 000 syntax nodes, and brackets nested more than 200 deep. Syntax errors then read
+> `SyntaxError: <message>`. An esbuild bundle of ordinary TypeScript passes; split very long
+> functions.
+
 **Missing or blocked at runtime:**
 
 | Not available                                                                  | Why                                             |
@@ -100,14 +125,21 @@ These checks scan the whole bundle text, **including strings and comments**:
 
 ## Bundle and deploy limits
 
-> **In review.** These limits come from the check suite
-> ([#54](https://github.com/zeroplayers/snake-arena/pull/54), `packages/checks/src/limits.ts`) and
-> the deploy API ([#52](https://github.com/zeroplayers/snake-arena/pull/52),
-> `apps/web/src/shared/deploy.ts`). The CLI commands `login` and `deploy` are not built yet
-> ([#21](https://github.com/zeroplayers/snake-arena/issues/21)).
+> The deploy API that enforces these is merged
+> ([#52](https://github.com/zeroplayers/snake-arena/pull/52)): the numbers are `DEPLOY_LIMITS` in
+> [`apps/web/src/shared/deploy.ts`](../apps/web/src/shared/deploy.ts), path and name rules are
+> `sourcePathProblem` and `checkBotName` in
+> [`apps/web/src/server/cli-api.ts`](../apps/web/src/server/cli-api.ts), and "one active version" is
+> the unique index `versions_bot_ready_idx` in
+> [`apps/web/src/db/schema.ts`](../apps/web/src/db/schema.ts). The check suite repeats the bundle
+> limits locally ([#54](https://github.com/zeroplayers/snake-arena/pull/54),
+> `packages/checks/src/limits.ts`). The CLI commands `login` and `deploy` are in progress
+> ([#21](https://github.com/zeroplayers/snake-arena/issues/21)), and without the check consumer
+> ([#22](https://github.com/zeroplayers/snake-arena/issues/22)) a deployed version stays
+> `validating`.
 
 `zerosnake deploy` bundles your `src/` with esbuild into one ESM file and uploads the bundle plus
-the source files (sources are public on your profile).
+the source files (sources are public on your bot's page).
 
 | Limit                      | Value                                                                                                                                                |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -128,9 +160,10 @@ environment.
 ## Check suite and qualification
 
 > **In review** ([#54](https://github.com/zeroplayers/snake-arena/pull/54),
-> `packages/checks/README.md`). `zerosnake test` runs it locally, and the server runs the same
-> suite on every deploy (the queue consumer is
-> [#22](https://github.com/zeroplayers/snake-arena/issues/22)). Same bundle, same report.
+> `packages/checks/README.md`). Once it lands, `zerosnake test` runs it locally (today `test` only
+> bundles your bot and loads it), and the server runs the same suite on every deploy (the queue
+> consumer is [#22](https://github.com/zeroplayers/snake-arena/issues/22), not built yet). Same
+> bundle, same report.
 
 A new version is `validating` until the checks finish, then `ready` (it replaces your previous
 version in the arena) or `rejected` (with a report the CLI prints). The checks run in order and
@@ -147,7 +180,7 @@ Details that matter when a check fails:
 
 - Single over-budget or throwing ticks are allowed (they show up as warnings); a death from them
   fails `run`. The report gives the seed, tick, the sandbox's message and your last 20 log lines.
-- **Cost caps** (until [#60](https://github.com/zeroplayers/snake-arena/issues/60) lands): on
+- **Cost caps** (until [#62](https://github.com/zeroplayers/snake-arena/pull/62) lands): on
   average over all ticks you may use at most **half** of the per-tick budget, in interrupts and in
   native work. Locally the whole suite also stops after 60 s of wall-clock time. A bot that hits a
   cap is rejected as "too slow".

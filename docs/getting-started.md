@@ -2,20 +2,26 @@
 
 From an empty folder to your own snake in the arena.
 
-> **Status.** The flow below is the one the CLI is being built for, and not all of it works yet:
+> **Status.** Steps 1–3 work today inside a checkout of the monorepo
+> ([see below](#before-the-packages-are-published)); the rest is being built:
 >
-> - `zerosnake init`, `sim` and `test` are in review
->   ([#57](https://github.com/zeroplayers/snake-arena/pull/57)), and so is the project template
->   they copy ([#53](https://github.com/zeroplayers/snake-arena/pull/53)). In #57, `test` only
->   bundles the bot and loads it in the sandbox; running the full check suite
->   ([#54](https://github.com/zeroplayers/snake-arena/pull/54)) is a follow-up once that lands.
-> - `zerosnake login`, `deploy`, `status` and `logs` aren't built yet
->   ([#21](https://github.com/zeroplayers/snake-arena/issues/21)); today they print "isn't
->   available yet". The server side of deploy is in review
+> - `zerosnake init` and `sim` are merged
+>   ([#57](https://github.com/zeroplayers/snake-arena/pull/57)), and so is the project template they
+>   copy ([#53](https://github.com/zeroplayers/snake-arena/pull/53)). `test` is merged too but only
+>   bundles the bot and loads it in the sandbox; running the full check suite waits for
+>   [#54](https://github.com/zeroplayers/snake-arena/pull/54) (in review).
+> - `zerosnake login`, `deploy`, `status` and `logs` are in progress
+>   ([#21](https://github.com/zeroplayers/snake-arena/issues/21)); today they print "isn't available
+>   yet". The server side of deploy is merged
 >   ([#52](https://github.com/zeroplayers/snake-arena/pull/52)).
+> - Bots don't play in the arena yet: rooms
+>   ([#56](https://github.com/zeroplayers/snake-arena/pull/56)) are in review and the matchmaker
+>   ([#23](https://github.com/zeroplayers/snake-arena/issues/23)) isn't built, so no lives are
+>   recorded and the leaderboard is empty.
 > - The `zerosnake` package and the `@zerosnake/*` packages are not on npm yet, so `npx zerosnake`
 >   doesn't work outside the monorepo, and in a project made by `init` the template's own tests
->   (`npm test`, `npm run bench`) can't run, because they need the engine, sandbox and house bots. See [Before the packages are published](#before-the-packages-are-published).
+>   (`npm test`, `npm run bench`) can't run, because they need the engine, sandbox and house bots.
+>   See [Before the packages are published](#before-the-packages-are-published).
 
 You need Node.js 24 or newer. [Claude Code](https://claude.com/claude-code) is optional but the
 template is set up for it.
@@ -90,13 +96,17 @@ npx zerosnake test
 
 The same checks the server runs before accepting a version: limits, does it load, 5 matches without
 a sandbox death, and qualification (score at least as high as the `easy` house bot). It prints what
-to fix when a check fails. (Not yet: in the CLI under review, `test` only bundles your bot and loads
-it in the sandbox, and says so.) See [Limits: check suite](limits.md#check-suite-and-qualification).
+to fix when a check fails. (Not yet: until [#54](https://github.com/zeroplayers/snake-arena/pull/54)
+lands, `test` only bundles your bot and loads it in the sandbox, says so and exits with 1.) See
+[Limits: check suite](limits.md#check-suite-and-qualification).
 
 ## 5. Sign in and deploy
 
-> Not built yet ([#21](https://github.com/zeroplayers/snake-arena/issues/21)). What follows is how
-> the server side in [#52](https://github.com/zeroplayers/snake-arena/pull/52) works.
+> The CLI side is in progress ([#21](https://github.com/zeroplayers/snake-arena/issues/21)). What
+> follows is how the merged server side ([#52](https://github.com/zeroplayers/snake-arena/pull/52),
+> [`apps/web/src/shared/deploy.ts`](../apps/web/src/shared/deploy.ts)) works. Until the check
+> consumer ([#22](https://github.com/zeroplayers/snake-arena/issues/22)) is built, a new version
+> stays `validating`.
 
 ```bash
 npx zerosnake login
@@ -109,14 +119,21 @@ npx zerosnake deploy
 - `deploy` bundles `src/` into one file and uploads it with your source files. The server creates
   a new **version** with status `validating` and runs the checks. The version becomes `ready` and
   replaces your bot's previous version in the arena, or `rejected` with a report.
-- Each author can have 3 bots and 20 deploys per day. See [Limits](limits.md#bundle-and-deploy-limits).
+- Each author can have 3 bots and 20 deploys per day. See
+  [Limits](limits.md#bundle-and-deploy-limits).
 
 ## 6. Follow your bot
 
+> Not yet: no lives are played or recorded until rooms
+> ([#56](https://github.com/zeroplayers/snake-arena/pull/56)) and the matchmaker
+> ([#23](https://github.com/zeroplayers/snake-arena/issues/23)) land.
+
 Once ready, the version is queued for lives in the arena's rooms, at most one snake per author per
 room. After 30 lives it appears on the leaderboard (see [Rating](rating.md)). Your profile at
-`/@<username>` lists your bots, their versions and sources, ratings and replays of recent lives
-(site pages in review, [#55](https://github.com/zeroplayers/snake-arena/pull/55)).
+`/@<username>` lists your bots and their ratings, and each bot's page `/@<username>/<slug>` has its
+versions, their sources and replays of recent lives (site pages merged in
+[#55](https://github.com/zeroplayers/snake-arena/pull/55),
+[`apps/web/src/routes`](../apps/web/src/routes)).
 
 When it dies in ways you don't understand, the template's `debug-death` skill has Claude replay
 the last ticks before local deaths (`npm run bench -- --deaths 5`) and fix the cause;
@@ -125,9 +142,7 @@ the last ticks before local deaths (`npm run bench -- --deaths 5`) and fix the c
 ## Before the packages are published
 
 Until `zerosnake` and `@zerosnake/sdk` are on npm, work inside a checkout of the monorepo, where
-the template is the `template/` folder and pnpm links the packages. Once
-[#53](https://github.com/zeroplayers/snake-arena/pull/53) and
-[#57](https://github.com/zeroplayers/snake-arena/pull/57) are merged:
+the template is the [`template/`](../template) folder and pnpm links the packages:
 
 ```bash
 git clone https://github.com/zeroplayers/snake-arena

@@ -21,18 +21,22 @@ the code and a page disagree, the code wins: please open an issue or a PR.
 Parts of the platform are still being built. Those places say so and link to the pull request or
 issue, rather than describing behaviour that isn't merged yet. The status as of this writing:
 
-| Piece                                              | Status                                                                                                                                 |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Engine, SDK, sandbox, house bots, renderer, viewer | merged                                                                                                                                 |
-| CLI `init`, `sim`, `test`                          | in review ([#57](https://github.com/zeroplayers/snake-arena/pull/57))                                                                  |
-| Bot template (`CLAUDE.md`, skills, tests)          | in review ([#53](https://github.com/zeroplayers/snake-arena/pull/53))                                                                  |
-| Check suite                                        | in review ([#54](https://github.com/zeroplayers/snake-arena/pull/54))                                                                  |
-| Deploy API and its limits                          | in review ([#52](https://github.com/zeroplayers/snake-arena/pull/52))                                                                  |
-| Rating and leaderboard order                       | in review ([#51](https://github.com/zeroplayers/snake-arena/pull/51), [#55](https://github.com/zeroplayers/snake-arena/pull/55))       |
-| Rooms (`RoomDO`)                                   | in review ([#56](https://github.com/zeroplayers/snake-arena/pull/56))                                                                  |
-| CLI `login`, `deploy`, `status`, `logs`            | not started ([#21](https://github.com/zeroplayers/snake-arena/issues/21))                                                              |
-| Matchmaker, check queue consumer                   | not started ([#23](https://github.com/zeroplayers/snake-arena/issues/23), [#22](https://github.com/zeroplayers/snake-arena/issues/22)) |
-| CPU-accurate op metering in the sandbox            | in progress ([#60](https://github.com/zeroplayers/snake-arena/issues/60))                                                              |
+| Piece                                              | Status                                                                                                                                                                          |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Engine, SDK, sandbox, house bots, renderer, viewer | merged                                                                                                                                                                          |
+| Bot template (`CLAUDE.md`, skills, tests)          | merged ([#53](https://github.com/zeroplayers/snake-arena/pull/53))                                                                                                              |
+| CLI `init`, `sim`, `test`                          | merged ([#57](https://github.com/zeroplayers/snake-arena/pull/57)); `test` only bundles and loads the bot until the check suite lands                                           |
+| Deploy API and its limits                          | merged ([#52](https://github.com/zeroplayers/snake-arena/pull/52))                                                                                                              |
+| Rating, leaderboard order, site pages              | merged ([#51](https://github.com/zeroplayers/snake-arena/pull/51), [#55](https://github.com/zeroplayers/snake-arena/pull/55))                                                   |
+| Check suite                                        | in review ([#54](https://github.com/zeroplayers/snake-arena/pull/54))                                                                                                           |
+| Rooms (`RoomDO`)                                   | in review ([#56](https://github.com/zeroplayers/snake-arena/pull/56)); a stub on `main`                                                                                         |
+| CPU-accurate op metering in the sandbox            | in review ([#62](https://github.com/zeroplayers/snake-arena/pull/62), for [#60](https://github.com/zeroplayers/snake-arena/issues/60)); see [Limits](limits.md#per-tick-budget) |
+| CLI `login`, `deploy`, `status`, `logs`            | in progress ([#21](https://github.com/zeroplayers/snake-arena/issues/21))                                                                                                       |
+| Matchmaker, check queue consumer                   | not built ([#23](https://github.com/zeroplayers/snake-arena/issues/23), [#22](https://github.com/zeroplayers/snake-arena/issues/22)); stubs on `main`                           |
+
+So no bot plays in the arena yet: the room, matchmaker and check consumer in
+[`apps/arena/src`](../apps/arena/src) are stubs, no lives are recorded, every rating is empty and
+the leaderboard has no rows. Locally, everything up to `zerosnake sim` works today.
 
 `docs/links.test.ts` checks that every relative link and every source path mentioned in these
 pages exists, so a renamed file breaks the build instead of the docs.

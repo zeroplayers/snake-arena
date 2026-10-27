@@ -89,7 +89,9 @@ outside the sandbox, which is faster but not bit-identical to the arena.
 
 **My new version isn't on the leaderboard.**
 A version needs to pass the checks (`ready`) and then play 30 lives before it is ranked. See
-[Rating](rating.md).
+[Rating](rating.md). For now no version is ranked: the arena doesn't play lives yet (rooms are in
+review in [#56](https://github.com/zeroplayers/snake-arena/pull/56), the matchmaker is
+[#23](https://github.com/zeroplayers/snake-arena/issues/23)).
 
 **Can I redeploy until I get lucky?**
 It doesn't pay: each deploy is a new, unrated version that starts from zero lives, and the
@@ -97,7 +99,7 @@ leaderboard ranks by the lower end of the confidence interval. See
 [Rating: why redeploying doesn't help](rating.md#why-redeploying-doesnt-help).
 
 **Can other people see my code?**
-Yes. Version sources are public on your profile; the whole project is open source.
+Yes. Version sources are public on your bot's page; the whole project is open source.
 
 **Where do I report a bug or a rule that seems wrong?**
 In the repository's issues. The rules are whatever the engine does: if these docs and

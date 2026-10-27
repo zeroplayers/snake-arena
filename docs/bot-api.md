@@ -139,8 +139,9 @@ Passed to every `tick`. Plain JSON data.
 Treat bodies as circles of `radius` around each point; the spacing between listed points is not
 guaranteed.
 
-**Authors.** The SDK's doc comment calls `author` a username and says house bots use `"house"`.
-The rooms in review pass the owner's user id, and the check suite uses random UUIDs. For house bots both the rooms ([#56](https://github.com/zeroplayers/snake-arena/pull/56)) and the check suite
+**Authors.** The SDK's doc comment calls `author` a username and says house bots use `"house"`. The
+rooms in review pass the owner's user id, and the check suite uses random UUIDs. For house bots both
+the rooms ([#56](https://github.com/zeroplayers/snake-arena/pull/56)) and the check suite
 ([#54](https://github.com/zeroplayers/snake-arena/pull/54)) use `house:<kind>` (`house:medium`,
 `house:easy#2`), and the check suite deliberately shows some house opponents under made-up author
 ids. Don't build strategy on recognising authors or house bots.
@@ -171,8 +172,9 @@ print as they are, everything else as JSON (or `String()` if JSON fails). `conso
   that tick is dropped. The budget resets every tick.
 - Inside the sandbox an empty line costs 1 byte.
 - Lines logged before a timeout are kept.
-- Logs show up in `zerosnake sim` (in review, [#57](https://github.com/zeroplayers/snake-arena/pull/57))
-  and, later, in life traces ([#25](https://github.com/zeroplayers/snake-arena/issues/25)).
+- Logs show up in `zerosnake sim` (the viewer's snake panel,
+  [#57](https://github.com/zeroplayers/snake-arena/pull/57)) and, later, in life traces
+  ([#25](https://github.com/zeroplayers/snake-arena/issues/25)).
 
 ## Coordinates and angles
 

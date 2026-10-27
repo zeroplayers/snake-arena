@@ -84,6 +84,13 @@ import {
   RoomSim,
 } from "./room/sim.ts";
 import {
+  ACK_TIMEOUT_MS,
+  labelsFromD1,
+  SPECTATOR_GRACE_MS,
+  type SpectatedRoom,
+  Spectators,
+} from "./room/spectators.ts";
+import {
   type BatchMarker,
   type LifeEntry,
   type Meta,
@@ -93,6 +100,7 @@ import {
 } from "./room/store.ts";
 import { gzip } from "./room/trace.ts";
 import { TraceStore } from "./room/trace-store.ts";
+import { SHOWCASE_REPORT_MS, showcase } from "./showcase.ts";
 
 const TICK_MS = 1000 / TICK_RATE;
 
@@ -122,6 +130,10 @@ const TICK_MS = 1000 / TICK_RATE;
  * tally, here and across rooms in D1), is quarantined for every room (`versions.quarantined_at`).
  * A watched call that returns after running past the abort share by itself is named like a kill.
  *
+ * Spectators (`room/spectators.ts`, #27) connect over WebSockets (`fetch`, routed by the
+ * showcase, `showcase.ts`) and get every saved batch's ticks; while they watch, the room runs in
+ * real time whatever its mode. Running rooms report themselves to the showcase registry.
+ *
  * The arena's kill switch (`arena_control.paused` in D1, re-read every `ARENA_CONTROL_POLL_MS`):
  * while it's on, the room starts no lives, retires the running ones and closes.
  *
@@ -138,11 +150,56 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   /** The kill switch as last read from D1, and when (wall ms; in memory only). */
   private paused = false;
   private pausedReadAt = 0;
+  private readonly spectators: Spectators;
+  /** When the room last reported itself to the showcase (wall ms; in memory only). */
+  private reportedAt = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.store = new RoomStore(ctx.storage);
     this.traces = new TraceStore(ctx.storage.sql);
+    this.spectators = new Spectators(ctx, () => this.spectated(), labelsFromD1(env.DB));
+  }
+
+  // --- Spectators ----------------------------------------------------------------------------
+
+  /** A spectator's WebSocket upgrade (from the showcase route). */
+  override async fetch(request: Request): Promise<Response> {
+    return this.spectators.accept(request);
+  }
+
+  override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    this.spectators.message(ws, message);
+  }
+
+  override async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+    this.spectators.closed(ws, code, reason);
+  }
+
+  override async webSocketError(ws: WebSocket): Promise<void> {
+    this.spectators.closed(ws, 1011, "error");
+  }
+
+  /** What spectators see of the room; null unless it is running. */
+  private spectated(): SpectatedRoom | null {
+    const meta = this.store.meta();
+    if (meta?.state !== "running") return null;
+    return {
+      roomId: meta.roomId,
+      idleWorld: () => (this.busy ? null : (this.sim?.world ?? this.store.getJson<World>("world"))),
+      life: (lifeId) =>
+        this.findLife(lifeId) ?? this.sim?.roster.find((e) => e.lifeId === lifeId) ?? null,
+      versionIds: () =>
+        [...this.store.roster(), ...this.store.pending()].flatMap((e) =>
+          e.versionId === null ? [] : [e.versionId],
+        ),
+    };
+  }
+
+  /** The mode the room runs in: real time while spectators watch (and a grace period after). */
+  private mode(meta: Meta): RoomMode {
+    const graceMs = meta.limits.spectatorGraceMs ?? SPECTATOR_GRACE_MS;
+    return this.spectators.wantsRealtime(Date.now(), graceMs) ? "realtime" : meta.mode;
   }
 
   // --- RPC ---------------------------------------------------------------------------------
@@ -170,6 +227,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
           watchGapMs: limits.watchGapMs ?? DEFAULT_WATCH_GAP_MS,
           arenaControlPollMs: limits.arenaControlPollMs ?? ARENA_CONTROL_POLL_MS,
           killWindowTicks: limits.killWindowTicks ?? KILL_WINDOW_TICKS,
+          spectatorGraceMs: limits.spectatorGraceMs ?? SPECTATOR_GRACE_MS,
+          spectatorAckTimeoutMs: limits.spectatorAckTimeoutMs ?? ACK_TIMEOUT_MS,
         },
         livesEnded: 0,
         lastBatchTicks: 0,
@@ -235,7 +294,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     return {
       roomId: meta?.roomId ?? null,
       state: meta ? meta.state : "new",
-      mode: meta?.mode ?? "accelerated",
+      mode: meta ? this.mode(meta) : "accelerated",
+      spectators: this.spectators.count,
       tick: world?.tick ?? 0,
       snakes: this.store.roster().map((e) => ({
         lifeId: e.lifeId,
@@ -308,12 +368,16 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         // The in-memory room may be half a batch ahead of storage: drop it. The marker stays,
         // so the next cycle handles this like a batch that died.
         this.dropSim();
+        this.spectators.abort();
         throw e;
       }
       await this.drain();
       const queueEmpty = this.paused || (await this.refill());
       if (queueEmpty && !this.hasRealLives()) await this.close();
-      else await this.scheduleNext();
+      else {
+        await this.scheduleNext();
+        await this.reportShowcase();
+      }
     } finally {
       this.busy = false;
     }
@@ -326,6 +390,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     const maxPendingSeq = this.store.lastPendingSeq();
     const plan = this.plan(meta, sim.roster, sim.world.tick, sim.idleLives, maxPendingSeq);
     const watch = watching(meta.watch, sim.world.tick, Date.now());
+    // Labels of the lives spectators are about to see (D1 only for versions not seen yet).
+    await this.spectators.prepare();
     const marker: BatchMarker = {
       fromTick: sim.world.tick,
       maxPendingSeq,
@@ -335,7 +401,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     };
     await this.begin(meta, marker);
     const watcher = watch ? this.watchHooks(meta, marker) : null;
-    const result = await sim.run(plan, watcher?.hooks ?? {});
+    const afterStep = this.spectators.beginBatch(sim.world);
+    const result = await sim.run(plan, { ...watcher?.hooks, ...(afterStep && { afterStep }) });
     const blamed = watcher?.blamed() ?? null;
     this.commit(sim, result, maxPendingSeq, () => {
       if (!blamed) return;
@@ -350,6 +417,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       const counted = this.countIncident(verdict, true, sim.world.tick, now);
       console.error("room call overran", meta.roomId, verdict, counted);
     });
+    this.spectators.commit(sim.world, meta.limits.spectatorAckTimeoutMs ?? ACK_TIMEOUT_MS);
     // Some bots ran a tick the world never stepped (or one was evicted): restart them from the
     // saved frame.
     if (result.aborted || blamed) this.dropSim();
@@ -621,7 +689,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     const bots = staying.length + spawns.length;
     const starts = spawns.length + idleLives;
     let ticks = meta.limits.batchTicks || batchTicks(bots, starts, meta.limits.cpuBudgetMs);
-    if (meta.mode === "realtime") ticks = Math.min(ticks, REALTIME_BATCH_TICKS);
+    if (this.mode(meta) === "realtime") ticks = Math.min(ticks, REALTIME_BATCH_TICKS);
     return { spawns, faults, ticks };
   }
 
@@ -846,6 +914,12 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       this.store.setMeta(meta);
     });
     this.dropSim();
+    this.spectators.closeAll("room closed");
+    try {
+      await showcase(this.env).remove(this.ctx.id.toString());
+    } catch (e) {
+      console.error("room showcase remove", meta.roomId, e);
+    }
     await this.drain();
     // Anything still undelivered retries from alarms.
     const outbox = this.store.outboxStats();
@@ -868,7 +942,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       return;
     }
     const now = Date.now();
-    if (meta.mode === "accelerated") {
+    if (this.mode(meta) === "accelerated") {
       await this.ctx.storage.setAlarm(now);
       return;
     }
@@ -880,6 +954,37 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     meta.realtimeNext = next;
     this.store.setMeta(meta);
     await this.ctx.storage.setAlarm(next);
+  }
+
+  /**
+   * Tells the showcase registry about the room, at most every `SHOWCASE_REPORT_MS` (`showcase.ts`
+   * picks the rooms the home page shows from these reports). A room that isn't the showcase (any
+   * more: its turn is over) lets its spectators go, so it doesn't stay in real time.
+   */
+  private async reportShowcase(): Promise<void> {
+    const now = Date.now();
+    const meta = this.store.meta();
+    if (meta?.state !== "running" || meta.manual || now - this.reportedAt < SHOWCASE_REPORT_MS) {
+      return;
+    }
+    this.reportedAt = now;
+    const world = this.sim?.world ?? this.store.getJson<World>("world");
+    const roster = this.store.roster();
+    try {
+      const { showcase: shown } = await showcase(this.env).report({
+        objectId: this.ctx.id.toString(),
+        roomId: meta.roomId,
+        tick: world?.tick ?? 0,
+        realLives: roster.filter((e) => e.versionId !== null).length,
+        snakes: world?.snakes.length ?? 0,
+        mass: Math.round((world?.snakes ?? []).reduce((m, s) => m + s.mass, 0)),
+        spectators: this.spectators.count,
+        at: now,
+      });
+      if (!shown && this.spectators.count > 0) this.spectators.release("showcase moved");
+    } catch (e) {
+      console.error("room showcase report", meta.roomId, e);
+    }
   }
 
   /** Paused, or closed with deliveries left: wake up when the next retry is due. */

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { HeroPlayer } from "./heroPlayer";
+import type { HeroSource } from "./heroSource";
 
 type State = "waiting" | "loading" | "playing" | "paused" | "failed";
 
@@ -7,15 +8,18 @@ type State = "waiting" | "loading" | "playing" | "paused" | "failed";
  * The landing page's arena. Client-only and lazy: the engine, house bots and three.js load once
  * the stage scrolls near the viewport, after hydration, so none of it is in the server render or
  * the main bundle. It only animates while on screen and the tab is visible, and starts paused
- * when the visitor prefers reduced motion. What it plays comes from `heroSource.ts`.
+ * when the visitor prefers reduced motion; paused, it lets go of the live showcase's socket. What
+ * it plays comes from `heroSource.ts`: the live showcase when a room is on, else a local match;
+ * the caption says which. A showcase that goes away for good is replaced by a local match.
  */
-export function ArenaHero({ live }: { live: boolean }) {
+export function ArenaHero() {
   const stage = useRef<HTMLDivElement>(null);
   const player = useRef<HeroPlayer | undefined>(undefined);
   // The visitor's own pause wins over visibility.
   const userPaused = useRef(false);
   const toggle = useRef(() => {});
   const [state, setState] = useState<State>("waiting");
+  const [live, setLive] = useState(false);
 
   useEffect(() => {
     const el = stage.current;
@@ -38,18 +42,26 @@ export function ArenaHero({ live }: { live: boolean }) {
 
     const load = async () => {
       setState("loading");
-      const [{ createHeroSource }, { playHero }] = await Promise.all([
+      const [{ createHeroSource, localHeroSource }, { playHero }] = await Promise.all([
         import("./heroSource"),
         import("./heroPlayer"),
       ]);
       if (cancelled) return;
-      const source = await createHeroSource();
-      if (cancelled) {
-        source.dispose?.();
-        return;
-      }
-      player.current = playHero(el, source);
-      sync();
+      const show = ({ source, live }: HeroSource) => {
+        if (cancelled) {
+          source.dispose?.();
+          return;
+        }
+        player.current?.destroy();
+        setLive(live);
+        player.current = playHero(el, source);
+        sync();
+      };
+      // The showcase closed and no other came: the house bots take over.
+      const onLiveLost = () => {
+        localHeroSource().then(show, () => !cancelled && setState("failed"));
+      };
+      show(await createHeroSource({ onLiveLost }));
     };
 
     const maybeLoad = () => {

@@ -26,10 +26,19 @@ const wasmPlugin: Plugin = {
 };
 
 export interface Harness {
-  call<T = unknown>(target: "room" | "matchmaker", method: string, ...args: unknown[]): Promise<T>;
+  call<T = unknown>(
+    target: "room" | "matchmaker" | "showcase",
+    method: string,
+    ...args: unknown[]
+  ): Promise<T>;
   room<T = unknown>(name: string, method: string, ...args: unknown[]): Promise<T>;
   /** Starts a call without waiting for it (it may never finish). */
   fire(name: string, method: string, ...args: unknown[]): Promise<unknown>;
+  /**
+   * A request to the test worker (`/showcase`, `/spectate/<room>`, `/public/<path>`), e.g. a
+   * WebSocket upgrade.
+   */
+  fetch(path: string, init?: RequestInit): Promise<Response>;
   /** Restarts workerd: every object loses its memory and in-flight requests; storage stays. */
   restart(): Promise<void>;
   d1(): Promise<D1Database>;
@@ -77,10 +86,12 @@ export async function createHarness(): Promise<Harness> {
             TRACES: { type: "r2", name: "traces" },
             ROOMS: { type: "durable-object", worker: "arena", exportName: "RoomDO" },
             MATCHMAKER: { type: "durable-object", worker: "arena", exportName: "TestMatchmaker" },
+            SHOWCASE: { type: "durable-object", worker: "arena", exportName: "ShowcaseDO" },
           },
           exports: {
             RoomDO: { type: "durable-object", storage: "sqlite" },
             TestMatchmaker: { type: "durable-object", storage: "sqlite" },
+            ShowcaseDO: { type: "durable-object", storage: "sqlite" },
           },
         },
       },
@@ -112,6 +123,8 @@ export async function createHarness(): Promise<Harness> {
     room: (name, method, ...args) => rpc({ target: "room", name, method, args }) as never,
     fire: (name, method, ...args) =>
       rpc({ target: "room", name, method, args }).catch((e: unknown) => e),
+    fetch: (path, init) =>
+      mf.dispatchFetch(`http://arena${path}`, init as never) as unknown as Promise<Response>,
     async restart() {
       await mf.dispose();
       mf = new Miniflare(options);
@@ -137,8 +150,8 @@ export async function seedVersion(
   const versionId = `v-${author}`;
   await db.batch([
     db
-      .prepare("INSERT OR IGNORE INTO users (id, name, email) VALUES (?, ?, ?)")
-      .bind(author, author, `${author}@example.com`),
+      .prepare("INSERT OR IGNORE INTO users (id, name, email, username) VALUES (?, ?, ?, ?)")
+      .bind(author, author, `${author}@example.com`, `${author}-name`),
     db
       .prepare("INSERT OR IGNORE INTO bots (id, owner_id, name, slug) VALUES (?, ?, ?, ?)")
       .bind(`bot-${author}`, author, author, author),

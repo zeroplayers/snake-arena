@@ -130,6 +130,13 @@ export interface RoomLimits {
   arenaControlPollMs?: number;
   /** Game ticks a named kill stays in the kill window. Default `KILL_WINDOW_TICKS` (3000). */
   killWindowTicks?: number;
+  /**
+   * How long the room stays in real time after its last spectator left. Default
+   * `SPECTATOR_GRACE_MS` (30 s).
+   */
+  spectatorGraceMs?: number;
+  /** A spectator that acks nothing for this long is closed. Default `ACK_TIMEOUT_MS` (30 s). */
+  spectatorAckTimeoutMs?: number;
 }
 
 export type JoinResult =
@@ -167,7 +174,10 @@ export interface RoomSnakeStatus {
 export interface RoomStatus {
   roomId: string | null;
   state: "new" | "running" | "closed";
+  /** The mode it runs in: real time while it has spectators (`room/spectators.ts`), else as set. */
   mode: RoomMode;
+  /** Open spectator WebSockets. */
+  spectators: number;
   tick: number;
   snakes: RoomSnakeStatus[];
   /** Tickets accepted but not spawned yet (they spawn at the start of the next batch). */
@@ -227,6 +237,7 @@ export interface RoomRpc {
   join(ticket: LifeTicket): Promise<JoinResult>;
   /** Retires a life at the next batch (e.g. its version was archived). */
   leave(lifeId: string): Promise<boolean>;
+  /** The room's own mode; spectators make it real time while they watch, whatever this is. */
   setMode(mode: RoomMode): Promise<void>;
   status(): Promise<RoomStatus>;
   /** Runs one batch now (what the alarm does). */

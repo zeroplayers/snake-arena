@@ -55,6 +55,8 @@ export interface BatchHooks {
   shuffleStarts?: boolean;
   /** Asked between ticks; false ends the batch early. */
   continueBatch?: () => boolean;
+  /** Called after each engine step with the new frame (spectators, `spectators.ts`). Sync. */
+  afterStep?: (world: World) => void;
 }
 
 /** What a room starts its bots with: a sandbox and the room's bundles (`bundles.ts`). */
@@ -165,7 +167,7 @@ export class RoomSim {
   /** Runs one batch: spawns, then up to `plan.ticks` engine steps, every bot's tick before each. */
   async run(plan: BatchPlan, hooks: BatchHooks = {}, now = Date.now()): Promise<BatchResult> {
     const world = this.world;
-    const { beforeBot, afterBot, continueBatch, shuffleStarts } = hooks;
+    const { beforeBot, afterBot, continueBatch, shuffleStarts, afterStep } = hooks;
     const result: BatchResult = {
       spawned: [],
       ended: [],
@@ -245,6 +247,7 @@ export class RoomSim {
       this.recorder.step(actions, faults);
       result.ticks++;
       for (const c of calls) c.trace.record(c.seen, c.report);
+      afterStep?.(world);
       const chunkTick = this.recorder.pending?.snapshot.tick ?? world.tick;
       for (const death of world.deaths) {
         const r = this.running.get(death.id);

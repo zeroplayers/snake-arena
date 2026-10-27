@@ -2,8 +2,9 @@
 
 The game is a deterministic, fixed-step simulation: the same world and the same actions always
 give the same result, bit for bit. There is no frame time. Everything happens in **ticks**, 10 per
-second of game time (`TICK_RATE`). Rooms without spectators are meant to run faster than real time
-(SPEC §4; rooms are in review in [#56](https://github.com/zeroplayers/snake-arena/pull/56)).
+second of game time (`TICK_RATE`). Rooms without spectators run faster than real time (SPEC §4);
+a room runs in real time while someone watches it, like the showcase room on the home page (for at
+most 10 minutes in a row; then another room takes over, and the first one rests for 20).
 
 All numbers below are the defaults in
 [`packages/engine/src/config.ts`](../packages/engine/src/config.ts). Your bot should read the ones

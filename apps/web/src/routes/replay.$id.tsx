@@ -1,8 +1,11 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
+import { useEffect, useRef, useState } from "react";
 import { DEATH_CAUSES, formatDateTime, formatTicks } from "../components/format";
 import { Empty, PageError, PagePending } from "../components/PageState";
 import { ReplayViewer } from "../components/ReplayViewer";
+import { TracePanel } from "../components/TracePanel";
 import { getReplayPage } from "../server/pages";
+import { getReplayTrace, type ReplayTrace } from "../server/traces";
 
 /** `/replay/{lifeId}`: the room replay around one life, with that snake selected. */
 export const Route = createFileRoute("/replay/$id")({
@@ -28,6 +31,8 @@ export const Route = createFileRoute("/replay/$id")({
 function ReplayPage() {
   const life = Route.useLoaderData();
   const ticks = life.endTick === null ? null : life.endTick - life.startTick;
+  const trace = useTrace(life.id, life.endedAt !== null);
+  const seek = useRef<((tick: number) => void) | null>(null);
   return (
     <section className="panel replay">
       <p className="breadcrumbs muted">
@@ -77,10 +82,34 @@ function ReplayPage() {
         <ReplayViewer
           lifeId={life.id}
           title={`${life.botName} v${life.version} · @${life.author}`}
+          trace={trace}
+          seek={seek}
         />
       ) : (
         <Empty>No recording was kept for this life.</Empty>
       )}
+      {life.endedAt && <TracePanel trace={trace} onSeek={(tick) => seek.current?.(tick)} />}
     </section>
   );
+}
+
+/** The life's trace, fetched after the page loads (it depends on who is looking). */
+function useTrace(lifeId: string, ended: boolean): ReplayTrace | null {
+  const [trace, setTrace] = useState<ReplayTrace | null>(null);
+  useEffect(() => {
+    if (!ended) return;
+    let cancelled = false;
+    setTrace(null);
+    getReplayTrace({ data: lifeId })
+      .then((t) => {
+        if (!cancelled) setTrace(t);
+      })
+      .catch(() => {
+        if (!cancelled) setTrace({ status: "none" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lifeId, ended]);
+  return trace;
 }

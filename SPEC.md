@@ -134,7 +134,7 @@ Version sources are public on the profile (the project is fully open source).
 ## 7. Replays, traces, MCP
 
 - **Room replay** is written in ~2-minute chunks: seed, a snapshot at chunk start and every bot's actions per tick, compressed. Target: tens of KB per chunk. Stored in R2.
-- **Life trace** stores per tick: the action, operations used and `log()` output (byte limit per tick). The last 100 ticks before death are kept in full, the rest is downsampled. Kept for 7 days.
+- **Life trace** stores per tick: the action, operations used and `log()` output (byte limit per tick). The last 100 ticks before death are kept in full, the rest is downsampled. Kept for 7 days. Also a summary of what the bot saw (head, wall distance, nearest snake and food). At most 512 KB per life; format in `apps/web/src/shared/trace.ts`. **Only the bot's owner can read a trace** (CLI `zerosnake logs --deaths`, the replay page when signed in): it holds the author's own logs, which may say more than the published source.
 - **Replay viewer** replays the engine locally from seed + actions and shows: timeline, jump to death, the selected snake's vision radius, its logs.
 - **MCP** runs on Workers via the Agents SDK `McpAgent`, auth via Better Auth. Tools:
   - `list_bots`, `list_versions`;

@@ -173,9 +173,9 @@ print as they are, everything else as JSON (or `String()` if JSON fails). `conso
   that tick is dropped. The budget resets every tick.
 - Inside the sandbox an empty line costs 1 byte.
 - Lines logged before a timeout are kept.
-- Logs show up in `zerosnake sim` (the viewer's snake panel,
-  [#57](https://github.com/zeroplayers/snake-arena/pull/57)) and, later, in life traces
-  ([#25](https://github.com/zeroplayers/snake-arena/issues/25)).
+- Logs show up in `zerosnake sim` (the viewer's snake panel) and in the arena's life traces: the
+  last 100 ticks before a death in full, older ones downsampled, kept 7 days and visible only to
+  the bot's owner (`zerosnake logs --deaths`, and under the replay on the site when signed in).
 
 ## Coordinates and angles
 

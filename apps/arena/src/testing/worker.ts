@@ -1,10 +1,13 @@
 /**
  * Test entry for `room.test.ts`: the real `RoomDO` (with a sandbox that can be told to burn CPU),
  * a scriptable matchmaker in place of the stub, and `POST /rpc` to call either from Node
- * (`{ target, name, method, args }`).
+ * (`{ target, name, method, args }`). Spectators: `/showcase` as the site's proxy reaches it
+ * (`ShowcaseEntrypoint` runs `handleShowcase`), `/spectate/<room name>` straight to a room, and
+ * `/public/<path>` the production Worker's public `fetch`.
  */
 import { DurableObject } from "cloudflare:workers";
 import type { BotLife, InstrumentResult } from "@zerosnake/sandbox";
+import production from "../index.ts";
 import type {
   LifeDrop,
   LifeResult,
@@ -14,6 +17,10 @@ import type {
 } from "../protocol.ts";
 import type { LifeStarter } from "../room/sim.ts";
 import { RoomDO as BaseRoomDO } from "../room.ts";
+import { handleShowcase } from "../showcase.ts";
+
+export { ShowcaseDO } from "../showcase.ts";
+
 import { BURN_LINE, SPIN_PREFIX } from "./burn.ts";
 
 /**
@@ -34,6 +41,8 @@ function spin(ms: number): void {
 
 /** Storage key of `slowInstrument`'s delay (it survives restarts, like a slow machine). */
 const INSTRUMENT_DELAY_KEY = "test:instrumentDelayMs";
+/** Storage key of how many more trace uploads `failTraces` makes fail. */
+const TRACE_FAILURES_KEY = "test:traceFailures";
 
 /**
  * The real room, but each bot tick may ask the host to burn CPU through its log. That's what an
@@ -47,6 +56,20 @@ export class RoomDO extends BaseRoomDO {
    */
   async slowInstrument(ms: number): Promise<void> {
     await this.ctx.storage.put(INSTRUMENT_DELAY_KEY, ms);
+  }
+
+  /** Makes the next `n` trace uploads to R2 fail. */
+  async failTraces(n: number): Promise<void> {
+    await this.ctx.storage.put(TRACE_FAILURES_KEY, n);
+  }
+
+  protected override async putTrace(key: string, json: Uint8Array): Promise<void> {
+    const failures = (await this.ctx.storage.get<number>(TRACE_FAILURES_KEY)) ?? 0;
+    if (failures > 0) {
+      await this.ctx.storage.put(TRACE_FAILURES_KEY, failures - 1);
+      throw new Error("R2 is down (test)");
+    }
+    return super.putTrace(key, json);
   }
 
   protected override async instrumentBundle(source: string): Promise<InstrumentResult> {
@@ -82,7 +105,7 @@ function burnOnRequest(life: BotLife): BotLife {
 }
 
 interface Call {
-  target: "room" | "matchmaker";
+  target: "room" | "matchmaker" | "showcase";
   name?: string;
   method: string;
   args?: unknown[];
@@ -167,8 +190,24 @@ export class TestMatchmaker extends DurableObject<Env> implements MatchmakerRpc 
 
 export default {
   async fetch(request, env) {
+    const url = new URL(request.url);
+    const path = url.pathname;
+    if (path === "/showcase") return handleShowcase(request, env);
+    if (path.startsWith("/public/")) {
+      const publicUrl = new URL(path.slice("/public".length) + url.search, url);
+      return production.fetch(new Request(publicUrl, request), env);
+    }
+    if (path.startsWith("/spectate/")) {
+      const name = decodeURIComponent(path.slice("/spectate/".length));
+      return env.ROOMS.get(env.ROOMS.idFromName(name)).fetch(request);
+    }
     const call = (await request.json()) as Call;
-    const ns = call.target === "room" ? env.ROOMS : env.MATCHMAKER;
+    const ns =
+      call.target === "room"
+        ? env.ROOMS
+        : call.target === "showcase"
+          ? env.SHOWCASE
+          : env.MATCHMAKER;
     const stub = ns.get(ns.idFromName(call.name ?? "global")) as unknown as Record<
       string,
       (...args: unknown[]) => Promise<unknown>

@@ -34,14 +34,24 @@ export interface HarnessOptions {
 }
 
 export interface Harness {
-  call<T = unknown>(target: "room" | "matchmaker", method: string, ...args: unknown[]): Promise<T>;
+  call<T = unknown>(
+    target: "room" | "matchmaker" | "showcase",
+    method: string,
+    ...args: unknown[]
+  ): Promise<T>;
   room<T = unknown>(name: string, method: string, ...args: unknown[]): Promise<T>;
   /** Starts a call without waiting for it (it may never finish). */
   fire(name: string, method: string, ...args: unknown[]): Promise<unknown>;
+  /**
+   * A request to the test worker (`/showcase`, `/spectate/<room>`, `/public/<path>`), e.g. a
+   * WebSocket upgrade.
+   */
+  fetch(path: string, init?: RequestInit): Promise<Response>;
   /** Restarts workerd: every object loses its memory and in-flight requests; storage stays. */
   restart(): Promise<void>;
   d1(): Promise<D1Database>;
   r2(binding?: "REPLAYS" | "BUNDLES"): Promise<R2Bucket>;
+  traces(): Promise<R2Bucket>;
   dispose(): Promise<void>;
 }
 
@@ -86,12 +96,15 @@ export async function createHarness({
             DB: { type: "d1", id: "test" },
             REPLAYS: { type: "r2", name: "replays" },
             BUNDLES: { type: "r2", name: "bundles" },
+            TRACES: { type: "r2", name: "traces" },
             ROOMS: { type: "durable-object", worker: "arena", exportName: rooms },
             MATCHMAKER: { type: "durable-object", worker: "arena", exportName: matchmaker },
+            SHOWCASE: { type: "durable-object", worker: "arena", exportName: "ShowcaseDO" },
           },
           exports: {
             [rooms]: { type: "durable-object", storage: "sqlite" },
             [matchmaker]: { type: "durable-object", storage: "sqlite" },
+            ShowcaseDO: { type: "durable-object", storage: "sqlite" },
           },
         },
       },
@@ -123,6 +136,8 @@ export async function createHarness({
     room: (name, method, ...args) => rpc({ target: "room", name, method, args }) as never,
     fire: (name, method, ...args) =>
       rpc({ target: "room", name, method, args }).catch((e: unknown) => e),
+    fetch: (path, init) =>
+      mf.dispatchFetch(`http://arena${path}`, init as never) as unknown as Promise<Response>,
     async restart() {
       await mf.dispose();
       mf = new Miniflare(options);
@@ -130,6 +145,7 @@ export async function createHarness({
     },
     d1: async () => (await mf.getD1Database("DB")) as unknown as D1Database,
     r2: async (binding = "REPLAYS") => (await mf.getR2Bucket(binding)) as unknown as R2Bucket,
+    traces: async () => (await mf.getR2Bucket("TRACES")) as unknown as R2Bucket,
     async dispose() {
       await mf.dispose();
       rmSync(dir, { recursive: true, force: true });
@@ -147,8 +163,8 @@ export async function seedVersion(
   const versionId = `v-${author}`;
   await db.batch([
     db
-      .prepare("INSERT OR IGNORE INTO users (id, name, email) VALUES (?, ?, ?)")
-      .bind(author, author, `${author}@example.com`),
+      .prepare("INSERT OR IGNORE INTO users (id, name, email, username) VALUES (?, ?, ?, ?)")
+      .bind(author, author, `${author}@example.com`, `${author}-name`),
     db
       .prepare("INSERT OR IGNORE INTO bots (id, owner_id, name, slug) VALUES (?, ?, ?, ?)")
       .bind(`bot-${author}`, author, author, author),

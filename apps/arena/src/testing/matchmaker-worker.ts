@@ -16,7 +16,7 @@ import type {
   RoomStatus,
 } from "../protocol.ts";
 
-export { RoomDO } from "./worker.ts";
+export { RoomDO, ShowcaseDO } from "./worker.ts";
 
 /** The real matchmaker: manual (the test runs `tick`), and its clock can be moved forward. */
 export class TestMatchmakerDO extends MatchmakerDO {

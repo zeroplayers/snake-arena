@@ -1,6 +1,7 @@
 /**
- * The CLI API (SPEC §6): `GET /api/me`, `POST /api/bots`, `POST /api/bots/:bot/versions` and
- * `GET /api/bots/:bot/versions/:n`. Shapes and error codes are in `src/shared/deploy.ts`.
+ * The CLI API (SPEC §6): `GET /api/me`, `POST /api/bots`, `POST /api/bots/:bot/versions`,
+ * `GET /api/bots/:bot/versions/:n` and its `/lives`, and `GET /api/lives/:id/trace` (#25). Shapes
+ * and error codes are in `src/shared/deploy.ts` and `src/shared/trace.ts`.
  *
  * Only CLI tokens (`authenticateCli`) get in; browser sessions don't, and CLI tokens in turn
  * can't use Better Auth (see cli-auth.ts). No CORS headers, so other sites' scripts can't call it.
@@ -27,6 +28,8 @@ import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import * as z from "zod";
 import { createDb, type Db } from "../db";
 import { arenaControl, bots, users, versions } from "../db/schema";
+import { recentLives } from "../queries/bot";
+import { lifeSummary, readLifeTrace } from "../queries/trace";
 import type { VersionQuarantine } from "../shared/arena";
 import {
   CHECK_JOB_VERSION,
@@ -47,6 +50,12 @@ import {
   type QuotaInfo,
   type VersionInfo,
 } from "../shared/deploy";
+import {
+  LIVES_LIMIT_MAX,
+  type LivesResponse,
+  TRACE_RETENTION_DAYS,
+  type TraceResponse,
+} from "../shared/trace";
 import { insertBot } from "./bot-admin";
 import { parseBotName } from "./bot-names";
 import { authenticateCli, type CliIdentity } from "./cli-auth";
@@ -58,6 +67,8 @@ export interface CliApiEnv {
   DB: D1Database;
   BUNDLES: R2Bucket;
   SOURCES: R2Bucket;
+  /** Life traces (#25), read for their owners. */
+  TRACES: R2Bucket;
   CHECKS_QUEUE: { send(body: CheckJob, options?: QueueSendOptions): Promise<unknown> };
   /** Overrides `DEPLOY_LIMITS.deploysPerDay`. */
   DEPLOYS_PER_DAY?: string;
@@ -385,6 +396,24 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
       },
       { "retry-after": "300" },
     );
+  }
+
+  /** Version `nParam` of the caller's `bot`. */
+  async function ownVersion(bot: BotRow, nParam: string): Promise<VersionRow> {
+    const n = /^[1-9]\d{0,8}$/.test(nParam) ? Number(nParam) : null;
+    const [version] =
+      n === null
+        ? []
+        : await db
+            .select()
+            .from(versions)
+            .where(and(eq(versions.botId, bot.id), eq(versions.n, n)))
+            .limit(1);
+    if (version) return version;
+    return fail(404, {
+      error: "version_not_found",
+      message: `Bot "${bot.slug}" has no version ${nParam}.`,
+    });
   }
 
   /** `:bot` is one of the caller's bots, by slug or id. */
@@ -741,22 +770,45 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
     getVersion: (request: Request, botParam: string, nParam: string) =>
       withCli(request, async ({ user }) => {
         const bot = await ownBot(user.id, botParam);
-        const n = /^[1-9]\d{0,8}$/.test(nParam) ? Number(nParam) : null;
-        const [version] =
-          n === null
-            ? []
-            : await db
-                .select()
-                .from(versions)
-                .where(and(eq(versions.botId, bot.id), eq(versions.n, n)))
-                .limit(1);
-        if (!version) {
-          fail(404, {
-            error: "version_not_found",
-            message: `Bot "${bot.slug}" has no version ${nParam}.`,
-          });
-        }
+        const version = await ownVersion(bot, nParam);
         return json(versionInfo(bot, version) satisfies VersionInfo);
+      }),
+
+    /** `GET /api/bots/:bot/versions/:n/lives?limit=20`: finished lives, latest first. */
+    listLives: (request: Request, botParam: string, nParam: string) =>
+      withCli(request, async ({ user }) => {
+        const bot = await ownBot(user.id, botParam);
+        const version = await ownVersion(bot, nParam);
+        const asked = positiveInt(new URL(request.url).searchParams.get("limit") ?? undefined);
+        const rows = await recentLives(db, version.id, Math.min(asked ?? 20, LIVES_LIMIT_MAX));
+        return json({ lives: rows.map(lifeSummary) } satisfies LivesResponse);
+      }),
+
+    /** `GET /api/lives/:id/trace`: the life's trace, for the owner of its bot only. */
+    getTrace: (request: Request, lifeId: string) =>
+      withCli(request, async ({ user }) => {
+        const read = await readLifeTrace(db, env.TRACES, lifeId, user.id);
+        switch (read.status) {
+          case "ok":
+            return json(read.trace satisfies TraceResponse);
+          case "not_found":
+            return fail(404, { error: "life_not_found", message: `There is no life "${lifeId}".` });
+          case "forbidden":
+            return fail(403, {
+              error: "not_life_owner",
+              message: "That life is someone else's bot's. Traces are visible to their owner only.",
+            });
+          case "none":
+            return fail(404, {
+              error: "trace_not_found",
+              message: "No trace was recorded for this life.",
+            });
+          case "expired":
+            return fail(410, {
+              error: "trace_expired",
+              message: `This life's trace is gone: traces are kept ${TRACE_RETENTION_DAYS} days.`,
+            });
+        }
       }),
   };
 }

@@ -89,6 +89,13 @@ describe("CLI API routes", () => {
     expect(read.status).toBe(200);
     expect((await read.json()) as VersionInfo).toEqual(version);
 
+    const lives = await call("GET", "/api/bots/route-snake/versions/1/lives?limit=5");
+    expect(lives.status).toBe(200);
+    expect(await lives.json()).toEqual({ lives: [] });
+    const trace = await call("GET", "/api/lives/no-such-life/trace");
+    expect(trace.status).toBe(404);
+    expect(await trace.json()).toMatchObject({ error: "life_not_found" });
+
     const me = (await (await call("GET", "/api/me")).json()) as MeResponse;
     expect(me.user.username).toBe("ada");
     expect(me.bots).toEqual([
@@ -106,6 +113,8 @@ describe("CLI API routes", () => {
       ["POST", "/api/bots"],
       ["POST", "/api/bots/route-snake/versions"],
       ["GET", "/api/bots/route-snake/versions/1"],
+      ["GET", "/api/bots/route-snake/versions/1/lives"],
+      ["GET", "/api/lives/some-life/trace"],
     ] as const) {
       for (const headers of [{}, cookie, { authorization: "Bearer zsk_nope" }]) {
         const res = await call(method, path, { headers, body: method === "POST" ? {} : undefined });
@@ -124,6 +133,7 @@ describe("CLI API routes", () => {
       ["GET", "/api/bots/x/versions"],
       ["POST", "/api/me"],
       ["POST", "/api/bots/x/versions/1"],
+      ["POST", "/api/lives/x/trace"],
     ] as const) {
       expect(dispatch(new Request(`${BASE}${path}`, { method }))).toBeNull();
     }

@@ -31,7 +31,9 @@ The engine rounds `turn` to a multiple of 1/128, so 0.3 becomes 0.296875. See
 
 **How long is a life?**
 At most 6000 ticks (10 minutes of game time at 10 ticks per second). Then the snake retires and
-keeps its score. Rooms without spectators are meant to run faster than real time.
+keeps its score. Rooms without spectators run faster than real time; the showcase room on the home
+page runs in real time while someone watches it. No room stays the showcase for more than 10
+minutes in a row, and then it rests for 20, so no bot is slowed down for long.
 
 **Does my bot know which snakes are house bots?**
 Not reliably, and it shouldn't try. Author names of house bots differ between the SDK docs and the
@@ -72,8 +74,10 @@ Module evaluation plus `init()` went over the load budget (100). Precompute less
 work over the first ticks and keep the progress in `mem`.
 
 **Where do I see my `log()` output?**
-In `zerosnake sim` (the viewer's snake panel) and, later, in life traces on the site
-([#25](https://github.com/zeroplayers/snake-arena/issues/25)). Up to 1024 bytes per tick.
+In `zerosnake sim` (the viewer's snake panel), and for arena lives in their traces:
+`zerosnake logs --deaths` prints the last ticks before your latest deaths (what the bot saw,
+returned, spent and logged), and a death's replay page shows them when you're signed in. Up to 1024
+bytes per tick. Traces are kept 7 days and only you can see your bots' logs.
 
 **Can I reproduce a match?**
 Yes. The engine is deterministic: the same seed, bots and code give the same match.

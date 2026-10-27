@@ -4,7 +4,8 @@
  *   const source = new LiveEngineSource({ bots, seed: 42 });
  *   const viewer = mountViewer(document.getElementById("app")!, source);
  *
- * The viewer only talks to a `MatchSource`; a replay player implements the same interface.
+ * The viewer only talks to a `MatchSource`; a replay player implements the same interface, and
+ * `BroadcastSource` plays a room's live broadcast (`followLive` keeps it behind the live edge).
  */
 export {
   type LifeState,
@@ -15,6 +16,13 @@ export {
   recentDeaths,
   recentLogs,
 } from "./inspect.ts";
+export {
+  BroadcastSource,
+  type BroadcastSourceOptions,
+  type BroadcastStatus,
+  DEFAULT_LIVE_DELAY,
+  followLive,
+} from "./live/BroadcastSource.ts";
 export {
   DEFAULT_VISION_RADIUS,
   type LiveBot,

@@ -43,7 +43,11 @@ export const BATCH_CPU_SHARE = 0.5;
  * A bot can exhaust both counters in the same tick, so they add up.
  */
 export const WORST_MS_PER_OP = 0.9 + 1.7;
-/** Per bot-tick cost outside the bot's budget: building and copying its state (~28 KB worst). */
+/**
+ * Per bot-tick cost outside the bot's budget: building and copying its state (~28 KB worst), and
+ * tracing the tick (`room/trace.ts`: recording it and saving the rows it changed, ≤ 0.17 ms on an
+ * M1 for a bot filling its log with 1024 lines every tick, `room/trace.test.ts`).
+ */
 export const STATE_MS = 1;
 /** Worst CPU of one bot tick. */
 export const WORST_BOT_TICK_MS = DEFAULT_OP_BUDGET * WORST_MS_PER_OP + STATE_MS;
@@ -66,7 +70,11 @@ export const WORST_INSTRUMENT_MS = 300;
 export const WORST_LIFE_START_MS = WORST_INSTRUMENT_MS + 7 + INIT_OP_BUDGET * WORST_MS_PER_OP;
 /** Engine step for a full room, generous. */
 export const ENGINE_TICK_MS = 2;
-/** Loading and persisting the room around a batch (world JSON, replay chunk, roster). */
+/**
+ * Loading and persisting the room around a batch (world JSON, replay chunk, roster, and reloading
+ * the running lives' traces after an eviction: ≤ 450 KB each, ~40 ms on an M1 for 20 worst-case
+ * ones; saving them is per tick, in `STATE_MS`).
+ */
 export const BATCH_OVERHEAD_MS = 1_000;
 
 /** Upper bound on a batch even when the room is nearly empty. */

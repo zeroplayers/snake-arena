@@ -47,6 +47,11 @@ export interface LifeResult {
    * The object exists before the row is written. Earlier chunks of the room precede it by tick.
    */
   replayKey: string;
+  /**
+   * R2 key (TRACES) of the life's trace (apps/web `src/shared/trace.ts`), or null if none was
+   * recorded. Like the replay chunk, the object exists before the row is written.
+   */
+  traceKey?: string | null;
   /** Wall-clock ms. */
   startedAt: number;
   endedAt: number;
@@ -125,6 +130,13 @@ export interface RoomLimits {
   arenaControlPollMs?: number;
   /** Game ticks a named kill stays in the kill window. Default `KILL_WINDOW_TICKS` (3000). */
   killWindowTicks?: number;
+  /**
+   * How long the room stays in real time after its last spectator left. Default
+   * `SPECTATOR_GRACE_MS` (30 s).
+   */
+  spectatorGraceMs?: number;
+  /** A spectator that acks nothing for this long is closed. Default `ACK_TIMEOUT_MS` (30 s). */
+  spectatorAckTimeoutMs?: number;
 }
 
 export type JoinResult =
@@ -181,7 +193,10 @@ export interface RoomSnakeStatus {
 export interface RoomStatus {
   roomId: string | null;
   state: "new" | "running" | "closed";
+  /** The mode it runs in: real time while it has spectators (`room/spectators.ts`), else as set. */
   mode: RoomMode;
+  /** Open spectator WebSockets. */
+  spectators: number;
   tick: number;
   snakes: RoomSnakeStatus[];
   /** Tickets accepted but not spawned yet (they spawn at the start of the next batch). */
@@ -253,6 +268,7 @@ export interface RoomRpc {
    * matchmaker asks again while the life is in flight.
    */
   leave(lifeId: string): Promise<boolean>;
+  /** The room's own mode; spectators make it real time while they watch, whatever this is. */
   setMode(mode: RoomMode): Promise<void>;
   status(): Promise<RoomStatus>;
   /** Runs one batch now (what the alarm does). */

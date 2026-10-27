@@ -71,8 +71,13 @@ export interface Meta {
 
 export type OutboxItem =
   | { kind: "chunk"; key: string; tick: number; bytes: Uint8Array }
-  /** `chunkTick`: the replay chunk the life's row points to; sent only once it is in R2. */
-  | { kind: "life"; json: string; chunkTick: number }
+  /** A finished life trace (`trace.ts`), JSON; gzipped on its way to R2 `TRACES` at `key`. */
+  | { kind: "trace"; key: string; bytes: Uint8Array }
+  /**
+   * `chunkTick`: the replay chunk the life's row points to; `traceKey`: its trace. Sent only once
+   * both are in R2.
+   */
+  | { kind: "life"; json: string; chunkTick: number; traceKey: string | null }
   | { kind: "quarantine"; json: string }
   /** A ticket that never started a life (`LifeDrop`), for the matchmaker. */
   | { kind: "dropped"; json: string }
@@ -314,9 +319,17 @@ export class RoomStore {
           toBuffer(item.bytes),
         );
         break;
+      case "trace":
+        this.sql.exec(
+          "INSERT INTO outbox (kind, key, body) VALUES ('trace', ?, ?)",
+          item.key,
+          toBuffer(item.bytes),
+        );
+        break;
       case "life":
         this.sql.exec(
-          "INSERT INTO outbox (kind, tick, body) VALUES ('life', ?, ?)",
+          "INSERT INTO outbox (kind, key, tick, body) VALUES ('life', ?, ?, ?)",
+          item.traceKey,
           item.chunkTick,
           toBuffer(encoder.encode(item.json)),
         );
@@ -339,7 +352,8 @@ export class RoomStore {
 
   /**
    * Items due by `now`, oldest first. A life waits until its replay chunk is in R2: closed
-   * (`openChunkTick` is past it, or no chunk is open) and no longer in the outbox.
+   * (`openChunkTick` is past it, or no chunk is open) and no longer in the outbox; and until its
+   * trace is (no longer in the outbox).
    */
   dueOutbox(now: number, openChunkTick: number | null): { seq: number; item: OutboxItem }[] {
     return this.sql
@@ -352,7 +366,9 @@ export class RoomStore {
       }>(
         `SELECT seq, kind, key, tick, body FROM outbox o WHERE next_at <= ?1 AND (kind != 'life' OR
            ((?2 IS NULL OR tick < ?2) AND NOT EXISTS
-             (SELECT 1 FROM outbox c WHERE c.kind = 'chunk' AND c.tick = o.tick)))
+             (SELECT 1 FROM outbox c WHERE c.kind = 'chunk' AND c.tick = o.tick) AND
+             (o.key IS NULL OR NOT EXISTS
+               (SELECT 1 FROM outbox t WHERE t.kind = 'trace' AND t.key = o.key))))
          ORDER BY seq`,
         now,
         openChunkTick,
@@ -363,8 +379,15 @@ export class RoomStore {
         let item: OutboxItem;
         if (r.kind === "chunk") {
           item = { kind: "chunk", key: r.key ?? "", tick: r.tick ?? 0, bytes: body };
+        } else if (r.kind === "trace") {
+          item = { kind: "trace", key: r.key ?? "", bytes: body };
         } else if (r.kind === "life") {
-          item = { kind: "life", json: decoder.decode(body), chunkTick: r.tick ?? 0 };
+          item = {
+            kind: "life",
+            json: decoder.decode(body),
+            chunkTick: r.tick ?? 0,
+            traceKey: r.key,
+          };
         } else if (
           r.kind === "quarantine" ||
           r.kind === "dropped" ||

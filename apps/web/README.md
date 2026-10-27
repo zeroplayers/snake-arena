@@ -26,8 +26,14 @@ and the empty cases `/@newbie`, `/@linus/draft`, `/@grace/wip`.
   `ArenaHero`: after the page has loaded and gone idle, and once it is near the viewport, it loads
   the engine, house bots and three.js and plays `createHeroSource()` (`heroSource.ts`) on a bare
   canvas, paused while off screen or in a background tab, paused from the start for
-  `prefers-reduced-motion`. Today that source is a house-bot match simulated in the page; for the
-  live showcase (#27) return a `MatchSource` over the showcase room there and flip `HERO_IS_LIVE`.
+  `prefers-reduced-motion`. That source is the live showcase (#27) when a showcase room is
+  running: a `BroadcastSource` (`@zerosnake/viewer`) on `/api/showcase`, which `src/server.ts`
+  proxies over the `SHOWCASE` service binding to the arena's `ShowcaseEntrypoint`, which has no
+  public URL (`src/server/showcase.ts`: same origin, per-IP rate limit on opening, and the client
+  key the room caps sockets by). Paused, the hero closes the socket, so an idle tab doesn't keep
+  a room in real time; playing again reconnects. With no showcase within 4 s, or once it is lost
+  (3 failed reconnects, or 10 s without it), it's a house-bot match simulated in the page, and
+  the caption says which.
   The quick-start commands and the "Before launch" notes are in `quickstart.ts`.
 - `/docs`, `/docs/<page>`: the repository's `docs/*.md`, rendered at build time by the Vite plugin
   in `src/docs/plugin.ts` (markdown-it with raw HTML escaped; page links become site links, other

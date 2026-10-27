@@ -1,6 +1,8 @@
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { checkSource } from "@zerosnake/sandbox";
-import { build, formatMessages, type Message, type Plugin } from "esbuild";
+import { build, formatMessages, type Loader, type Message, type Plugin } from "esbuild";
 import { sdkEntry } from "./assets.ts";
 import { CliError } from "./errors.ts";
 import { originalPosition, type SourceMap } from "./sourcemap.ts";
@@ -17,7 +19,7 @@ export interface BundledBot {
   code: string;
   /** UTF-8 size of `code`. */
   bytes: number;
-  /** The project's own files that went into it (no `node_modules`), relative to `cwd`. */
+  /** The project's own files that went into it (no packages), relative to `cwd`. */
   inputs: string[];
 }
 
@@ -31,6 +33,12 @@ const OUTFILE = "bot.js";
  *
  * `@zerosnake/sdk` resolves from the project when it is installed there, and falls back to the
  * CLI's own copy otherwise, so a fresh `zerosnake init` can `sim` before any `npm install`.
+ *
+ * The same sources give the same bytes on any machine and in any folder (see {@link stableNames}),
+ * with the same esbuild: the check seeds come from the bundle's hash, so `test` here and the
+ * server must agree. esbuild is pinned to an exact version in package.json for that reason;
+ * another version may print the same code differently. Comments and formatting don't count: all
+ * of them are dropped, `/*!` and `@license` ones too.
  */
 export async function bundleBot(entry: string, options: BundleOptions = {}): Promise<BundledBot> {
   const cwd = resolve(options.cwd ?? process.cwd());
@@ -52,6 +60,7 @@ export async function bundleBot(entry: string, options: BundleOptions = {}): Pro
   const map = result.outputFiles?.find((f) => f.path.endsWith(`${OUTFILE}.map`))?.text;
   const output = result.metafile?.outputs[OUTFILE];
   const inputs = Object.keys(result.metafile?.inputs ?? {})
+    .filter((p) => !p.startsWith(`${PACKAGE_NAMESPACE}:`))
     .map((p) => relative(cwd, resolve(cwd, p)))
     .filter((p) => !p.startsWith("..") && !p.split(/[\\/]/).includes("node_modules"))
     .map((p) => p.split(sep).join("/"));
@@ -94,27 +103,123 @@ function bundle(file: string, cwd: string) {
     platform: "neutral",
     target: "es2023",
     mainFields: ["module", "main"],
+    // esbuild keeps `/*!`, `//!`, `@license` and `@preserve` comments by default: they would
+    // change the bytes (and the seeds), and `checkSource` reads words like "async" in them.
+    legalComments: "none",
     logLevel: "silent",
-    plugins: [sdkFallback],
+    plugins: [stableNames(cwd)],
   });
 }
 
-/** Resolves `@zerosnake/sdk` from the project, else from the CLI. */
-const sdkFallback: Plugin = {
-  name: "zerosnake-sdk-fallback",
-  setup(b) {
-    b.onResolve({ filter: /^@zerosnake\/sdk$/ }, async (args) => {
-      if (args.pluginData === sdkFallback) return undefined;
-      const found = await b.resolve(args.path, {
-        kind: args.kind,
-        importer: args.importer,
-        resolveDir: args.resolveDir,
-        pluginData: sdkFallback,
+/** esbuild namespace of files that belong to a package: `pkg:<name>@<version>/<file>`. */
+const PACKAGE_NAMESPACE = "pkg";
+
+/** `pluginData` of our own `build.resolve` calls, so the plugin doesn't resolve them again. */
+const NESTED = Symbol("nested");
+
+/**
+ * Names every module the same wherever it is installed. esbuild writes each module's path into
+ * the bundle (a `// path` comment above its code, the key of a CommonJS wrapper), relative to the
+ * project. For the CLI's own copy of the SDK, that path climbed out of the project to wherever
+ * the CLI lives, so the same bot gave other bytes, and other check seeds, on another machine
+ * or checkout. Now the project's files keep their relative paths, and a package's files are
+ * named `<name>@<version>/<file in the package>`: the same in `node_modules` (npm or pnpm), in
+ * a vendored or linked copy, and in the CLI.
+ *
+ * Also resolves `@zerosnake/sdk` from the project, else from the CLI.
+ */
+function stableNames(root: string): Plugin {
+  // esbuild resolves symlinks, so the files it hands us are real paths: compare them with the
+  // real project folder (on macOS the temp folder /var/… is really /private/var/…).
+  const realRoot = realpathSync(root);
+  const packages = new Map<string, { id: string; dir: string } | null>();
+  return {
+    name: "zerosnake-stable-names",
+    setup(b) {
+      b.onResolve({ filter: /.*/ }, async (args) => {
+        if (args.pluginData === NESTED || args.kind === "entry-point") return undefined;
+        const found = await b.resolve(args.path, {
+          kind: args.kind,
+          importer: args.importer,
+          namespace: "file",
+          resolveDir: args.resolveDir,
+          pluginData: NESTED,
+        });
+        let path = found.path;
+        if (found.errors.length > 0) {
+          // Let esbuild report it, with the importing line.
+          if (args.path !== "@zerosnake/sdk") return undefined;
+          path = sdkEntry();
+        } else if (found.namespace !== "file" || !isAbsolute(path)) {
+          return found;
+        }
+        const pkg = packageOf(path, realRoot, packages);
+        if (!pkg) return { path, sideEffects: found.sideEffects };
+        return {
+          path: `${pkg.id}/${relative(pkg.dir, path).split(sep).join("/")}`,
+          namespace: PACKAGE_NAMESPACE,
+          pluginData: path,
+          sideEffects: found.sideEffects,
+        };
       });
-      if (found.errors.length === 0) {
-        return { path: found.path, namespace: found.namespace, sideEffects: found.sideEffects };
+      b.onLoad({ filter: /.*/, namespace: PACKAGE_NAMESPACE }, async (args) => {
+        const file = args.pluginData as string;
+        return {
+          contents: await readFile(file),
+          loader: loaderOf(file),
+          resolveDir: dirname(file),
+        };
+      });
+    },
+  };
+}
+
+/**
+ * The package a file belongs to: the nearest `package.json` above it with a name, as
+ * `name@version`. `null` for the project's own files (inside `root`, not in a package of its own)
+ * and for files outside any package. `file` and `root` are real paths (no symlinks).
+ */
+function packageOf(
+  file: string,
+  root: string,
+  cache: Map<string, { id: string; dir: string } | null>,
+): { id: string; dir: string } | null {
+  const seen: string[] = [];
+  let found: { id: string; dir: string } | null = null;
+  for (let dir = dirname(file); ; dir = dirname(dir)) {
+    const known = cache.get(dir);
+    if (known !== undefined) {
+      found = known;
+      break;
+    }
+    seen.push(dir);
+    if (dir === root) break;
+    const manifest = join(dir, "package.json");
+    if (existsSync(manifest)) {
+      const { name, version } = JSON.parse(readFileSync(manifest, "utf8")) as {
+        name?: string;
+        version?: string;
+      };
+      if (name) {
+        found = { id: `${name}@${version ?? "0.0.0"}`, dir };
+        break;
       }
-      return { path: sdkEntry() };
-    });
-  },
+    }
+    if (dirname(dir) === dir) break;
+  }
+  for (const dir of seen) cache.set(dir, found);
+  return found;
+}
+
+const LOADERS: Record<string, Loader> = {
+  ".ts": "ts",
+  ".mts": "ts",
+  ".cts": "ts",
+  ".tsx": "tsx",
+  ".jsx": "jsx",
+  ".json": "json",
 };
+
+function loaderOf(file: string): Loader {
+  return LOADERS[extname(file)] ?? "js";
+}

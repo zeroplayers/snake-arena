@@ -73,8 +73,19 @@ export default defineBot({
 });
 `;
 
-/** The template's starter bot (`template/src/bot.ts`): passes the deploy checks. */
+/**
+ * The template's starter bot (`template/src/bot.ts`). Its seeds come from its bundle, so they
+ * change with every edit to it or the SDK: tests that need a passing bot use {@link PASSING_BOT}.
+ */
 export const TEMPLATE_BOT = readFileSync(join(templateDir(), "src", "bot.ts"), "utf8");
+
+/**
+ * A bot that passes the deploy checks, for tests that need one: `src/testing/passing-bot.ts`.
+ * Unlike {@link TEMPLATE_BOT}, its seeds never change. It imports only types from the SDK, so
+ * its bundle (and the seeds that come from its hash) doesn't change when the SDK or the starter
+ * bot does: it either passes every time or never. cli.test.ts checks that it stays that way.
+ */
+export const PASSING_BOT = readFileSync(join(import.meta.dirname, "passing-bot.ts"), "utf8");
 
 /** Drives straight on into the wall every life: loads and runs, but can't qualify. */
 export const SUICIDAL_BOT = `import { defineBot } from "@zerosnake/sdk";

@@ -11,7 +11,14 @@ import {
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { packageRoot } from "./paths.ts";
-import { cleanUp, GOOD_BOT, makeProject, SUICIDAL_BOT, TUNING } from "./testing/project.ts";
+import {
+  cleanUp,
+  GOOD_BOT,
+  makeProject,
+  PASSING_BOT,
+  SUICIDAL_BOT,
+  TUNING,
+} from "./testing/project.ts";
 
 afterAll(cleanUp);
 
@@ -103,7 +110,10 @@ describe("the packed CLI", () => {
     expect(sim.out).toContain("Match: seed 1, 100 ticks");
     expect(sim.out).toContain("my-bot (you)");
 
-    // The check suite is in dist/ too: the template bot passes, a hopeless one fails and says why.
+    // The check suite is in dist/ too: a good bot passes, a hopeless one fails and says why. Not
+    // the template bot: its seeds change with every edit to it or the SDK (cli.test.ts checks it
+    // on fixed seed sets instead).
+    writeFileSync(join(project, "src", "bot.ts"), PASSING_BOT);
     const test = run("node", [bin, "test"], project);
     expect(test.code, `${test.out}\n${test.err}`).toBe(0);
     expect(test.out).toContain("Checks passed: this bot can be deployed.");

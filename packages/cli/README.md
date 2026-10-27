@@ -22,8 +22,11 @@ zerosnake sim [--vs easy,hard,./other-bot.ts] [--seed N] [--ticks N] [--headless
 ```
 
 - The bot is bundled with esbuild into one ESM file (`bundleBot`, the same bundle `deploy` will
-  upload) and checked like the server checks it (`checkSource` on the bundle; a problem is traced
-  back to the source line through the bundle's source map).
+  upload). The same sources give the same bytes in any folder, and comments or formatting don't
+  change them. esbuild is pinned to an exact version: the check seeds come from the bundle's hash,
+  and another esbuild version may print the same code differently. The bundle is checked like the
+  server checks it (`checkSource` on the bundle; a problem is traced back to the source line
+  through the bundle's source map).
 - Every bot, house bots included, runs in `@zerosnake/sandbox` as in a room: the production op
   budget, memory limit and strike rules. `--native-house` runs house bots in Node instead, ~4×
   faster but not bit-identical to the arena (QuickJS and V8 may round `Math.sin`/`atan2`
@@ -135,8 +138,8 @@ don't need an install: without one, the CLI bundles the bot against its own copy
 every workspace package it uses), `client.js` (the viewer page), `house/*.js` (house bot
 bundles), `sdk/` and `template/`. The package ships only `bin/` and `dist/`; its dependencies
 are esbuild and QuickJS. `src/pack.test.ts` packs it, installs it outside the monorepo and runs
-`init`, `sim --headless` and `test` (on the template bot, which passes, and on a bot that
-can't beat `easy`). `@zerosnake/checks` is bundled into `cli.js` like the other workspace
+`init`, `sim --headless` and `test` (on `src/testing/passing-bot.ts`, which passes, and on a bot
+that can't beat `easy`). `@zerosnake/checks` is bundled into `cli.js` like the other workspace
 packages. The package stays `private` until publishing is decided (#31).
 
 In a checkout, build once with `pnpm --filter zerosnake build` before running

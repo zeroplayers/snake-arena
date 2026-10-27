@@ -17,11 +17,12 @@
   "scripts": {
     "build": "node scripts/build.ts",
     "prepack": "node scripts/build.ts",
+    "margin": "node --experimental-transform-types --disable-warning=ExperimentalWarning scripts/margin.ts",
     "typecheck": "tsc -p ."
   },
   "dependencies": {
     "@jitl/quickjs-wasmfile-release-sync": "^0.32.0",
-    "esbuild": "^0.28.2",
+    "esbuild": "0.28.2",
     "quickjs-emscripten-core": "^0.32.0"
   },
   "devDependencies": {

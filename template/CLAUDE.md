@@ -215,21 +215,21 @@ candidate move is not. Precompute once per tick, filter by distance before inner
 
 ## Common causes of death
 
-| Symptom (in a death replay)                                       | Likely cause                                                                                                      | Fix                                                                                                              |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `wall`, turning hard the last few ticks                           | Started turning back too late                                                                                     | Turn away when `wallDistance` < ~3 turning radii (`speed / turnRate`); more while boosting.                      |
-| `wall` while chasing food near the edge                           | Food target overrides safety                                                                                      | Check safety after choosing a target, not before.                                                                |
-| Snake turns away from food / spins / hugs the wall                | `turn` sign flipped                                                                                               | Use `steerToward`/`turnToward`; `turn > 0` is right.                                                             |
-| Circles one pellet forever, starves                               | Pellet inside the turning circle                                                                                  | Skip food that would need a tighter circle than `speed / turnRate` (see `nearestReachableFood` in `src/bot.ts`). |
-| `collision` with a body that was in view for many ticks           | Steered away from the nearest point into another part of the body, or only checked straight ahead                 | Simulate a few candidate turns several ticks ahead and check every nearby point (the template's feelers).        |
-| `collision` with a body that was moving across your path          | Treated other snakes as static                                                                                    | Project other heads forward (`project(head, angle, speed × t)`), keep a bigger margin near heads.                |
-| `collision` with something that "wasn't there"                    | Body outside vision or between downsampled points                                                                 | Assume bodies are solid between listed points; slow down your risk near the vision edge.                         |
-| Head-on `collision`                                               | Met a longer (or equal) snake head first                                                                          | Only go head-to-head with clearly shorter snakes; dodge heads of others.                                         |
-| `collision` right after boosting                                  | Boost doubled the turning radius                                                                                  | Don't boost near bodies or the wall; boost in short bursts.                                                      |
-| Length melts away, low score without dying                        | Boosting too much, or hunger with no food                                                                         | Boost only when it buys a kill or escape; always keep eating.                                                    |
-| `timeout`                                                         | Too much work in one tick                                                                                         | See Limits; check `max … ops per tick` in `zerosnake sim --headless`.                                            |
-| `timeout` after 0 life ticks, error "... went over its op budget" | Heavy precomputation at module load or in `init()` (lookup tables, big arrays) over the 100-interrupt load budget | Precompute less, or spread it over the first ticks (keep progress in `mem`).                                     |
-| `error`                                                           | An exception, e.g. `snake.head.x` when `head` is `null`, `arr[0]` on an empty array, a deep recursion             | Handle `null`/empty cases (the types force you to with `noUncheckedIndexedAccess`).                              |
+| Symptom (in a death replay)                                       | Likely cause                                                                                                      | Fix                                                                                                       |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `wall`, turning hard the last few ticks                           | Started turning back too late                                                                                     | Turn away when `wallDistance` < ~3 turning radii (`speed / turnRate`); more while boosting.               |
+| `wall` while chasing food near the edge                           | Food target overrides safety                                                                                      | Check safety after choosing a target, not before.                                                         |
+| Snake turns away from food / spins / hugs the wall                | `turn` sign flipped                                                                                               | Use `steerToward`/`turnToward`; `turn > 0` is right.                                                      |
+| Circles one pellet forever, starves                               | Pellet inside the turning circle                                                                                  | Skip food that would need a tighter circle than `speed / turnRate` (see `bestFood` in `src/bot.ts`).      |
+| `collision` with a body that was in view for many ticks           | Steered away from the nearest point into another part of the body, or only checked straight ahead                 | Simulate a few candidate turns several ticks ahead and check every nearby point (the template's feelers). |
+| `collision` with a body that was moving across your path          | Treated other snakes as static                                                                                    | Project other heads forward (`project(head, angle, speed × t)`), keep a bigger margin near heads.         |
+| `collision` with something that "wasn't there"                    | Body outside vision or between downsampled points                                                                 | Assume bodies are solid between listed points; slow down your risk near the vision edge.                  |
+| Head-on `collision`                                               | Met a longer (or equal) snake head first                                                                          | Only go head-to-head with clearly shorter snakes; dodge heads of others.                                  |
+| `collision` right after boosting                                  | Boost doubled the turning radius                                                                                  | Don't boost near bodies or the wall; boost in short bursts.                                               |
+| Length melts away, low score without dying                        | Boosting too much, or hunger with no food                                                                         | Boost only when it buys a kill or escape; always keep eating.                                             |
+| `timeout`                                                         | Too much work in one tick                                                                                         | See Limits; check `max … ops per tick` in `zerosnake sim --headless`.                                     |
+| `timeout` after 0 life ticks, error "... went over its op budget" | Heavy precomputation at module load or in `init()` (lookup tables, big arrays) over the 100-interrupt load budget | Precompute less, or spread it over the first ticks (keep progress in `mem`).                              |
+| `error`                                                           | An exception, e.g. `snake.head.x` when `head` is `null`, `arr[0]` on an empty array, a deep recursion             | Handle `null`/empty cases (the types force you to with `noUncheckedIndexedAccess`).                       |
 
 ## Testing, debugging and deploying
 
@@ -264,13 +264,19 @@ per-tick budget; and qualification: a mean score per life at least that of the `
 put in your seat on the same seeds. A failing report says what to fix. `deploy` runs the same checks
 before uploading: a bot that fails isn't uploaded and costs no deploy.
 
-- **The seeds come from the bundle's hash.** The server uses the same seeds for the same bundle, so
-  it reaches the same verdict, but any edit (even a comment) gives other seeds.
-- **Keep a margin over `easy`.** A bot close to easy's score can pass on one version and fail on
-  the next, or the other way round, by luck of the seeds (the starter bot failed about one bundle in
-  twelve). One passing `test` doesn't prove a bot is good enough: run `test` again after small edits,
-  and if a pass is narrow (look at "mean score per life … easy in your seat" seed by seed), make the
-  bot clearly better, e.g. fewer early deaths, rather than re-rolling seeds.
+- **The seeds come from the bundle's hash.** The server judges the bundle `deploy` uploads, so it
+  plays the same seeds as your `test` and reaches the same verdict. The same code bundles to the
+  same bytes in any folder or machine with the same CLI version. Any change to the code gives other
+  seeds; comments (all of them, `/*!` and `@license` ones too) and formatting don't: the bundle
+  drops them.
+- **Keep a margin over `easy`.** easy's own score swings a lot from one set of seeds to the next
+  (it dies often, and now and then has a long lucky life with kills), so a bot close to easy's
+  score can pass on one version and fail on the next, by luck of the seeds. The starter bot scores
+  about 4.6× easy's mean score per life on typical seeds and at least 1.5× on about 99% of seed
+  sets, but even it failed 1 of the 3600 seed sets we measured (easy got kills there): aim for a
+  margin like that. One passing `test` doesn't prove a bot is good enough: if a pass is narrow
+  (look at "mean score per life … easy in your seat" seed by seed), make the bot clearly better,
+  e.g. fewer early deaths, rather than re-rolling seeds.
 - **Usually a few seconds.** `test` warns when the checks take 20 s or more: the server runs them
   under a CPU time limit, possibly on a slower machine, so a slow bot can pass here and still be
   rejected there ("the checks didn't finish"). Make the ticks cheaper.

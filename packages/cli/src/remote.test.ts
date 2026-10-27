@@ -22,8 +22,8 @@ import {
   cleanUp,
   GOOD_BOT,
   makeProject,
+  PASSING_BOT,
   SUICIDAL_BOT,
-  TEMPLATE_BOT,
   TUNING,
 } from "./testing/project.ts";
 
@@ -203,7 +203,7 @@ describe("zerosnake deploy", () => {
     const { arena, run } = setUp();
     const r = await run(
       ["deploy", "--create", "-m", "first try"],
-      botProject({ "src/bot.ts": TEMPLATE_BOT }),
+      botProject({ "src/bot.ts": PASSING_BOT }),
     );
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain("within the deploy limits");
@@ -225,7 +225,7 @@ describe("zerosnake deploy", () => {
     const body = upload?.body as DeployRequest;
     expect(body.bundle).toContain("export");
     expect(body.sources.map((s) => s.path)).toEqual(["src/bot.ts", "src/tuning.ts"]);
-    expect(body.sources[0]?.content).toBe(TEMPLATE_BOT);
+    expect(body.sources[0]?.content).toBe(PASSING_BOT);
     expect(body.meta).toMatchObject({ cliVersion: expect.any(String), message: "first try" });
     expect(upload?.headers.get("idempotency-key")).toMatch(/^[0-9a-f-]{36}$/);
     expect(arena.calls("GET", /versions\/1$/).length).toBeGreaterThanOrEqual(2);

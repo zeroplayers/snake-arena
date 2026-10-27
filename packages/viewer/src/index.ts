@@ -7,6 +7,8 @@
  * The viewer only talks to a `MatchSource`; a replay player implements the same interface, and
  * `BroadcastSource` plays a room's live broadcast (`followLive` keeps it behind the live edge).
  */
+
+export { foodDisplaySize, REMAINS_DISPLAY_SCALE } from "./food.ts";
 export {
   type LifeState,
   type LogEntry,

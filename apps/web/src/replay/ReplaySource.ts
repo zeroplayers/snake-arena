@@ -9,7 +9,8 @@
  * does. Keyframes sit on every chunk start, so a rebuild never crosses a chunk boundary.
  * Playing forward steps a cursor one tick at a time; a random seek costs at most one interval.
  *
- * Only types come from `@zerosnake/viewer`, so this module doesn't pull in three.js.
+ * Only types and `@zerosnake/viewer/food` come from the viewer, so this module doesn't pull in
+ * three.js.
  */
 import {
   type Action,
@@ -35,6 +36,7 @@ import type {
   SnakeTick,
   TickSnapshot,
 } from "@zerosnake/viewer";
+import { foodDisplaySize } from "@zerosnake/viewer/food";
 import type { TraceTick } from "../shared/trace";
 
 export const KEYFRAME_INTERVAL = 100;
@@ -312,7 +314,7 @@ export class ReplaySource implements MatchSource {
           id: f.id,
           x: f.x,
           y: f.y,
-          size: f.kind === "remains" ? c.remainsRadius : c.foodRadius,
+          size: foodDisplaySize(f.kind, c),
         };
         this.foodCache.set(f.id, r);
       }

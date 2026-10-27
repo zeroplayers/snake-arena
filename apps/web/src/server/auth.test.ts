@@ -306,6 +306,23 @@ describe("device flow (zerosnake login)", () => {
     expect((await approve(jar, code.user_code)).status).toBe(403);
   });
 
+  it("can't be approved by a banned user, and a banned user's token can't act", async () => {
+    const jar = await signUp(ada);
+    const token = await loginCli(jar);
+    await d1.db
+      .prepare("UPDATE users SET banned_at = 1, ban_reason = 'spam' WHERE username = 'ada'")
+      .run();
+    const code = await startDeviceFlow();
+    const refused = await approve(jar, code.user_code);
+    expect(refused.status).toBe(403);
+    expect(await json(refused)).toMatchObject({ message: "Your account is suspended" });
+    // Still identifies (so the CLI can say why), but carries the ban.
+    expect(await json(await whoami(token))).toMatchObject({
+      user: { username: "ada" },
+      banned: { reason: "spam" },
+    });
+  });
+
   it("gives the CLI an opaque token, stored only as a hash", async () => {
     const jar = await signUp(ada);
     const token = await loginCli(jar);

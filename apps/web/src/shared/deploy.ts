@@ -162,6 +162,17 @@ export type ApiErrorCode =
   | "bot_archived"
   /** 429: `deploysPerDay` used up; `quota` says when it resets. */
   | "quota_exceeded"
+  /**
+   * 429: too many requests in a short time (`src/server/rate-limit.ts`); retry after
+   * `retryAfter` seconds (also the `Retry-After` header). Unlike `quota_exceeded`, it passes soon.
+   */
+  | "rate_limited"
+  /** 403: the caller's account is suspended by an admin; `message` says why. */
+  | "user_banned"
+  /** 403: deploying to a bot an admin banned; `bot` is the bot. */
+  | "bot_banned"
+  /** 503: an admin paused deploys (the kill switch); try again later. */
+  | "deploys_paused"
   /** 409: `Idempotency-Key` reused for different content. */
   | "idempotency_conflict"
   /** 409: an earlier request with this `Idempotency-Key` is still running; retry shortly. */
@@ -179,4 +190,6 @@ export interface ApiErrorBody {
   path?: string;
   quota?: QuotaInfo;
   bot?: BotInfo;
+  /** Seconds to wait before retrying (`rate_limited`), same as the `Retry-After` header. */
+  retryAfter?: number;
 }

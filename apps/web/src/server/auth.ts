@@ -30,10 +30,15 @@ const DAY = 60 * 60 * 24;
  */
 const DISABLED_PATHS = ["/update-user", "/list-sessions", "/device/token"];
 
-/** The CLI can't be signed in before the user has a username. */
+/** The CLI can't be signed in before the user has a username, nor by a banned user. */
 const requireUsernameToApproveDevice = createAuthMiddleware(async (ctx) => {
   if (ctx.path !== "/device/approve") return;
-  const user = (await getSessionFromCtx(ctx))?.user as { username?: string | null } | undefined;
+  const user = (await getSessionFromCtx(ctx))?.user as
+    | { username?: string | null; bannedAt?: Date | null }
+    | undefined;
+  if (user?.bannedAt) {
+    throw new APIError("FORBIDDEN", { message: "Your account is suspended" });
+  }
   if (user && !user.username) {
     throw new APIError("FORBIDDEN", { message: "Choose a username before signing in the CLI" });
   }
@@ -54,6 +59,9 @@ export function createAuth(env: AuthEnv) {
     // Better Auth skips the origin/CSRF check when it detects a test runner; keep it on so tests
     // exercise what production does.
     advanced: { disableOriginCheck: false },
+    // Its limiter counts in memory, per isolate, so on Workers it limits almost nothing. The
+    // shared limiter in front of `/api/auth/*` (src/server/edge.ts, rate-limit.ts) replaces it.
+    rateLimit: { enabled: false },
     socialProviders: {
       github: {
         clientId: env.GITHUB_CLIENT_ID,
@@ -69,6 +77,9 @@ export function createAuth(env: AuthEnv) {
         // From the GitHub profile; suggests a username. `input: true` because Better Auth drops
         // non-input fields from provider profiles; `/update-user` is disabled anyway.
         githubLogin: { type: "string", required: false },
+        // Set by admins only (src/server/moderation.ts).
+        bannedAt: { type: "date", required: false, input: false },
+        banReason: { type: "string", required: false, input: false },
       },
     },
     account: {

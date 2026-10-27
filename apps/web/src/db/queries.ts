@@ -86,6 +86,10 @@ export function leaderboardQuery(db: Db, { limit = 50, offset = 0 }: Leaderboard
         isNull(bots.archivedAt),
         isNull(bots.bannedAt),
         isNull(users.bannedAt),
+        // A version the arena quarantined (`src/shared/arena.ts`, "Quarantine") stops playing, so
+        // its rank would stay frozen: a lucky leader could get itself quarantined to keep it.
+        // Checked on the version row the join already looks up by key, so the plan is unchanged.
+        isNull(versions.quarantinedAt),
         gte(ratings.nLives, RANKED_MIN_LIVES),
       ),
     )

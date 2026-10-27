@@ -3,7 +3,7 @@
  * `apps/web/migrations/`); the row types below mirror the columns used here.
  */
 import type { DeathCause } from "@zerosnake/engine";
-import type { LifeResult, QuarantineRecord } from "./protocol.ts";
+import type { LifeResult, QuarantineRecord, VersionKillRecord } from "./protocol.ts";
 
 /** `lives` (apps/web `schema.ts`). Times are ms since the epoch. */
 export interface LifeRow {
@@ -105,6 +105,59 @@ export async function recordQuarantine(
     db.prepare("SELECT id FROM versions WHERE id = ?1").bind(q.versionId),
   ]);
   return updated?.results.length || existing?.results.length ? "recorded" : "missing";
+}
+
+const INSERT_KILL = `INSERT INTO version_kills (id, version_id, room, life_id, tick, retracted, at)
+  SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE EXISTS (SELECT 1 FROM versions WHERE id = ?2)`;
+
+/**
+ * Writes a named kill to `version_kills` (apps/web `src/db/schema.ts`) and quarantines its version
+ * if that makes `threshold` unretracted kills of it from `since` on (any room's), with `message`
+ * as the reason (as `recordQuarantine`; an earlier quarantine is kept). Idempotent: a kill already
+ * written (or retracted) is left alone; a deleted version is skipped.
+ *
+ * Returns the count and whether the version is quarantined now (by this or anything else), so a
+ * retry after a failed notification still reports it.
+ */
+export async function recordKill(
+  db: D1Database,
+  kill: VersionKillRecord,
+  { threshold, since, message }: { threshold: number; since: number; message: string },
+): Promise<{ kills: number; quarantined: boolean }> {
+  const count = `(SELECT count(*) FROM version_kills
+    WHERE version_id = ?1 AND at >= ?4 AND retracted = 0)`;
+  const [, , state] = await db.batch<{ kills: number; quarantined: number }>([
+    db
+      .prepare(`${INSERT_KILL} ON CONFLICT(id) DO NOTHING`)
+      .bind(kill.id, kill.versionId, kill.roomId, kill.lifeId, kill.tick, 0, kill.at),
+    db
+      .prepare(
+        `UPDATE versions SET quarantined_at = ?2, quarantine_reason = ?3,
+          updated_at = cast(unixepoch('subsecond') * 1000 as integer)
+         WHERE id = ?1 AND quarantined_at IS NULL AND ${count} >= ?5`,
+      )
+      .bind(kill.versionId, kill.at, message, since, threshold),
+    db
+      .prepare(
+        `SELECT ${count} AS kills, quarantined_at IS NOT NULL AS quarantined
+         FROM versions WHERE id = ?1`,
+      )
+      .bind(kill.versionId, null, null, since),
+  ]);
+  const row = state?.results[0];
+  return { kills: row?.kills ?? 0, quarantined: Boolean(row?.quarantined) };
+}
+
+/** Marks named kills as no evidence (written now if they weren't yet). Idempotent. */
+export async function retractKills(db: D1Database, kills: VersionKillRecord[]): Promise<void> {
+  if (kills.length === 0) return;
+  await db.batch(
+    kills.map((k) =>
+      db
+        .prepare(`${INSERT_KILL} ON CONFLICT(id) DO UPDATE SET retracted = 1`)
+        .bind(k.id, k.versionId, k.roomId, k.lifeId, k.tick, 1, k.at),
+    ),
+  );
 }
 
 /** Whether D1 has `versionId` quarantined (by any room). */

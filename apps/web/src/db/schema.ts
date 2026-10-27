@@ -332,6 +332,31 @@ export const lives = sqliteTable(
   ],
 );
 
+/**
+ * Kills by a room's CPU limit that named a call of this version (apps/arena `room/backstop.ts`),
+ * from every room: enough of them within a week quarantine the version even when each life is
+ * killed too rarely for its room to evict it (`src/shared/arena.ts`, "Quarantine"). Written by
+ * rooms, at least once (`id` is the room's). `retracted` when the room later saw a kill that named
+ * nobody, which only a restart can be: its kills since the last such one weren't evidence.
+ */
+export const versionKills = sqliteTable(
+  "version_kills",
+  {
+    id: text("id").primaryKey(),
+    versionId: text("version_id")
+      .notNull()
+      .references(() => versions.id, { onDelete: "cascade" }),
+    room: text("room").notNull(),
+    lifeId: text("life_id").notNull(),
+    /** Room tick of the call the kill interrupted. */
+    tick: integer("tick").notNull(),
+    retracted: integer("retracted", { mode: "boolean" }).notNull().default(false),
+    at: integer("at", { mode: "timestamp_ms" }).notNull(),
+  },
+  // Counting a version's kills within the window.
+  (t) => [index("version_kills_version_at_idx").on(t.versionId, t.at)],
+);
+
 export const ratings = sqliteTable(
   "ratings",
   {

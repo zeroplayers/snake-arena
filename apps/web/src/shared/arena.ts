@@ -177,6 +177,12 @@ export const MODERATION_CHECK_NAME = "moderation";
  * WHERE id = ?1 AND quarantined_at IS NULL RETURNING id
  * ```
  *
+ * So is a version whose calls the backstop named `VERSION_KILLS_TO_QUARANTINE` (6) times within a
+ * week, across lives and rooms: rooms write each named kill to `version_kills` (and mark it
+ * `retracted` when a later kill in that room named nobody, which only a restart does), and the
+ * same batch quarantines the version once it has that many unretracted rows. That catches a bot
+ * that burns too rarely for any one life of it to be evicted.
+ *
  * It isn't a ban: `status` stays `ready` and the owner can deploy or roll back as usual (a new
  * version starts unquarantined). It bumps `change_seq`, so the incremental poll sees it. The
  * matchmaker must queue no lives of a version with `quarantined_at` set, and drop the ones it

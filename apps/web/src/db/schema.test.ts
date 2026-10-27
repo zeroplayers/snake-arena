@@ -173,6 +173,24 @@ describe("leaderboard", () => {
     expect(board[0]?.ratingCi).toBeGreaterThan(0);
   });
 
+  it("drops quarantined versions, so a frozen rank can't be kept", async () => {
+    const set = (at: number | null) =>
+      d1.db
+        .prepare("UPDATE versions SET quarantined_at = ? WHERE id = 'seed-greedy-2'")
+        .bind(at)
+        .run();
+    await set(1);
+    try {
+      const board = await getLeaderboard(db);
+      expect(board.map((e) => [e.rank, e.botName])).toEqual([
+        [1, "Spiral"],
+        [2, "Coward"],
+      ]);
+    } finally {
+      await set(null);
+    }
+  });
+
   it("pages", async () => {
     const page = await getLeaderboard(db, { limit: 1, offset: 1 });
     expect(page).toMatchObject([{ rank: 2, botName: "Spiral" }]);

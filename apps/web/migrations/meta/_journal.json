@@ -57,6 +57,13 @@
       "when": 1793073527007,
       "tag": "0007_version_quarantine",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1793079329148,
+      "tag": "0008_version_kills",
+      "breakpoints": true
     }
   ]
 }

@@ -4,6 +4,7 @@ import type { LifeResult } from "../protocol.ts";
 import {
   ageKills,
   type BotCall,
+  blameCall,
   type CrashMarker,
   INCIDENT_WINDOW_MS,
   judgeCrash,
@@ -11,9 +12,16 @@ import {
   KILLS_TO_EVICT,
   type NamedKill,
   nextKills,
+  nextVersionKills,
   ROOM_KILLS_TO_EVICT,
   retryDelayMs,
+  type TimedCall,
+  VERSION_KILL_WINDOW_MS,
+  VERSION_KILLS_TO_QUARANTINE,
   type Verdict,
+  type VersionKill,
+  WATCH_ABORT_SHARE,
+  WATCH_STOP_SHARE,
   WATCH_TICKS,
   watchGapMs,
   watching,
@@ -166,6 +174,117 @@ describe("nextKills", () => {
     ];
     expect(ageKills(kills, late)).toEqual(kills);
     expect(ageKills(kills, KILL_WINDOW_TICKS + 50)).toEqual([{ lifeId: "b", tick: 100 }]);
+  });
+});
+
+describe("nextVersionKills", () => {
+  const suspect = (lifeId: string, tick = 0): Verdict => ({
+    kind: "suspect",
+    call: { ...call(0, lifeId), tick },
+    gapMs: LIMIT,
+    callMs: LIMIT,
+  });
+  const kill = (versionId: string, lifeId: string, tick: number, at = 0): VersionKill => ({
+    id: `${lifeId}@${tick}`,
+    versionId,
+    author: versionId,
+    lifeId,
+    tick,
+    at,
+  });
+
+  it("quarantines a periodic burner that the kill window never evicts", () => {
+    // The reviewer's case: a bot that burns once its memory has seen 1600 ticks. Every kill
+    // restarts it with none, so its kills land 1600 ticks apart and the window (3000 ticks) never
+    // holds three of them; its life (6000 ticks) ends before it is evicted.
+    expect(KILL_WINDOW_TICKS).toBe(3000);
+    let window: NamedKill[] = [];
+    let tally: VersionKill[] = [];
+    const evicted: string[] = [];
+    let quarantinedAt: number | null = null;
+    const lives = [
+      { lifeId: "life-1", start: 0 },
+      { lifeId: "life-2", start: 6000 },
+    ];
+    let n = 0;
+    for (const { lifeId, start } of lives) {
+      for (let tick = start + 1600; tick < start + 6000; tick += 1600) {
+        n++;
+        const verdict = suspect(lifeId, tick);
+        const next = nextKills(window, verdict, true, tick);
+        window = next.kills;
+        evicted.push(...next.evict);
+        const v = nextVersionKills(tally, verdict, true, kill("v", lifeId, tick), n);
+        tally = v.kills;
+        if (v.quarantine && quarantinedAt === null) quarantinedAt = n;
+      }
+    }
+    expect(evicted).toEqual([]);
+    expect(quarantinedAt).toBe(VERSION_KILLS_TO_QUARANTINE);
+  });
+
+  it("counts each version on its own, and house bots not at all", () => {
+    let tally: VersionKill[] = [];
+    const add = (versionId: string | null) => {
+      const k = versionId ? kill(versionId, `l-${versionId}`, tally.length) : null;
+      const next = nextVersionKills(tally, suspect("x"), true, k, 0);
+      tally = next.kills;
+      return next.quarantine;
+    };
+    for (let i = 1; i < VERSION_KILLS_TO_QUARANTINE; i++) {
+      expect(add("a")).toBe(false);
+      expect(add("b")).toBe(false);
+      expect(add(null)).toBe(false);
+    }
+    expect(add("a")).toBe(true);
+    expect(tally.filter((k) => k.versionId === "b")).toHaveLength(VERSION_KILLS_TO_QUARANTINE - 1);
+  });
+
+  it("is emptied and retracted by a watched kill that names nobody, kept otherwise", () => {
+    const tally = [kill("a", "l", 1), kill("a", "l", 2)];
+    const overrun: Verdict = { kind: "overrun", gapMs: LIMIT };
+    expect(nextVersionKills(tally, overrun, true, null, 0)).toEqual({
+      kills: [],
+      retract: tally,
+      quarantine: false,
+    });
+    // Unwatched kills and restarts can't name anyone: no evidence either way.
+    expect(nextVersionKills(tally, overrun, false, null, 0).kills).toEqual(tally);
+    const restart: Verdict = { kind: "restart", gapMs: 100 };
+    expect(nextVersionKills(tally, restart, true, null, 0).kills).toEqual(tally);
+  });
+
+  it(`forgets kills after ${VERSION_KILL_WINDOW_MS / 86_400_000} days`, () => {
+    const tally = [kill("a", "l", 1, 0), kill("a", "l", 2, 1000)];
+    const later = nextVersionKills(tally, suspect("l"), true, kill("a", "l", 3, 0), 1000 + 1);
+    expect(later.kills).toHaveLength(3);
+    const aged = nextVersionKills(tally, suspect("l"), true, null, VERSION_KILL_WINDOW_MS + 500);
+    expect(aged.kills).toEqual([tally[1]]);
+    expect(aged.retract).toEqual([]);
+  });
+});
+
+describe("blameCall", () => {
+  const timed = (lifeId: string, ms: number): TimedCall => ({ call: call(0, lifeId), ms });
+  const abort = WATCH_ABORT_SHARE * LIMIT;
+  const overrun = (WATCH_ABORT_SHARE - WATCH_STOP_SHARE) * LIMIT;
+
+  it("names a call that ran past the abort share by itself, wherever it was", () => {
+    // The reviewer's probe, scaled: a call far over the room's budget that returns.
+    expect(blameCall([timed("a", 5), timed("slow", abort), timed("b", 5)], false, LIMIT)).toEqual(
+      timed("slow", abort),
+    );
+    expect(blameCall([timed("a", 5), timed("b", abort - 1)], false, LIMIT)).toBeNull();
+    expect(blameCall([], true, LIMIT)).toBeNull();
+  });
+
+  it("names the slowest call of an abandoned tick only if the calls made it overrun", () => {
+    // Three colluders, each under the abort share, together past it.
+    const colluders = [timed("a", overrun / 3), timed("b", overrun / 2), timed("c", overrun / 3)];
+    expect(blameCall(colluders, true, LIMIT)).toEqual(timed("b", overrun / 2));
+    expect(blameCall(colluders, false, LIMIT)).toBeNull();
+    // Abandoned for time spent outside the calls (syncs, the platform): nobody.
+    expect(blameCall([timed("a", 5), timed("b", 7)], true, LIMIT)).toBeNull();
   });
 });
 

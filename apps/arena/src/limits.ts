@@ -49,8 +49,20 @@ export const STATE_MS = 1;
 export const WORST_BOT_TICK_MS = DEFAULT_OP_BUDGET * WORST_MS_PER_OP + STATE_MS;
 /** Op budget of module evaluation plus `init()` (the sandbox's `initOpBudget` default). */
 export const INIT_OP_BUDGET = 100;
-/** Worst CPU of starting a life: the prelude (~3.7 ms on an M1) plus the init budget. */
-export const WORST_LIFE_START_MS = 7 + INIT_OP_BUDGET * WORST_MS_PER_OP;
+/** Largest bundle a version can have (the checks' `LIMITS.maxBundleBytes`, test-enforced). */
+export const MAX_BUNDLE_BYTES = 256 * 1024;
+/**
+ * Instrumenting a bundle of `MAX_BUNDLE_BYTES` for the meter, which `startLife` does before the
+ * life starts: up to ~160 ms on an M1 (the worst shapes measured: many small functions; ~0.6 s per
+ * MB), × 1.8 on Cloudflare. A room's sandbox caches it only while the room stays loaded, and every
+ * rerun after a kill or an abandoned tick starts all its bots again in a fresh one.
+ */
+export const WORST_INSTRUMENT_MS = 300;
+/**
+ * Worst CPU of starting a life: instrumenting its bundle, the prelude (~3.7 ms on an M1) and the
+ * init budget.
+ */
+export const WORST_LIFE_START_MS = WORST_INSTRUMENT_MS + 7 + INIT_OP_BUDGET * WORST_MS_PER_OP;
 /** Engine step for a full room, generous. */
 export const ENGINE_TICK_MS = 2;
 /** Loading and persisting the room around a batch (world JSON, replay chunk, roster). */

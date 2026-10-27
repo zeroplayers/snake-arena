@@ -3,7 +3,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { bundleHouseBots } from "../scripts/house-bundles.ts";
 import { batchTicks } from "./limits.ts";
 import type { LifeResult, LifeTicket, QuarantineRecord, RoomStatus } from "./protocol.ts";
-import { KILLS_TO_EVICT, ROOM_KILLS_TO_EVICT } from "./room/backstop.ts";
+import {
+  KILLS_TO_EVICT,
+  ROOM_KILLS_TO_EVICT,
+  VERSION_KILLS_TO_QUARANTINE,
+} from "./room/backstop.ts";
 import { BOTS, createHarness, type Harness, seedVersion } from "./testing/harness.ts";
 import type { MatchmakerEvent } from "./testing/worker.ts";
 
@@ -473,6 +477,83 @@ describe("RoomDO backstop", () => {
     expect(next.snakes.map((x) => x.lifeId)).not.toContain(burner.lifeId);
   }, 240_000);
 
+  it("quarantines a bot that burns too rarely for the kill window to evict it", async () => {
+    // The reviewer's periodic burner, scaled down: it burns once its memory has seen 60 ticks,
+    // and a kill leaves the window after 100 ticks of progress (production: 1600 and 3000, see
+    // `backstop.test.ts`). Every kill restarts it with no memory, so its kills land ~60 ticks
+    // apart and the window never holds three. Its version's tally counts them all.
+    const periodic = await ticket("pete", BOTS.burnAfter(60));
+    const other = await ticket("rosa", house.hard as string);
+    // Batches of 5 ticks, so each kill restarts it at most 5 ticks before its burn.
+    await startRoom("periodic", [periodic, other], {
+      limits: { ...limits, batchTicks: 5, killWindowTicks: 100 },
+    });
+    await spares("periodic", 2);
+    const { kills, s } = await drive("periodic", (s) => s.quarantined.length > 0, { max: 600 });
+    // One unwatched kill names nobody; every watched one names it.
+    expect(kills).toBe(1 + VERSION_KILLS_TO_QUARANTINE);
+    const named = Array(VERSION_KILLS_TO_QUARANTINE - 1).fill("suspect");
+    expect(outcomes(s)).toEqual(["overrun", ...named, "evicted"]);
+    expect(s.kills.length).toBeLessThan(KILLS_TO_EVICT);
+    expect(s.versionKills.map((k) => k.lifeId)).toEqual(
+      Array(VERSION_KILLS_TO_QUARANTINE).fill(periodic.lifeId),
+    );
+    expect(s.evictions.map((x) => x.lifeId)).toEqual([periodic.lifeId]);
+    expect(s.quarantined).toEqual([periodic.versionId]);
+
+    // D1 has the same kills, which would quarantine it however its lives were spread over rooms.
+    const after = await advance("periodic", 20);
+    expect(after.incidents).toHaveLength(kills);
+    const db = await h.d1();
+    const rows = await db
+      .prepare("SELECT room, retracted FROM version_kills WHERE version_id = ?")
+      .bind(periodic.versionId)
+      .all<{ room: string; retracted: number }>();
+    expect(rows.results).toEqual(
+      Array(VERSION_KILLS_TO_QUARANTINE).fill({ room: "periodic", retracted: 0 }),
+    );
+    const version = await db
+      .prepare("SELECT quarantined_at FROM versions WHERE id = ?")
+      .bind(periodic.versionId)
+      .first<{ quarantined_at: number | null }>();
+    expect(version?.quarantined_at).toEqual(expect.any(Number));
+  }, 300_000);
+
+  it("names a call that runs past the room's budget and returns, so the room can't stall", async () => {
+    // The reviewer's probe: CPU limit 10 s, room budget 1 s, a bot spinning ~2.5 s in every tick.
+    // Watch mode never lets it reach the CPU limit, but each of its calls runs past the abort
+    // share; that used to abandon the tick and rerun it forever, naming nobody.
+    const spinner = await ticket("sven", BOTS.slow(2500));
+    const others = await Promise.all([
+      ticket("tess", house.hard as string),
+      ticket("ugo", house.medium as string),
+    ]);
+    await startRoom("spinner", [spinner, ...others], {
+      limits: { cpuLimitMs: 10_000, cpuBudgetMs: 1000, batchTicks: 50 },
+    });
+    await h.call("matchmaker", "offer", { ...spinner, lifeId: "life-sven-2" }, "spinner");
+    await spares("spinner", 3);
+
+    // The first (normal) batch runs until it is killed, late enough to count as the CPU limit;
+    // after that, each watched batch names the spinner's call and ends.
+    const { kills, s } = await drive("spinner", (s) => s.quarantined.length > 0, {
+      hangMs: 12_000,
+      max: 60,
+    });
+    expect(kills).toBe(1);
+    expect(outcomes(s)).toEqual(["overrun", ...evictionKills, ...evictionKills]);
+    expect(s.evictions.map((x) => x.lifeId)).toEqual([spinner.lifeId, "life-sven-2"]);
+    expect(s.quarantined).toEqual([spinner.versionId]);
+    expect(
+      s.incidents.every((i) => i.versionId === null || i.versionId === spinner.versionId),
+    ).toBe(true);
+
+    // And the room makes progress.
+    const after = await advance("spinner", 100);
+    expect(after.incidents).toHaveLength(s.incidents.length);
+    expect(after.snakes.map((x) => x.lifeId)).not.toContain("life-sven-2");
+  }, 300_000);
+
   it("never evicts or quarantines honest bots, however often the room is restarted", async () => {
     // The reviewer's repro: five honest versions, 40 restarts 0-300 ms into a batch, each
     // recovered after 1.5 s (longer than this room's CPU limit, so every crash looks like the
@@ -492,6 +573,23 @@ describe("RoomDO backstop", () => {
     expect(s.incidents.filter((i) => i.outcome !== "restart").length).toBeGreaterThan(20);
     expect(s.evictions).toEqual([]);
     expect(s.quarantined).toEqual([]);
+    // The kills that named them went to D1 too, and were retracted with the room's tally.
+    const db = await h.d1();
+    const ids = honest.map((t) => t.versionId);
+    const marks = ids.map(() => "?").join(", ");
+    const counted = await db
+      .prepare(
+        `SELECT version_id, sum(retracted = 0) AS n FROM version_kills
+         WHERE version_id IN (${marks}) GROUP BY version_id`,
+      )
+      .bind(...ids)
+      .all<{ version_id: string; n: number }>();
+    for (const c of counted.results) expect(c.n).toBeLessThan(VERSION_KILLS_TO_QUARANTINE);
+    const quarantined = await db
+      .prepare(`SELECT id FROM versions WHERE quarantined_at IS NOT NULL AND id IN (${marks})`)
+      .bind(...ids)
+      .all();
+    expect(quarantined.results).toEqual([]);
     const evicted = await evictedLives();
     expect(evicted.filter((l) => honest.some((t) => t.lifeId === l.lifeId))).toEqual([]);
     // The room goes on.

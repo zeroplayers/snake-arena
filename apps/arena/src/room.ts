@@ -14,7 +14,14 @@ import { ARENA_CONTROL_POLL_MS } from "@zerosnake/web/shared";
 // Wrangler only treats specifiers ending in .wasm as compiled modules; the package's "./wasm"
 // export doesn't, so the file is imported by path.
 import wasmModule from "../node_modules/@jitl/quickjs-wasmfile-release-sync/dist/emscripten-module.wasm";
-import { arenaPaused, insertLives, isQuarantined, recordQuarantine } from "./db.ts";
+import {
+  arenaPaused,
+  insertLives,
+  isQuarantined,
+  recordKill,
+  recordQuarantine,
+  retractKills,
+} from "./db.ts";
 import {
   batchTicks,
   DEFAULT_MAX_OUTBOX,
@@ -37,17 +44,27 @@ import type {
   RoomRpc,
   RoomStartOptions,
   RoomStatus,
+  VersionKillRecord,
 } from "./protocol.ts";
 import {
   ageKills,
   type BotCall,
+  blameCall,
   DEFAULT_WATCH_GAP_MS,
   EVICTIONS_TO_QUARANTINE,
   INCIDENT_WINDOW_MS,
   judgeCrash,
+  KILL_WINDOW_TICKS,
+  type NamedKill,
   nextKills,
+  nextVersionKills,
   ROOM_KILLS_TO_EVICT,
   retryDelayMs,
+  type TimedCall,
+  VERSION_KILL_WINDOW_MS,
+  VERSION_KILLS_TO_QUARANTINE,
+  type Verdict,
+  type VersionKill,
   WATCH_ABORT_SHARE,
   WATCH_GAP_CAP_SHARE,
   WATCH_STOP_SHARE,
@@ -96,7 +113,9 @@ const TICK_MS = 1000 / TICK_RATE;
  * after it, batches stopped early) for a window that grows with repeated incidents. Nobody is ever
  * struck or banned for a kill: a life that watched kills keep naming is evicted (neutral end, not
  * rated) so the room makes progress (the kill window, `backstop.ts`), and a version evicted
- * `EVICTIONS_TO_QUARANTINE` times is quarantined for every room (`versions.quarantined_at` in D1).
+ * `EVICTIONS_TO_QUARANTINE` times, or named by `VERSION_KILLS_TO_QUARANTINE` kills (the version
+ * tally, here and across rooms in D1), is quarantined for every room (`versions.quarantined_at`).
+ * A watched call that returns after running past the abort share by itself is named like a kill.
  *
  * The arena's kill switch (`arena_control.paused` in D1, re-read every `ARENA_CONTROL_POLL_MS`):
  * while it's on, the room starts no lives, retires the running ones and closes.
@@ -141,6 +160,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
           chunkTicks: limits.chunkTicks ?? CHUNK_TICKS,
           watchGapMs: limits.watchGapMs ?? DEFAULT_WATCH_GAP_MS,
           arenaControlPollMs: limits.arenaControlPollMs ?? ARENA_CONTROL_POLL_MS,
+          killWindowTicks: limits.killWindowTicks ?? KILL_WINDOW_TICKS,
         },
         livesEnded: 0,
         lastBatchTicks: 0,
@@ -149,6 +169,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         watch: { untilTick: 0, untilMs: 0 },
         openChunkTick: null,
         kills: [],
+        versionKills: [],
       };
       this.store.transaction(() => {
         this.store.setMeta(meta);
@@ -226,6 +247,11 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         .map(({ versionId, lifeId, tick }) => ({ versionId, lifeId, tick })),
       quarantined: this.store.quarantined(),
       kills: meta?.kills ?? [],
+      versionKills: (meta?.versionKills ?? []).map(({ versionId, lifeId, tick }) => ({
+        versionId,
+        lifeId,
+        tick,
+      })),
       arenaPaused: this.paused,
       watching: meta ? watching(meta.watch, world?.tick ?? 0, Date.now()) : false,
       outbox: { size: outbox.size, failing: outbox.failing },
@@ -299,10 +325,25 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       call: null,
     };
     await this.begin(meta, marker);
-    const result = await sim.run(plan, watch ? this.watchHooks(meta, marker) : {});
-    this.commit(sim, result, maxPendingSeq);
-    // Some bots ran a tick the world never stepped: restart them from the saved frame.
-    if (result.aborted) this.dropSim();
+    const watcher = watch ? this.watchHooks(meta, marker) : null;
+    const result = await sim.run(plan, watcher?.hooks ?? {});
+    const blamed = watcher?.blamed() ?? null;
+    this.commit(sim, result, maxPendingSeq, () => {
+      if (!blamed) return;
+      // A call that ran past the abort share by itself: named as a kill would have named it.
+      const now = Date.now();
+      const verdict: Verdict = {
+        kind: "suspect",
+        call: blamed.call,
+        gapMs: now - invokedAt,
+        callMs: blamed.ms,
+      };
+      const counted = this.countIncident(verdict, true, sim.world.tick, now);
+      console.error("room call overran", meta.roomId, verdict, counted);
+    });
+    // Some bots ran a tick the world never stepped (or one was evicted): restart them from the
+    // saved frame.
+    if (result.aborted || blamed) this.dropSim();
   }
 
   /**
@@ -313,37 +354,65 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
    * time is between calls and a restart rarely names a life again. Without one that isn't needed:
    * a kill only names a call that ran for most of the CPU limit, which restarts in production
    * practically never look like.
+   *
+   * Each call's own wall time (from after its marker's sync to the next I/O) is kept for the tick
+   * in progress: a call that ran past the abort share ends the batch, and `blamed` names it (or the
+   * slowest call of a tick abandoned because its calls overran; see `blameCall`).
    */
-  private watchHooks(meta: Meta, marker: BatchMarker): BatchHooks {
+  private watchHooks(
+    meta: Meta,
+    marker: BatchMarker,
+  ): { hooks: BatchHooks; blamed: () => TimedCall | null } {
     // The room's budget, not the hard limit: an honest watched invocation stays far below it.
     const limit = meta.limits.cpuBudgetMs;
     const decorrelate = (meta.kills ?? []).length > 0;
     let callAt = 0;
+    let ranFrom = 0;
     let slept = 0;
     let first = true;
+    /** The calls of the tick in progress (the first tick's include the lives' starts). */
+    let calls: TimedCall[] = [];
+    let blamed: TimedCall | null = null;
     const busy = () => Date.now() - marker.startedAt - slept;
     const wait = async (ms: number) => {
       await new Promise((r) => setTimeout(r, ms));
       slept += ms;
     };
-    return {
+    // Any I/O moves the clock (bot code and the engine step are CPU); a timer is cheapest.
+    const tock = () => new Promise((r) => setTimeout(r, 0));
+    const hooks: BatchHooks = {
       shuffleStarts: decorrelate,
-      continueBatch: () =>
-        busy() < WATCH_STOP_SHARE * limit &&
-        Date.now() - marker.startedAt < WATCH_WALL_SHARE * limit,
+      continueBatch: () => {
+        blamed = blameCall(calls, false, limit);
+        calls = [];
+        return (
+          blamed === null &&
+          busy() < WATCH_STOP_SHARE * limit &&
+          Date.now() - marker.startedAt < WATCH_WALL_SHARE * limit
+        );
+      },
       beforeBot: async (lifeId, kind, tick) => {
         if (decorrelate && first) await wait(Math.random() * WATCH_GAP_CAP_SHARE * limit);
         first = false;
-        // Any I/O moves the clock (the engine step since the last one was CPU); a timer is cheapest.
-        await new Promise((r) => setTimeout(r, 0));
+        await tock();
+        if (kind === "tick") {
+          blamed = blameCall(calls, false, limit);
+          if (blamed) return "abort";
+          if (busy() > WATCH_ABORT_SHARE * limit) {
+            blamed = blameCall(calls, true, limit);
+            return "abort";
+          }
+        }
         callAt = Date.now();
-        if (kind === "tick" && busy() > WATCH_ABORT_SHARE * limit) return "abort";
         marker.call = { lifeId, kind, tick, at: callAt, before: busy() };
         this.store.setMarker(marker);
         await this.ctx.storage.sync();
+        ranFrom = Date.now();
         return "go";
       },
       afterBot: async () => {
+        await tock();
+        if (marker.call) calls.push({ call: marker.call, ms: Date.now() - ranFrom });
         if (!decorrelate) return;
         marker.call = null;
         this.store.setMarker(marker);
@@ -351,60 +420,108 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         await wait(watchGapMs(Date.now() - callAt, meta.limits.watchGapMs, Math.random(), limit));
       },
     };
+    // A batch that ran all its ticks has no `continueBatch` after the last one.
+    return { hooks, blamed: () => blamed ?? blameCall(calls, false, limit) };
   }
 
   /**
    * A batch died before saving its result (the marker is still there). Count it toward evicting
-   * the life whose call it interrupted (the kill window), watch the room, and run the batch again
-   * from the saved frame (every bot restarts there).
+   * the life whose call it interrupted (the kill window and the version tally), watch the room, and
+   * run the batch again from the saved frame (every bot restarts there).
    */
   private async recover(meta: Meta, marker: BatchMarker, invokedAt: number): Promise<void> {
     this.dropSim();
     const now = Date.now();
     const verdict = judgeCrash(marker, now, meta.limits.cpuLimitMs);
-    const named = verdict.kind === "suspect" ? this.findLife(verdict.call.lifeId) : null;
-    const { kills, evict } = nextKills(meta.kills ?? [], verdict, marker.watch, marker.fromTick);
-    this.store.transaction(() => {
+    const counted = this.store.transaction(() => {
       this.store.clearMarker();
-      let outcome: IncidentOutcome = verdict.kind;
-      if (verdict.kind === "suspect") {
-        const call = verdict.call;
-        for (const lifeId of evict) {
-          const life = lifeId === named?.lifeId ? named : this.findLife(lifeId);
-          if (!life) continue;
-          // A life's own count keeps the window; the room's cap empties it.
-          const detail =
-            evict.length === 1 && kills.length > 0
-              ? evictionDetail(meta, call)
-              : `one of the bots whose calls ${ROOM_KILLS_TO_EVICT} kills in a row interrupted, ` +
-                `last at room tick ${call.tick} (${meta.limits.cpuLimitMs} ms CPU limit)`;
-          this.evict(meta, life, call.tick, detail, now);
-          if (lifeId === named?.lifeId) outcome = "evicted";
-        }
+      return this.countIncident(verdict, marker.watch, marker.fromTick, now);
+    });
+    console.error("room batch died", meta.roomId, verdict, counted);
+    await this.batch(invokedAt);
+  }
+
+  /**
+   * Counts an incident (inside a transaction): the kill window and the version tally (and D1's,
+   * through the outbox), the evictions and quarantine they lead to, and the watch window. `tick` is
+   * the frame the room restarts from.
+   */
+  private countIncident(
+    verdict: Verdict,
+    watched: boolean,
+    tick: number,
+    now: number,
+  ): { kills: NamedKill[]; evict: string[]; versionKills: number } {
+    const meta = this.store.meta() as Meta;
+    const named = verdict.kind === "suspect" ? this.findLife(verdict.call.lifeId) : null;
+    const window = meta.limits.killWindowTicks ?? KILL_WINDOW_TICKS;
+    const { kills, evict } = nextKills(meta.kills ?? [], verdict, watched, tick, window);
+    const kill: VersionKill | null =
+      verdict.kind === "suspect" && named?.versionId
+        ? {
+            id: crypto.randomUUID(),
+            versionId: named.versionId,
+            author: named.author,
+            lifeId: named.lifeId,
+            tick: verdict.call.tick,
+            at: now,
+          }
+        : null;
+    const tally = nextVersionKills(meta.versionKills ?? [], verdict, watched, kill, now);
+    const versionKills = kill
+      ? tally.kills.filter((k) => k.versionId === kill.versionId).length
+      : 0;
+    let outcome: IncidentOutcome = verdict.kind;
+    if (verdict.kind === "suspect") {
+      const call = verdict.call;
+      // A life's own count keeps the window; the room's cap empties it.
+      const capped = kills.length === 0;
+      const evicting = new Set(evict);
+      if (tally.quarantine && named) evicting.add(named.lifeId);
+      for (const lifeId of evicting) {
+        const life = lifeId === named?.lifeId ? named : this.findLife(lifeId);
+        if (!life) continue;
+        const detail =
+          capped && evict.includes(lifeId)
+            ? `one of the bots whose calls ${ROOM_KILLS_TO_EVICT} kills in a row interrupted, ` +
+              `last at room tick ${call.tick} (${meta.limits.cpuLimitMs} ms CPU limit)`
+            : evictionDetail(meta, call);
+        this.evict(meta, life, call.tick, detail, now, lifeId === named?.lifeId ? versionKills : 0);
+        if (lifeId === named?.lifeId) outcome = "evicted";
       }
-      this.store.addIncident({
-        tick: marker.fromTick,
-        outcome,
-        versionId: named?.versionId ?? null,
-        at: now,
-      });
-      if (verdict.kind === "restart") return;
+    }
+    // After the room's own quarantine (if any), so the matchmaker hears of that first.
+    if (kill) this.store.enqueue({ kind: "kill", json: JSON.stringify(killRecord(meta, kill)) });
+    if (tally.retract.length > 0) {
+      const records = tally.retract.map((k) => killRecord(meta, k));
+      this.store.enqueue({ kind: "retract", json: JSON.stringify(records) });
+    }
+    this.store.addIncident({ tick, outcome, versionId: named?.versionId ?? null, at: now });
+    if (verdict.kind !== "restart") {
       const recent = this.store.cpuIncidentsSince(now - INCIDENT_WINDOW_MS);
       this.store.updateMeta((m) => {
         m.kills = kills;
-        m.watch = watchWindow(m.watch, recent, marker.fromTick, now, DEFAULT_CONFIG.lifeCap);
+        m.versionKills = tally.kills;
+        m.watch = watchWindow(m.watch, recent, tick, now, DEFAULT_CONFIG.lifeCap);
       });
-    });
-    console.error("room batch died", meta.roomId, verdict, { kills, evict });
-    await this.batch(invokedAt);
+    }
+    return { kills, evict: [...evict], versionKills };
   }
 
   /**
    * Ends `life` with the neutral cause `evicted` (at the next batch, without running its code
    * again; a pending ticket is dropped), and quarantines its version after
-   * `EVICTIONS_TO_QUARANTINE` evictions in this room. Runs inside a transaction.
+   * `EVICTIONS_TO_QUARANTINE` evictions in this room, or when `versionKills` (its version's named
+   * kills in the tally) reached `VERSION_KILLS_TO_QUARANTINE`. Runs inside a transaction.
    */
-  private evict(meta: Meta, life: LifeEntry, tick: number, detail: string, now: number): void {
+  private evict(
+    meta: Meta,
+    life: LifeEntry,
+    tick: number,
+    detail: string,
+    now: number,
+    versionKills: number,
+  ): void {
     if (!this.store.markEvicted(life.lifeId)) {
       // Killed while starting its life: it never made it into the roster.
       this.store.removePendingLife(life.lifeId);
@@ -439,9 +556,9 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       at: now,
     });
     console.warn("room evicted", meta.roomId, life.lifeId, versionId, detail);
-    if (!versionId || evictions < EVICTIONS_TO_QUARANTINE || this.store.isQuarantined(versionId)) {
-      return;
-    }
+    const quarantine =
+      evictions >= EVICTIONS_TO_QUARANTINE || versionKills >= VERSION_KILLS_TO_QUARANTINE;
+    if (!versionId || !quarantine || this.store.isQuarantined(versionId)) return;
     this.store.quarantine(versionId, now);
     const record: QuarantineRecord = {
       versionId,
@@ -450,10 +567,12 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       roomId: meta.roomId,
       tick,
       evictions,
+      kills: versionKills,
       message:
-        "Quarantined by the arena for review: the room's CPU limit kept cutting its runs short " +
-        `inside this bot's code, so ${evictions} of its lives were evicted (last: ${detail}). ` +
-        "That's usually an operator on huge strings or objects, which the tick budget can't meter.",
+        "Quarantined by the arena for review: the room's CPU backstop kept naming this bot's " +
+        `code (${versionKills || "several"} calls killed by the CPU limit or running past the ` +
+        `room's budget), so ${evictions} of its lives ${evictions === 1 ? "was" : "were"} ` +
+        `evicted (last: ${detail}). ${CAUSE}`,
       at: now,
     };
     this.store.enqueue({ kind: "quarantine", json: JSON.stringify(record) });
@@ -499,7 +618,13 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     await this.ctx.storage.sync();
   }
 
-  private commit(sim: RoomSim, result: BatchResult, maxPendingSeq: number): void {
+  /** Saves a batch's result; `then` runs last, in the same transaction. */
+  private commit(
+    sim: RoomSim,
+    result: BatchResult,
+    maxPendingSeq: number,
+    then: () => void = () => {},
+  ): void {
     const now = Date.now();
     this.store.transaction(() => {
       const meta = this.store.meta() as Meta;
@@ -538,9 +663,14 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       meta.openChunkTick = sim.openChunkTick;
       if (real > 0) meta.nextLifeAfter = 0;
       // Progress ages kills out of the window.
-      meta.kills = ageKills(meta.kills ?? [], sim.world.tick);
+      meta.kills = ageKills(
+        meta.kills ?? [],
+        sim.world.tick,
+        meta.limits.killWindowTicks ?? KILL_WINDOW_TICKS,
+      );
       this.store.setMeta(meta);
       this.store.clearMarker();
+      then();
     });
   }
 
@@ -578,6 +708,44 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
               await this.matchmaker().versionQuarantined(record);
               break;
             }
+            case "kill": {
+              const kill = JSON.parse(item.json) as VersionKillRecord;
+              const message =
+                "Quarantined by the arena for review: across rooms, the CPU backstop named this " +
+                `bot's code at least ${VERSION_KILLS_TO_QUARANTINE} times in a week (calls ` +
+                "killed by the CPU limit or running past a room's budget; last in room " +
+                `${kill.roomId} at tick ${kill.tick}). ${CAUSE}`;
+              const { kills, quarantined } = await recordKill(this.env.DB, kill, {
+                threshold: VERSION_KILLS_TO_QUARANTINE,
+                since: kill.at - VERSION_KILL_WINDOW_MS,
+                message,
+              });
+              // Quarantined by its kills across rooms (not by this room's own count, which
+              // notified already): tell the matchmaker, then refuse its tickets here too.
+              if (
+                quarantined &&
+                kills >= VERSION_KILLS_TO_QUARANTINE &&
+                !this.store.isQuarantined(kill.versionId)
+              ) {
+                await this.matchmaker().versionQuarantined({
+                  versionId: kill.versionId,
+                  author: kill.author,
+                  lifeId: kill.lifeId,
+                  roomId: kill.roomId,
+                  tick: kill.tick,
+                  evictions: this.store.evictions().filter((e) => e.versionId === kill.versionId)
+                    .length,
+                  kills,
+                  message,
+                  at: kill.at,
+                });
+                this.store.quarantine(kill.versionId, kill.at);
+              }
+              break;
+            }
+            case "retract":
+              await retractKills(this.env.DB, JSON.parse(item.json) as VersionKillRecord[]);
+              break;
             case "closed":
               await this.matchmaker().roomClosed(meta.roomId);
               break;
@@ -771,6 +939,22 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
 
 function stripSeq({ seq: _, ...entry }: PendingEntry): LifeEntry {
   return entry;
+}
+
+/** Why a quarantine usually happens, for the people reading `quarantine_reason`. */
+const CAUSE =
+  "That's usually an operator on huge strings or objects, which the tick budget can't meter.";
+
+function killRecord(meta: Meta, k: VersionKill): VersionKillRecord {
+  return {
+    id: k.id,
+    versionId: k.versionId,
+    author: k.author,
+    lifeId: k.lifeId,
+    roomId: meta.roomId,
+    tick: k.tick,
+    at: k.at,
+  };
 }
 
 function evictionDetail(meta: Meta, call: BotCall): string {

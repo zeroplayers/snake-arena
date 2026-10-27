@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { LIMITS } from "@zerosnake/checks";
 import { describe, expect, it } from "vitest";
 import {
   BATCH_CPU_SHARE,
@@ -7,6 +8,7 @@ import {
   DO_CPU_LIMIT_MS,
   ENGINE_TICK_MS,
   MAX_BATCH_TICKS,
+  MAX_BUNDLE_BYTES,
   ROOM_CPU_BUDGET_MS,
   WORST_BOT_TICK_MS,
   WORST_LIFE_START_MS,
@@ -27,13 +29,18 @@ describe("batchTicks", () => {
 
   it("gives the numbers in the PR", () => {
     expect(WORST_BOT_TICK_MS).toBe(27);
+    expect(WORST_LIFE_START_MS).toBe(567);
     expect(batchTicks(20, 0)).toBe(25);
-    expect(batchTicks(20, 20)).toBe(15);
+    expect(batchTicks(20, 20)).toBe(4);
     expect(batchTicks(10, 0)).toBe(51);
     expect(batchTicks(5, 0)).toBe(102);
-    expect(batchTicks(5, 5)).toBe(92);
+    expect(batchTicks(5, 5)).toBe(81);
     expect(batchTicks(0, 0)).toBe(MAX_BATCH_TICKS);
   });
+});
+
+it("sizes instrumentation for the largest bundle the checks accept", () => {
+  expect(LIMITS.maxBundleBytes).toBeLessThanOrEqual(MAX_BUNDLE_BYTES);
 });
 
 describe("DO_CPU_LIMIT_MS", () => {

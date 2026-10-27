@@ -53,8 +53,25 @@ export interface LifeResult {
 }
 
 /**
+ * A named kill of a version, for D1's `version_kills` (apps/web `src/db/schema.ts`): `kill` adds
+ * it, `retract` marks it as no evidence. Both idempotent, in either order.
+ */
+export interface VersionKillRecord {
+  id: string;
+  versionId: string;
+  author: string;
+  lifeId: string;
+  roomId: string;
+  /** Room tick of the call it interrupted. */
+  tick: number;
+  /** Wall-clock ms. */
+  at: number;
+}
+
+/**
  * A version a room's CPU backstop quarantined: its lives were evicted `EVICTIONS_TO_QUARANTINE`
- * times (see `room/backstop.ts`). Not a ban: the version stays `ready`, with `quarantined_at` and
+ * times, or kills named it `VERSION_KILLS_TO_QUARANTINE` times (in the room's tally, or across
+ * rooms in D1's `version_kills`; see `room/backstop.ts`). Not a ban: the version stays `ready`, with `quarantined_at` and
  * `quarantine_reason` (= `message`) set in D1 (apps/web `src/shared/arena.ts`, "Quarantine"); it
  * just isn't matched any more, in any room, until a person has looked at it.
  */
@@ -64,9 +81,12 @@ export interface QuarantineRecord {
   /** The life of the last eviction. */
   lifeId: string;
   roomId: string;
-  /** Room tick of the last eviction. */
+  /** Room tick of the last eviction (or kill). */
   tick: number;
+  /** Lives of it this room evicted. */
   evictions: number;
+  /** Named kills of it counted toward the quarantine (the room's tally, or D1's). */
+  kills: number;
   message: string;
   /** Wall-clock ms; becomes `versions.quarantined_at`. */
   at: number;
@@ -76,7 +96,8 @@ export interface QuarantineRecord {
  * - `restart`: a batch died too quickly to be the CPU limit (deploy, eviction). Counts for nothing.
  * - `overrun`: a batch died after long enough to be the CPU limit, with no bot call to name
  *   (normal mode, or between calls in watch mode). The room is watched.
- * - `suspect`: in watch mode, the batch died inside one bot's call. Counts toward evicting it.
+ * - `suspect`: in watch mode, the batch died inside one bot's call, or a call returned after
+ *   running past the abort share by itself (`blameCall`). Counts toward evicting it.
  * - `evicted`: such a kill that evicted the life it named (its `KILLS_TO_EVICT`-th in the kill
  *   window, or the window's `ROOM_KILLS_TO_EVICT`-th kill, which evicts every life it named).
  *   `versionId` is the named life's, unless it's a house bot.
@@ -102,6 +123,8 @@ export interface RoomLimits {
   watchGapMs?: number;
   /** How often to re-read the arena's kill switch from D1. Default `ARENA_CONTROL_POLL_MS`. */
   arenaControlPollMs?: number;
+  /** Game ticks a named kill stays in the kill window. Default `KILL_WINDOW_TICKS` (3000). */
+  killWindowTicks?: number;
 }
 
 export type JoinResult =
@@ -156,6 +179,8 @@ export interface RoomStatus {
   quarantined: string[];
   /** The kill window: watched kills that named a life, oldest first (see `backstop.ts`). */
   kills: { lifeId: string; tick: number }[];
+  /** The version tally: watched kills that named a deployed version's life, oldest first. */
+  versionKills: { versionId: string; lifeId: string; tick: number }[];
   /** An admin stopped the arena (`arena_control.paused`): lives retire, the room closes. */
   arenaPaused: boolean;
   /** Watch mode (each bot call synced, batches stopped early) is on. */
@@ -177,8 +202,9 @@ export interface MatchmakerRpc {
   /**
    * A deployed version's life ended (already written to D1, except `evicted` lives; may be
    * minutes after the death, since rows wait for their replay chunk). At least once. Skip
-   * `evicted` lives in ratings; counting them per version across rooms (the room only counts its
-   * own) and quarantining at `EVICTIONS_TO_QUARANTINE` is the matchmaker's job.
+   * `evicted` lives in ratings. TODO(#23): count them per version across rooms (the room only
+   * counts its own) and quarantine at `EVICTIONS_TO_QUARANTINE`. (Named kills are already counted
+   * across rooms, in D1's `version_kills`; evictions by the room's cap of kills can take fewer.)
    */
   lifeEnded(result: LifeResult): Promise<void>;
   /**

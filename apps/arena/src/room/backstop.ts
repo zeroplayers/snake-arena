@@ -34,6 +34,21 @@
  *   named: colluding bots that take turns can't reset each other's count.
  * - `ROOM_KILLS_TO_EVICT` kills in the window evict every life they named: however many bots take
  *   turns, the room loses at most that many kills before it moves on.
+ *
+ * The window ages, so a bot that burns only every few thousand ticks of its memory (each kill
+ * restarts it with none) never collects `KILLS_TO_EVICT` kills in it. So the room also keeps a
+ * **version tally** (`nextVersionKills`): every kill that named a version's life, across lives,
+ * until a kill names nobody (as for the window: only a restart lands between calls) or a week has
+ * passed. `VERSION_KILLS_TO_QUARANTINE` of them evict the life and quarantine the version. Rooms
+ * also write each named kill to D1 (`version_kills`, retracted when the tally is emptied), where
+ * the same count across every room quarantines a version whose lives each die in a different room.
+ *
+ * A watched call that **returns** after running past `WATCH_ABORT_SHARE` of the room's budget by
+ * itself is named too (`blameCall`), as a kill would have: the batch ends there, so a call that
+ * takes most of the budget without reaching the CPU limit can't stall the room forever by making
+ * every rerun abandon the same tick. So is the slowest call of a tick that watch mode abandons when
+ * the tick's calls alone ran past the stop share. Bot calls are milliseconds; only code the meter
+ * can't see takes seconds.
  */
 
 /** A marker older than this share of the CPU limit is consistent with a CPU kill (clock skew). */
@@ -63,6 +78,13 @@ export const ROOM_KILLS_TO_EVICT = 6;
 export const KILL_WINDOW_TICKS = 3000;
 /** Evictions of one version (in this room) that quarantine it. */
 export const EVICTIONS_TO_QUARANTINE = 2;
+/**
+ * Named kills of one version in its tally (in a room, or in D1 across rooms) that quarantine it:
+ * as many as two evictions take.
+ */
+export const VERSION_KILLS_TO_QUARANTINE = 2 * KILLS_TO_EVICT;
+/** A version's named kills count toward its quarantine for this long (wall time). */
+export const VERSION_KILL_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 /**
  * Watch mode waits a random 0..(this + `WATCH_GAP_FACTOR` × the call's measured duration) ms after
  * each bot call, marked "between calls", at most `WATCH_GAP_CAP_SHARE` of the CPU limit. The wait
@@ -144,11 +166,12 @@ export function nextKills(
   verdict: Verdict,
   watched: boolean,
   tick: number,
+  windowTicks = KILL_WINDOW_TICKS,
 ): { kills: NamedKill[]; evict: string[] } {
   if (verdict.kind === "restart") return { kills: [...kills], evict: [] };
   if (verdict.kind === "overrun") return { kills: watched ? [] : [...kills], evict: [] };
   const lifeId = verdict.call.lifeId;
-  const window = [...ageKills(kills, tick), { lifeId, tick }];
+  const window = [...ageKills(kills, tick, windowTicks), { lifeId, tick }];
   const named = new Map<string, number>();
   for (const k of window) named.set(k.lifeId, (named.get(k.lifeId) ?? 0) + 1);
   const reached = named.get(lifeId) === KILLS_TO_EVICT;
@@ -161,8 +184,75 @@ export function nextKills(
 }
 
 /** The kills still in the window once the room has committed up to `tick`. */
-export function ageKills(kills: readonly NamedKill[], tick: number): NamedKill[] {
-  return kills.filter((k) => tick - k.tick < KILL_WINDOW_TICKS);
+export function ageKills(
+  kills: readonly NamedKill[],
+  tick: number,
+  windowTicks = KILL_WINDOW_TICKS,
+): NamedKill[] {
+  return kills.filter((k) => tick - k.tick < windowTicks);
+}
+
+/** A watched kill that named a deployed version's life (`versionId` null for house bots). */
+export interface VersionKill {
+  /** Unique, so D1 counts a kill delivered twice once. */
+  id: string;
+  versionId: string;
+  author: string;
+  lifeId: string;
+  /** Room tick of the call it interrupted. */
+  tick: number;
+  /** Wall ms. */
+  at: number;
+}
+
+/**
+ * The version tally after a verdict (`kill`: the named call's version, if it has one), what to
+ * retract from D1, and whether `kill`'s version is now quarantined. Like the kill window, a watched
+ * kill that names nobody empties it (retracting every kill in it) and restarts and unwatched kills
+ * leave it; unlike the window, it doesn't age with game time, only after `VERSION_KILL_WINDOW_MS`.
+ */
+export function nextVersionKills(
+  kills: readonly VersionKill[],
+  verdict: Verdict,
+  watched: boolean,
+  kill: VersionKill | null,
+  now: number,
+): { kills: VersionKill[]; retract: VersionKill[]; quarantine: boolean } {
+  const live = kills.filter((k) => now - k.at < VERSION_KILL_WINDOW_MS);
+  if (verdict.kind === "overrun" && watched) return { kills: [], retract: live, quarantine: false };
+  if (verdict.kind !== "suspect" || !kill) return { kills: live, retract: [], quarantine: false };
+  const next = [...live, kill];
+  const count = next.filter((k) => k.versionId === kill.versionId).length;
+  return { kills: next, retract: [], quarantine: count >= VERSION_KILLS_TO_QUARANTINE };
+}
+
+/** A watched bot call that returned, and its own wall time (from after its marker's sync). */
+export interface TimedCall {
+  call: BotCall;
+  ms: number;
+}
+
+/**
+ * The call of a watched tick (`calls`, in order) to name as a kill, or null: one that by itself ran
+ * past `WATCH_ABORT_SHARE` of `limitMs` (the room's budget); or, when watch mode abandons the tick
+ * (`abandoned`), its slowest call, if the tick's calls together ran past the share between the stop
+ * and the abort (the tick started below the stop share, so they alone made it overrun).
+ */
+export function blameCall(
+  calls: readonly TimedCall[],
+  abandoned: boolean,
+  limitMs: number,
+): TimedCall | null {
+  let slowest: TimedCall | null = null;
+  let total = 0;
+  for (const c of calls) {
+    total += c.ms;
+    if (!slowest || c.ms > slowest.ms) slowest = c;
+  }
+  if (!slowest) return null;
+  if (slowest.ms >= WATCH_ABORT_SHARE * limitMs) return slowest;
+  if (abandoned && total >= (WATCH_ABORT_SHARE - WATCH_STOP_SHARE) * limitMs) return slowest;
+  return null;
 }
 
 /** How long to wait after a watched bot call that took `callMs` (wall, syncs included). */

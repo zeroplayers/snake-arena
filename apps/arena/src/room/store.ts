@@ -6,7 +6,7 @@
  * All methods are synchronous; writes made without an `await` in between commit together.
  */
 import type { IncidentOutcome, RoomLimits, RoomMode } from "../protocol.ts";
-import type { CrashMarker, NamedKill, WatchWindow } from "./backstop.ts";
+import type { CrashMarker, NamedKill, VersionKill, WatchWindow } from "./backstop.ts";
 
 /** A life the room holds: spawned (`roster`) or waiting for the next batch (`pending`). */
 export interface LifeEntry {
@@ -60,6 +60,8 @@ export interface Meta {
   openChunkTick: number | null;
   /** The kill window (see `backstop.ts`). Missing in rooms saved before it existed. */
   kills: NamedKill[];
+  /** The version tally (see `backstop.ts`). Missing in rooms saved before it existed. */
+  versionKills: VersionKill[];
 }
 
 export type OutboxItem =
@@ -67,6 +69,8 @@ export type OutboxItem =
   /** `chunkTick`: the replay chunk the life's row points to; sent only once it is in R2. */
   | { kind: "life"; json: string; chunkTick: number }
   | { kind: "quarantine"; json: string }
+  /** A named kill for D1 (`VersionKillRecord`), and named kills to retract (an array of them). */
+  | { kind: "kill" | "retract"; json: string }
   | { kind: "closed" };
 
 export interface EvictionRow {
@@ -311,8 +315,11 @@ export class RoomStore {
         );
         break;
       case "quarantine":
+      case "kill":
+      case "retract":
         this.sql.exec(
-          "INSERT INTO outbox (kind, body) VALUES ('quarantine', ?)",
+          "INSERT INTO outbox (kind, body) VALUES (?, ?)",
+          item.kind,
           toBuffer(encoder.encode(item.json)),
         );
         break;
@@ -350,8 +357,8 @@ export class RoomStore {
           item = { kind: "chunk", key: r.key ?? "", tick: r.tick ?? 0, bytes: body };
         } else if (r.kind === "life") {
           item = { kind: "life", json: decoder.decode(body), chunkTick: r.tick ?? 0 };
-        } else if (r.kind === "quarantine") {
-          item = { kind: "quarantine", json: decoder.decode(body) };
+        } else if (r.kind === "quarantine" || r.kind === "kill" || r.kind === "retract") {
+          item = { kind: r.kind, json: decoder.decode(body) };
         } else {
           item = { kind: "closed" };
         }

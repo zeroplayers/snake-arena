@@ -110,7 +110,42 @@ importers:
         specifier: workspace:*
         version: link:../../packages/engine
 
-  packages/cli: {}
+  packages/cli:
+    dependencies:
+      '@jitl/quickjs-wasmfile-release-sync':
+        specifier: ^0.32.0
+        version: 0.32.0
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
+      quickjs-emscripten-core:
+        specifier: ^0.32.0
+        version: 0.32.0
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.5
+        version: 26.6.5
+      '@zerosnake/engine':
+        specifier: workspace:*
+        version: link:../engine
+      '@zerosnake/house-bots':
+        specifier: workspace:*
+        version: link:../../bots/house
+      '@zerosnake/renderer':
+        specifier: workspace:*
+        version: link:../renderer
+      '@zerosnake/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
+      '@zerosnake/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@zerosnake/viewer':
+        specifier: workspace:*
+        version: link:../viewer
+      vitest:
+        specifier: ^5.0.5
+        version: 5.0.5(@types/node@26.6.5)(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15))
 
   packages/engine:
     dependencies:

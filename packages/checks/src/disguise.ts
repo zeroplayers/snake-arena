@@ -12,8 +12,12 @@ import { HOUSE_FILL_ORDER, type HouseKind } from "./room-rules.ts";
  * the same number of rooms for every power of ten.
  */
 const FRESH_ROOMS = 2;
-/** Digits of an older room's start tick: 1 000–9 999, …, 1 000 000–9 999 999. */
-const OLD_ROOM_DIGITS = [4, 5, 6, 7];
+/**
+ * Digits of an older room's start tick: 1 000–9 999, …, 100 000 000–999 999 999. Accelerated rooms
+ * run ~75 ticks/s and stay open while their queue has bots, so weeks-old rooms pass 10^8 ticks; a
+ * narrower range would let a bot tell a check from the arena by `tick` alone.
+ */
+const OLD_ROOM_DIGITS = [4, 5, 6, 7, 8, 9];
 /** Ticks the room runs before the candidate's ticket arrives in an older room. */
 const PREROLL = { min: 100, max: 600 };
 /** The same in a young room, when a "user" opened it (otherwise the candidate's ticket did). */

@@ -22,8 +22,8 @@ describe("check rooms are set up like arena rooms", () => {
       const d = String(r.startTick).length;
       digits.set(d, (digits.get(d) ?? 0) + 1);
     }
-    expect([...digits.keys()].sort()).toEqual([4, 5, 6, 7]);
-    for (const n of digits.values()) expect(n / rooms.length).toBeGreaterThan(0.1);
+    expect([...digits.keys()].sort()).toEqual([4, 5, 6, 7, 8, 9]);
+    for (const n of digits.values()) expect(n / rooms.length).toBeGreaterThan(0.05);
   });
 
   it("let the candidate open a young room only when no other ticket did", () => {

@@ -7,7 +7,14 @@ import {
   PlaneGeometry,
   type Scene,
 } from "three";
-import { type InterpolatedSnake, interpolateSnake, resamplePolyline } from "../interpolate.ts";
+import {
+  type InterpolatedSnake,
+  interpolateSnake,
+  lerpAngle,
+  pointFromEnd,
+  resamplePolyline,
+  snakeRadius,
+} from "../interpolate.ts";
 import {
   resolveSkin,
   type SkinDefinition,
@@ -36,12 +43,14 @@ interface SnakeEntry {
 
 const INITIAL_BODY_CAPACITY = 64;
 const RENDER_ORDER_STRIDE = 3;
+/** The tail is aimed from this many body spacings up the body. */
+const TAIL_AIM = 2;
 
 /**
  * Snakes as textured squares, ported from ZeroSnake's PlayerRenderer. Instead of one mesh per
- * segment, each snake gets an instanced body plus a head and a tail mesh. Engine segments are
- * blended between ticks and resampled at a fixed spacing, so the look doesn't depend on how
- * densely the engine samples the body.
+ * segment, each snake gets an instanced body plus a head and a tail mesh. The body is blended
+ * between ticks along its path and resampled at a fixed spacing from the head, with the tail at
+ * the body's exact end, so the look doesn't depend on how densely the engine samples the body.
  */
 export class SnakeRenderer {
   private readonly snakes = new Map<string, SnakeEntry>();
@@ -52,6 +61,10 @@ export class SnakeRenderer {
   private readonly resampled: number[] = [];
   private readonly heads: number[] = [];
   private readonly matrix = new Matrix4();
+  private readonly behindTail = { x: 0, y: 0 };
+  private readonly flat: number[] = [];
+  /** Direction the tail points on each tick's snake. */
+  private readonly tailAngles = new WeakMap<RenderSnake, number>();
 
   constructor(
     private readonly scene: Scene,
@@ -76,9 +89,14 @@ export class SnakeRenderer {
       if (snake.segments.length === 0) return;
       this.seen.add(snake.id);
       const entry = this.entryFor(snake);
-      const state = interpolateSnake(this.prevById.get(snake.id), snake, alpha, entry.state);
+      const before = this.prevById.get(snake.id);
+      const state = interpolateSnake(before, snake, alpha, entry.state);
+      const tailAngle =
+        before && state.blended
+          ? lerpAngle(this.tailAngle(before), this.tailAngle(snake), alpha)
+          : this.tailAngle(snake);
       const order = (snake.id === onTop ? next.length : index) * RENDER_ORDER_STRIDE;
-      this.draw(entry, state, resolveSkin(snake.skin?.id), order);
+      this.draw(entry, state, tailAngle, resolveSkin(snake.skin?.id), order);
       this.heads.push(entry.view.x, entry.view.y);
     });
 
@@ -102,15 +120,40 @@ export class SnakeRenderer {
     this.geometry.dispose();
   }
 
+  /**
+   * The tail of one tick's snake points away from the body a few spacings up it. Blending this
+   * between ticks turns the tail evenly; aiming it on the blended path instead makes it step
+   * whenever the aim point passes a corner of the engine's polyline.
+   */
+  private tailAngle(snake: RenderSnake): number {
+    let angle = this.tailAngles.get(snake);
+    if (angle !== undefined) return angle;
+    const flat = this.flat;
+    flat.length = 0;
+    for (const s of snake.segments) flat.push(s.x, s.y);
+    const tx = flat[flat.length - 2] ?? 0;
+    const ty = flat[flat.length - 1] ?? 0;
+    const behind = this.behindTail;
+    pointFromEnd(flat, TAIL_AIM * snakeRadius(snake) * this.segmentSpacing, behind);
+    angle =
+      behind.x === tx && behind.y === ty
+        ? snake.angle + Math.PI
+        : Math.atan2(ty - behind.y, tx - behind.x);
+    this.tailAngles.set(snake, angle);
+    return angle;
+  }
+
   private draw(
     entry: SnakeEntry,
     state: InterpolatedSnake,
+    tailAngle: number,
     skin: SkinDefinition,
     order: number,
   ): void {
     const { radius } = state;
     const side = radius * 2 * skin.planeScale;
-    const count = resamplePolyline(state.points, radius * this.segmentSpacing, this.resampled);
+    const spacing = radius * this.segmentSpacing;
+    const count = resamplePolyline(state.points, spacing, this.resampled, state.bodyLength);
     const pts = this.resampled;
     const hx = pts[0] as number;
     const hy = pts[1] as number;
@@ -122,18 +165,15 @@ export class SnakeRenderer {
     entry.head.scale.set(side, side, 1);
     entry.head.renderOrder = order + 2;
 
-    // Tail: last point, tip (-y in the SVG) pointing away from the body.
+    // Tail: last point, tip (-y in the SVG) pointing away from the body. Drawn over the body,
+    // so a body point that appears as the snake grows comes out from under it.
     const tailVisible = count > 1;
     entry.tail.visible = tailVisible;
     if (tailVisible) {
-      const tx = pts[2 * count - 2] as number;
-      const ty = pts[2 * count - 1] as number;
-      const px = pts[2 * count - 4] as number;
-      const py = pts[2 * count - 3] as number;
-      entry.tail.position.set(tx, ty, 0);
-      entry.tail.rotation.z = Math.atan2(ty - py, tx - px) + Math.PI / 2;
+      entry.tail.position.set(pts[2 * count - 2] as number, pts[2 * count - 1] as number, 0);
+      entry.tail.rotation.z = tailAngle + Math.PI / 2;
       entry.tail.scale.set(side, side, 1);
-      entry.tail.renderOrder = order;
+      entry.tail.renderOrder = order + 1;
     }
 
     // Body: points between head and tail, tail end first so segments nearer the head
@@ -149,7 +189,7 @@ export class SnakeRenderer {
     }
     body.count = bodyCount;
     body.instanceMatrix.needsUpdate = true;
-    body.renderOrder = order + 1;
+    body.renderOrder = order;
   }
 
   private entryFor(snake: RenderSnake): SnakeEntry {
@@ -163,7 +203,15 @@ export class SnakeRenderer {
     const head = new Mesh(this.geometry, this.material(skin.head.svg, color));
     const tail = new Mesh(this.geometry, this.material(skin.tail.svg, color));
     const body = this.createBody(this.material(skin.body.svg, color), INITIAL_BODY_CAPACITY);
-    const state = existing?.state ?? { points: [], angle: 0, radius: 1, length: 0 };
+    const state = existing?.state ?? {
+      points: [],
+      pathLength: 0,
+      bodyLength: 0,
+      blended: false,
+      angle: 0,
+      radius: 1,
+      length: 0,
+    };
     if (existing) this.remove(snake.id);
 
     const entry: SnakeEntry = {

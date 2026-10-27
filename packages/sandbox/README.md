@@ -64,7 +64,8 @@ report is identical.
   `length`, like every other array method.
 - No `import` (not even dynamic), no identifiers starting with `__zs`, no destructuring in a
   `catch` clause, object rest only as `const { a, ...rest } = value` or `({ a, ...rest } = value)`,
-  no function with more than 3 000 syntax nodes, no brackets nested more than 200 deep:
+  no function with more than 3 000 syntax nodes, no brackets nested more than 200 deep, no more
+  than 64 `\p{…}` escapes, no regex literals that would take more than ~20 ms in all to compile:
   `instrument` rejects these with a message (see below for why).
 - No `async` and no `Promise`: `checkSource` rejects the keyword, and the prelude removes
   `Promise`. Promise code catches exceptions in C and turns them into rejections (including the
@@ -131,7 +132,10 @@ house bot, ~40 ms for 200 KB), and pays for its own code:
   methods, templates and string methods' arguments, `join`/`toLocaleString`/default `sort` (per
   element), `JSON.stringify`, `parseInt`/`parseFloat`, error messages, `Symbol` descriptions,
   `RegExp` patterns and inputs, key arguments (`hasOwnProperty`, `Reflect.get`, …),
-  `Object.fromEntries`/`groupBy` keys, `String.raw`.
+  `Object.fromEntries`/`groupBy` keys, `String.raw`, `at`/`charAt`/`charCodeAt`/`codePointAt`
+  called on a number (they skip the wrapper only when `this` is a string), and
+  `Error.prototype.toString`/`RegExp.prototype.toString` (the prelude reads and converts their
+  two properties itself and hands the native strings: a number in the middle was missed).
 - Compound assignments and updates of a member whose object or key isn't a plain name go
   through a small accessor (`__zs_w(obj, key).v += x`), and `x += y` becomes `x = x + (y)`, so
   the string cap applies before anything is stored. Each inline check counts as 16 syntax
@@ -145,6 +149,18 @@ house bot, ~40 ms for 200 KB), and pays for its own code:
 - Out of budget, the meter throws a sentinel that every instrumented `catch` rethrows, instead of
   spinning until the next interrupt check: unwinding can still run bot code (a `finally`, an
   iterator's `return()`), and each of those now stops at its first charge.
+- Regex literals: QuickJS compiles them while it parses the bundle, before any charge can run,
+  and compiling can be slow (case folding a class with the `i` flag: up to ~16 µs per char;
+  `\p{RGI_Emoji}` with `v`: ~1.6 ms each; a 14 KB literal took 0.9 s per load and ended in a
+  wasm memory fault). `instrument` estimates each literal like the prelude's `compileCost`
+  (below) and rejects a bundle whose literals add up to more than 20 M units. acorn's own check of
+  a `\p{…}` escape takes up to ~0.6 ms, so more than 64 of them (counted in the raw text, before
+  parsing) are rejected first.
+- Minified bundles: insertions that land at one position (`{a.b++`, `=>x` with no space) are
+  ordered so statements go outside expression wraps, and a `=>` body is parenthesised so a line
+  break after the arrow can't end its `return`. Tests run esbuild `minify: true` builds of the
+  house bots, the template bot and the SDK example in the sandbox (the same moves as their plain
+  builds).
 - The header registers the counter with the prelude, which charges native built-ins against
   the same counter and deletes the global it used for the handshake. Bot code can't reach the
   counter: identifiers starting with `__zs` are rejected, the counter is a lexical binding, and
@@ -153,8 +169,12 @@ house bot, ~40 ms for 200 KB), and pays for its own code:
 
 Measured on an M1 under load (other test suites running): every adversarial shape in
 `src/metering.test.ts` is stopped within ~5–20 ms per tick (it was up to seconds; the string rows
-of the review of #62 took 29–156 s). On real game states the house bots use ≤ 9.2% of the budget
-and the template bot 4.4%. Their CPU per tick is ~2–11% over `main` for the code-shape metering
+of the review of #62 took 29–156 s). Honest bots in the check suite's rooms (5 seeds × 1 000
+ticks): `easy` peaks at 0.8% of the per-tick budget, `medium` 21%, `hard` 30%, `chaos` 17%, the
+template bot 11% (means 0.3–6.8%, at most 4 of 10 interrupts); their minified builds within a
+few points (`medium` 26%, `chaos` 24%). The re-verification of #62 measured `medium` at up to
+12.4% on its own states. The fixes of that re-verification don't change these charges. Their CPU
+per tick is ~2–11% over `main` for the code-shape metering
 and, on top of that, +7–21% (SDK example, easy), +37% (template) and +47–60% (medium, hard,
 chaos) for the string checks: member reads in arithmetic (`p.x - head.x`) can't be proven
 numeric, and each check costs about as much as the operation it guards. The number-to-string
@@ -179,8 +199,16 @@ grows with its input:
 - Also charged: `Object.keys`/`values`/`entries`/`assign`/`getOwnPropertyDescriptors`/`freeze`/…
   (by the size of strings, arrays and typed arrays up front and by the keys returned),
   `String.raw`/`fromCharCode`, `bind`, `Array.of`, Set algebra (`union`, …), `parseInt`/`parseFloat`/
-  `encodeURI`/…, `RegExp` compilation, and string arguments to array methods (`join` separators,
-  `indexOf` of a long string).
+  `encodeURI`/…, and string arguments to array methods (`join` separators, `indexOf` of a long
+  string).
+- Compiling a regex (`new RegExp`, `compile`, the species constructor of `split`/`matchAll`, and
+  `match`/`matchAll`/`search` with a string) is charged before it runs, by the pattern
+  (`compileCost`): 120 units per char, 20 000 more per char with the `i` flag (case folding the
+  ranges of a class: up to ~16 µs per char), 100 000 per `\p{…}` with `u` and 2 M with `v`
+  (properties of strings like `\p{RGI_Emoji}`: up to ~1.6 ms each). A RegExp given as the pattern
+  is charged by its source and flags (`new RegExp(re, "g")` was free: 1.1 s per tick), and a
+  regex-like object's `source` and `flags` are read and converted once, in the prelude.
+  `RegExp.prototype.source` is charged 5 units per char (it escapes the pattern char by char).
 - Strings are charged per char at the measured cost of each built-in: copying and searching 1,
   case mapping 30, `normalize`/`localeCompare` 150, URI encoding 50, `JSON.parse` 10.
   `JSON.stringify` charges each key and string before it quotes it (40 per char, or 200 if the

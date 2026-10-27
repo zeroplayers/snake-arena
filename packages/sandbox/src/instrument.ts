@@ -70,6 +70,13 @@ export const MAX_FUNCTION_NODES = 3000;
 const MAX_NESTING = 200;
 
 /**
+ * Most `\p{` and `\P{` (property escapes) in a bundle, counted before parsing: the parser
+ * validates each one in regex literals, which takes up to ~0.6 ms (`\p{RGI_Emoji}` with the v
+ * flag; a 14 KB literal of them took 0.7 s). Honest bots use a handful.
+ */
+const MAX_PROPERTY_ESCAPES = 64;
+
+/**
  * Longest string bot code can build or embed (UTF-16 units). Operators that walk a string are
  * charged by its length, but a few built-ins still read strings that the bot stored earlier
  * (see the README's known gaps); this cap bounds what one such read can cost.
@@ -100,6 +107,21 @@ const CHECK_NODES = 16;
  */
 const DTOA_UNITS = 800;
 const DTOA_MAX_UNITS = 40_000;
+
+/**
+ * Compiling a regex, in units (same estimate as `compileCost` in prelude.ts): per char of the
+ * pattern, per char more with the i flag (case folding a class: up to ~16 µs per char), per
+ * property escape with u or with v (properties of strings, up to ~1.6 ms each). QuickJS compiles
+ * the literals while it parses the bundle, before any charge can run, so a bundle whose literals
+ * would take more than {@link MAX_REGEX_UNITS} is rejected instead (a 14 KB `/\p{RGI_Emoji}…/v`
+ * literal took ~0.9 s per load and ended in a wasm memory fault; re-verification of #62).
+ */
+const REGEX_CHAR_UNITS = 120;
+const REGEX_FOLD_UNITS = 20_000;
+const REGEX_PROPERTY_UNITS = 100_000;
+const REGEX_PROPERTY_V_UNITS = 2_000_000;
+/** Most units of regex compilation the literals of one bundle may cost (a fifth of a load). */
+const MAX_REGEX_UNITS = 20_000_000;
 
 /** Charged for each caught exception, plus the per-char backtrace cost below. */
 const EXCEPTION_UNITS = 4000;
@@ -153,7 +175,7 @@ export type InstrumentResult =
  * happens depends on the engine).
  */
 export function instrument(source: string): InstrumentResult {
-  const problem = checkSource(source) ?? checkNesting(source);
+  const problem = checkSource(source) ?? checkNesting(source) ?? checkPropertyEscapes(source);
   if (problem) return { ok: false, error: problem };
   let ast: Node;
   try {
@@ -204,7 +226,11 @@ interface Edit {
   text: string;
   /** Closing text goes before opening text at the same position; see `apply`. */
   close: boolean;
-  /** Size of the wrapped range: at one position, outer opens first and inner closes first. */
+  /**
+   * Size of the wrapped range: at one position, outer opens first and inner closes first. An
+   * opening with span 0 inserts statements (a charge, `try{`, `var`) and opens before every
+   * finite span there, so it never lands inside an expression wrap of the code that follows.
+   */
   span: number;
   /** Source chars replaced by `text` (an operator or bracket; newlines in them are kept). */
   del?: number;
@@ -253,6 +279,7 @@ class Instrumenter {
   private fn: FunctionState = { nodes: 0 };
   private maxFunctionNodes = 0;
   private maxParamWeight = 0;
+  private regexUnits = 0;
   /**
    * Starts of expression statements in a statement list. Text inserted there must not start
    * with `(`: without a semicolon, the previous line would become a call (`a = b` + `(x)`).
@@ -632,11 +659,14 @@ class Instrumenter {
     } else {
       this.visit(body);
       if (!this.fn.callOnly) this.check(body, K_NUMBER);
-      // `=> x` becomes `=> {try{return x}catch…}`.
+      // `=> x` becomes `=> {try{return(x)}catch…}` (the parenthesis keeps a body that starts on
+      // the next line from ending the `return` by ASI). With no space after `=>` (minified code)
+      // the body starts right at the arrow, so the span is one more than any wrap of the body:
+      // the `try` must stay outside the body's own checks and charge.
       const arrow = this.findArrow(n);
-      const span = n.end - arrow;
-      this.edits.push({ pos: arrow, text: "{try{return ", close: false, span });
-      this.edits.push({ pos: n.end, text: `${leave}}`, close: true, span });
+      const span = n.end - arrow + 1;
+      this.edits.push({ pos: arrow, text: "{try{return(", close: false, span });
+      this.edits.push({ pos: n.end, text: `)${leave}}`, close: true, span });
       this.charges.push({ region, at: { kind: "expression", node: body } });
     }
     this.endFunction(n);
@@ -1091,12 +1121,20 @@ class Instrumenter {
   }
 
   private checkLiteral(n: AnyNode): void {
-    const regex = n.regex as { pattern: string } | undefined;
+    const regex = n.regex as { pattern: string; flags: string } | undefined;
     const length = regex ? regex.pattern.length : typeof n.value === "string" ? n.value.length : 0;
     if (length > MAX_STRING_LENGTH) {
       throw this.reject(
         n,
         `this literal is longer than ${MAX_STRING_LENGTH} chars, the longest string the sandbox allows: split it into an array of shorter strings`,
+      );
+    }
+    if (!regex) return;
+    this.regexUnits += regexCompileUnits(regex.pattern, regex.flags);
+    if (this.regexUnits > MAX_REGEX_UNITS) {
+      throw this.reject(
+        n,
+        "the regex literals of this bundle take too long to compile (case-insensitive classes and \\p{…} escapes are the costly parts): use fewer or shorter ones",
       );
     }
   }
@@ -1141,13 +1179,14 @@ class Instrumenter {
     const end = block ? body.end - 1 : body.end;
     const span = end - start;
     // Opens at `start`: try, then the moved head, then (made later) the body's charge.
-    this.edits.push({ pos: start, text: "try{", close: false, span: block ? 0 : span + 2 });
+    this.edits.push({ pos: start, text: "try{", close: false, span: block ? 0 : span + 3 });
     if (moves) {
       const from = declared ? head.start : target.start;
       const kind = declared ? `${head.kind} ` : "";
       this.edits.push({
         pos: from,
-        text: `const ${HEAD}`,
+        // The space keeps `const[a]of xs` (minified) from becoming `const __zs_vof xs`.
+        text: `const ${HEAD} `,
         close: true,
         span: Infinity,
         del: head.end - from,
@@ -1157,7 +1196,7 @@ class Instrumenter {
         pos: start,
         text: "",
         close: false,
-        span: block ? 0 : span + 1,
+        span: block ? 0 : span + 2,
         move: {
           from: declared ? target.start : head.start,
           to: declared ? target.end : head.end,
@@ -1172,7 +1211,7 @@ class Instrumenter {
       pos: end,
       text: `}catch(${CAUGHT_VAR}){${CAUGHT}(${CAUGHT_VAR});throw ${CAUGHT_VAR}}`,
       close: !empty,
-      span: empty ? -1 : span + 2,
+      span: empty ? -1 : span + 3,
     });
   }
 
@@ -1250,7 +1289,9 @@ class Instrumenter {
         });
         return;
       case "statement": {
-        const span = at.node.end - at.node.start;
+        // One more than the statement: around the wraps of its expression, which may end at
+        // the same place (`for(;;)a.b++` with no semicolon).
+        const span = at.node.end - at.node.start + 1;
         this.edits.push({
           pos: at.node.start,
           text: `{${chargeStatement(units)}`,
@@ -1284,16 +1325,23 @@ class Instrumenter {
 
   /**
    * Applies the edits. At one position: closings before openings; closings inner (smaller span)
-   * first; openings outer (larger span) first; otherwise openings in the order they were made
-   * and closings in reverse (the first wrap made around a node is the outermost). An opening `(`
-   * at the start of an expression statement gets a `;` first (see `statementStarts`).
+   * first; openings outer (larger span, span 0 above any finite one) first; otherwise openings
+   * in the order they were made and closings in reverse (the first wrap made around a node is
+   * the outermost). An opening `(` at the start of an expression statement gets a `;` first
+   * (see `statementStarts`).
+   *
+   * Minified code puts many of these at one position: `{a.b++` has the function's `try{` and
+   * charge and the update's wrap all right after the `{` (re-verification of #62).
    */
   private apply(): string {
     const order = this.edits.map((e, i) => ({ e, i }));
+    const outer = (e: Edit) => (e.span === 0 && !e.close ? Number.MAX_VALUE : e.span);
     order.sort((a, b) => {
       if (a.e.pos !== b.e.pos) return a.e.pos - b.e.pos;
       if (a.e.close !== b.e.close) return a.e.close ? -1 : 1;
-      if (a.e.span !== b.e.span) return a.e.close ? a.e.span - b.e.span : b.e.span - a.e.span;
+      const sa = outer(a.e);
+      const sb = outer(b.e);
+      if (sa !== sb) return a.e.close ? sa - sb : sb - sa;
       return a.e.close ? b.i - a.i : a.i - b.i;
     });
     const edits = order.map(({ e }) => e);
@@ -1388,6 +1436,18 @@ function plusTail(numeric: boolean): string {
   const cap = `${NEW_STRING}(${TEMP})`;
   const check = numeric ? `(${cap},${chargeText(TEMP, K_NUMBER)})` : cap;
   return `,typeof ${TEMP}==="string"&&${check},${TEMP})`;
+}
+
+/** What compiling a regex costs (see `REGEX_CHAR_UNITS`). Over-estimates on purpose. */
+function regexCompileUnits(pattern: string, flags: string): number {
+  const n = pattern.length;
+  let units = n * REGEX_CHAR_UNITS;
+  if (flags.includes("i")) units += n * REGEX_FOLD_UNITS;
+  if (flags.includes("u") || flags.includes("v")) {
+    const escapes = pattern.match(/\\[pP]\{/g)?.length ?? 0;
+    units += escapes * (flags.includes("v") ? REGEX_PROPERTY_V_UNITS : REGEX_PROPERTY_UNITS);
+  }
+  return units;
 }
 
 /** What converting a number literal used as a key costs (see `dtoaCost` in prelude.ts). */
@@ -1511,6 +1571,18 @@ function checkNesting(source: string): string | null {
       }
     } else if (c === 41 || c === 93 || c === 125) {
       if (depth > 0) depth--;
+    }
+  }
+  return null;
+}
+
+/** Rejects more than {@link MAX_PROPERTY_ESCAPES}, counted loosely (also in strings). */
+function checkPropertyEscapes(source: string): string | null {
+  let count = 0;
+  for (let i = source.indexOf("\\"); i >= 0; i = source.indexOf("\\", i + 1)) {
+    const c = source[i + 1];
+    if ((c === "p" || c === "P") && source[i + 2] === "{" && ++count > MAX_PROPERTY_ESCAPES) {
+      return `more than ${MAX_PROPERTY_ESCAPES} \\p{…} escapes in the bundle (line ${lineOf(source, i)}): they are slow to check`;
     }
   }
   return null;

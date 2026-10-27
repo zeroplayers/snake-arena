@@ -4,22 +4,34 @@ import type { CheckInput } from "../index.ts";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 
-/** Bundles bot source (TS, may import the SDK and the house bots) into one ESM file, like the CLI. */
-export async function bundle(source: string): Promise<string> {
+/**
+ * Bundles bot source (TS, may import the SDK and the house bots) into one ESM file, like the CLI.
+ * `minify` builds it the way some authors ship theirs.
+ */
+export async function bundle(source: string, minify = false): Promise<string> {
   const out = await build({
     stdin: { contents: source, resolveDir: here, loader: "ts", sourcefile: "bot.ts" },
     bundle: true,
     format: "esm",
     platform: "neutral",
     target: "es2023",
+    minify,
     write: false,
   });
   return out.outputFiles[0]?.text ?? "";
 }
 
 /** A house bot bundled as an uploaded bot would be. */
-export function houseBundle(name: "easy" | "medium" | "hard" | "chaos"): Promise<string> {
-  return bundle(`export { ${name} as default } from "@zerosnake/house-bots";`);
+export function houseBundle(
+  name: "easy" | "medium" | "hard" | "chaos",
+  minify = false,
+): Promise<string> {
+  return bundle(`export { ${name} as default } from "@zerosnake/house-bots";`, minify);
+}
+
+/** The starter bot of `zerosnake init` (the repo's `template/`), bundled like the CLI does. */
+export function templateBundle(minify = false): Promise<string> {
+  return bundle(`export { default } from "../../../../template/src/bot.ts";`, minify);
 }
 
 /** A minimal bot module (plain JS, runs inside the sandbox) whose `tick` body is `body`. */

@@ -76,6 +76,13 @@ export const PRELUDE = String.raw`
   const taTag = getOwnPropertyDescriptor(TypedArrayProto, Symbol.toStringTag).get;
   const taLength = getOwnPropertyDescriptor(TypedArrayProto, "length").get;
   const regexpSource = getOwnPropertyDescriptor(RegExp.prototype, "source").get;
+  const regexpFlag = (name) => {
+    const d = getOwnPropertyDescriptor(RegExp.prototype, name);
+    return d === undefined ? undefined : d.get;
+  };
+  const regexpIgnoreCase = regexpFlag("ignoreCase");
+  const regexpUnicode = regexpFlag("unicode");
+  const regexpUnicodeSets = regexpFlag("unicodeSets");
   const objectToString = Object.prototype.toString;
   const numberValueOf = Number.prototype.valueOf;
   const toStringTagKey = Symbol.toStringTag;
@@ -110,6 +117,16 @@ export const PRELUDE = String.raw`
   const SCAN = 24;
   // Per entry of a Set or Map walked by an iterator (spreading a Map: 192 ns).
   const ENTRY = 250;
+  // Compiling a regex, per char of the pattern: ~110 ns (classes like [\w\W]); with the i flag
+  // up to ~16 µs more (case folding every range of a class: [\0-\u{10ffff}…]). Per property
+  // escape (\p{…}, \P{…}): up to ~95 µs with the u flag, up to ~1.6 ms with v (properties of
+  // strings like \p{RGI_Emoji}). Measured on 16K-char patterns (re-verification of #62).
+  const PATTERN = 120;
+  const FOLD = 20000;
+  const PROPERTY = 100000;
+  const PROPERTY_V = 2000000;
+  // RegExp.prototype.source escapes the pattern char by char (~4 ns per char).
+  const SOURCE = 5;
 
   // Per char of a string a native converts to a number (up to ~15 ns for "0.1111…"), hashes
   // (~1.4 ns, Map and Set keys, property keys) or compares (~0.5 ns); per char of a new string.
@@ -870,6 +887,18 @@ export const PRELUDE = String.raw`
       },
     }).m);
   }
+  // The cheap ones are called a lot on strings, so only a this that is not a string pays for the
+  // wrapper and its conversion (String.prototype.at.call(5e-324 * 7, 0) converts the number on
+  // every call; re-verification of #62).
+  for (const name of ["at", "charAt", "charCodeAt", "codePointAt"]) {
+    replaceMethod(StringProto, name, (native) => ({
+      m(pos) {
+        if (typeof this === "string") return apply(native, this, [pos]);
+        charge(WRAP);
+        return apply(native, this === null || this === undefined ? this : toStr(this), [pos]);
+      },
+    }).m);
+  }
   for (const name of Reflect.ownKeys(StringProto)) {
     if (STRING_CHEAP.has(name)) continue;
     if (name === "toString" || name === "valueOf") {
@@ -895,6 +924,10 @@ export const PRELUDE = String.raw`
         charge(s.length * m * CHAR);
         // With a regex the native calls its Symbol.split / Symbol.replace (charged below).
         if (typeof needle !== "string") return;
+        // match, matchAll and search compile a string into a regex first (no flags but g).
+        if (name === "match" || name === "matchAll" || name === "search") {
+          charge(compileCost(needle, undefined));
+        }
         const most = floor(s.length / (needle.length || 1)) + 1;
         if (name === "split") {
           const limit = args[1] === undefined ? most : (args[1] = num(args[1])) >>> 0;
@@ -1399,34 +1432,78 @@ export const PRELUDE = String.raw`
     guard(g, name, globalPerChar(name, GLOBAL_PER_CHAR[name]));
   }
   for (const name of ["parseInt", "parseFloat"]) guard(NumberCtor, name, globalPerChar(name, NUMBER));
-  // Compiling a pattern is linear in its length. The pattern and flags are converted here
-  // (charged), except a regex-like object (Symbol.match), which the native reads itself: its
-  // source and flags may be numbers to convert.
-  const regexpArgs = (args) => {
-    const p = args[0];
-    if ((typeof p === "object" || typeof p === "function") && p !== null && !isRegExp(p)) {
-      if (lookup(p, Symbol.match) === undefined) args[0] = toStr(p);
-      else charge(2 * DTOA_MAX);
-    } else if (typeof p === "number") {
-      args[0] = toStr(p);
+  // What compiling this pattern with these flags (a string, or undefined for none) costs; see
+  // PATTERN. Over-estimates: any "\p{" counts as a property escape, every char as folded.
+  function compileCost(source, flags) {
+    const n = source.length;
+    let units = n * PATTERN;
+    if (typeof flags !== "string") return units;
+    if (apply(indexOfString, flags, ["i"]) >= 0) units += n * FOLD;
+    const sets = apply(indexOfString, flags, ["v"]) >= 0;
+    if (sets || apply(indexOfString, flags, ["u"]) >= 0) {
+      const each = sets ? PROPERTY_V : PROPERTY;
+      units += (countOf(source, "\\p{") + countOf(source, "\\P{")) * each;
     }
-    if (typeof args[0] === "string") charge(args[0].length * CHAR);
-    if (args.length > 1 && args[1] !== undefined) args[1] = toStr(args[1]);
+    return units;
+  }
+  function countOf(s, part) {
+    let n = 0;
+    for (let i = apply(indexOfString, s, [part]); i >= 0;
+      i = apply(indexOfString, s, [part, i + 1])) {
+      n++;
+    }
+    return n;
+  }
+  // The flags a RegExp was compiled with that change what compiling it costs.
+  function flagsOf(rx) {
+    const has = (getter) => getter !== undefined && apply(getter, rx, []) === true;
+    return (has(regexpIgnoreCase) ? "i" : "") + (has(regexpUnicode) ? "u" : "") +
+      (has(regexpUnicodeSets) ? "v" : "");
+  }
+  // Compiling a pattern: see compileCost. The pattern and flags are converted here (charged)
+  // and the native gets strings, except a RegExp, which it compiles again from its source
+  // (re-verification of #62: new RegExp(re, "g") was free), with its own flags unless new ones
+  // are given. The constructor reads a regex-like object (Symbol.match) for its source, then
+  // (without new flags) its flags: that is done here, once (compile converts it like any other).
+  const regexpArgs = (args, fromConstructor) => {
+    const p = args[0];
+    let source;
+    let own;
+    if ((typeof p === "object" || typeof p === "function") && p !== null) {
+      if (isRegExp(p)) {
+        source = apply(regexpSource, p, []);
+        own = flagsOf(p);
+      } else if (!fromConstructor || lookup(p, Symbol.match) === undefined) {
+        source = args[0] = toStr(p);
+      } else {
+        const src = p.source;
+        source = args[0] = src === undefined ? "" : toStr(src);
+        if (args.length < 2 || args[1] === undefined) {
+          const f = p.flags;
+          if (f !== undefined) args[1] = f;
+        }
+      }
+    } else if (p !== undefined) {
+      source = args[0] = toStr(p);
+    }
+    let flags = own;
+    if (args.length > 1 && args[1] !== undefined) flags = args[1] = toStr(args[1]);
+    if (typeof source === "string") charge(compileCost(source, flags));
   };
-  guardConstructor("RegExp", regexpArgs);
+  guardConstructor("RegExp", (args) => regexpArgs(args, true));
   regexpCtor = g.RegExp;
-  guard(RegExp.prototype, "compile", (_self, args) => regexpArgs(args));
+  guard(RegExp.prototype, "compile", (_self, args) => regexpArgs(args, false));
   // Statics come from the native as they are (see installConstructor); escape builds a string up
   // to 6 times as long as its argument (a string, never converted).
   guard(regexpCtor, "escape", (_self, args) => {
     if (typeof args[0] === "string") charge(args[0].length * ENCODE);
   });
-  // source escapes "/" and line breaks: up to twice the pattern.
+  // source escapes "/" and line breaks (up to twice the pattern), char by char.
   defineProperty(RegExpProto, "source", {
     get: getOwnPropertyDescriptor({
       get source() {
         const out = capString(apply(regexpSource, this, []));
-        if (typeof out === "string") charge(out.length * CHAR);
+        if (typeof out === "string") charge(out.length * SOURCE);
         return out;
       },
     }, "source").get,
@@ -1513,8 +1590,30 @@ export const PRELUDE = String.raw`
   chargeResult(Function.prototype, "toString");
   chargeResult(Object.prototype, "toString");
   chargeResult(Object.prototype, "toLocaleString");
-  chargeResult(Error.prototype, "toString");
-  chargeResult(RegExpProto, "toString");
+  // These two read two properties, convert each (a number slowly, see DTOA) and join them. The
+  // properties are read and converted here, in the native's order, and the native joins the
+  // strings (re-verification of #62: a number in the middle was never charged).
+  function composer(obj, name, keys) {
+    replaceMethod(obj, name, (native) => ({
+      m() {
+        charge(WRAP);
+        if ((typeof this !== "object" && typeof this !== "function") || this === null) {
+          return apply(native, this, []);
+        }
+        const parts = {};
+        setPrototypeOf(parts, null);
+        for (let i = 0; i < keys.length; i++) {
+          const v = this[keys[i]];
+          define(parts, keys[i], v === undefined ? v : toStr(v));
+        }
+        const out = capString(apply(native, parts, []));
+        chargeNumber(out);
+        return out;
+      },
+    }).m);
+  }
+  composer(Error.prototype, "toString", ["name", "message"]);
+  composer(RegExpProto, "toString", ["source", "flags"]);
   chargeResult(Symbol.prototype, "toString");
   for (const name of ["toString", "toLocaleString"]) {
     const join = ArrayProto[name];

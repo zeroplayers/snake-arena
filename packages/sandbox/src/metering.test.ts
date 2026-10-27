@@ -423,6 +423,16 @@ describe("cost meter: numbers to strings (re-review of #62)", () => {
     "String.raw": "const t = { raw: ['a', 'b'] }; for (;;) String.raw(t, x);",
     "a native callback": "const a = new Array(200).fill(x); for (;;) a.map(String);",
     "console.log": "for (;;) log(x);",
+    // Re-verification of #62: 900 ms (H1), 180–330 ms (H3) per tick before.
+    "at on a number": "for (;;) String.prototype.at.call(x, 0);",
+    "charAt on a number": "for (;;) String.prototype.charAt.call(x, 0);",
+    "charCodeAt on a number": "for (;;) String.prototype.charCodeAt.call(x, 0);",
+    "codePointAt on a number": "for (;;) String.prototype.codePointAt.call(x, 0);",
+    "Error.prototype.toString of numbers":
+      "const e = { name: x, message: x }; for (;;) Error.prototype.toString.call(e);",
+    "an Error named by a number": "const e = new Error('m'); e.name = x; for (;;) e.toString();",
+    "RegExp.prototype.toString of numbers":
+      "const r = { source: x, flags: x }; for (;;) RegExp.prototype.toString.call(r);",
   };
   for (const [name, body] of Object.entries(rows)) {
     it(`stops ${name} within one tick`, () => {
@@ -439,6 +449,59 @@ describe("cost meter: numbers to strings (re-review of #62)", () => {
     const int = keys("7");
     expect(keys("0.5") - int).toBeGreaterThan(100 * 700);
     expect(keys("5e-324") - int).toBeGreaterThan(100 * 39_000);
+  });
+});
+
+describe("cost meter: compiling regexes (re-verification of #62)", () => {
+  // Compiling costs ~110 ns per char of the pattern, up to ~16 µs per char with the i flag
+  // (case folding the ranges of a class), up to ~95 µs per \p{…} with u and ~1.6 ms with v.
+  // A RegExp given as the pattern was compiled for free: new RegExp(re, "g") 1.1 s per tick.
+  // The patterns are sized so that one compile is charged less than the 10M units of slack
+  // `expectStopped` allows past the budget.
+  const prefix = `const long = new RegExp('a'.repeat(16000));
+    const folded = ('[\\0-' + String.fromCodePoint(0x10ffff) + ']').repeat(60);
+    const foldedRe = new RegExp(folded, 'i');`;
+  const rows: Record<string, string> = {
+    "new RegExp of a long regex with flags": "for (;;) new RegExp(long, 'g');",
+    "new RegExp of a long regex": "for (;;) new RegExp(long);",
+    "the source of a long regex": "for (;;) long.source;",
+    "case-insensitive classes": "for (;;) new RegExp(folded, 'i');",
+    "a case-insensitive regex with new flags": "for (;;) new RegExp(foldedRe, 'gi');",
+    "split with a case-insensitive regex": "for (;;) 'a'.split(foldedRe);",
+    "matchAll with a case-insensitive regex":
+      "const g = new RegExp(folded, 'gi'); for (;;) 'a'.matchAll(g);",
+    "compile of a case-insensitive regex": "const r = /a/; for (;;) r.compile(foldedRe);",
+    "Reflect.construct": "for (;;) Reflect.construct(RegExp, [folded, 'i']);",
+    "a regex-like object":
+      "const o = { [Symbol.match]: true, source: folded, flags: 'i' }; for (;;) new RegExp(o);",
+    "property escapes": "const e = '\\\\p{L}'.repeat(40); for (;;) new RegExp(e, 'iu');",
+    "properties of strings": "const e = '\\\\p{RGI_Emoji}'.repeat(4); for (;;) new RegExp(e, 'v');",
+    "match with a string pattern": "const c = '[\\\\w\\\\W]'.repeat(2666); for (;;) 'a'.match(c);",
+  };
+  for (const [name, body] of Object.entries(rows)) {
+    it(`stops ${name} within one tick`, () => {
+      const report = tickOnce(`${body}\nreturn { turn: 0.5 };`, prefix);
+      expectStopped(report, name);
+    });
+  }
+
+  it("charges the source and a string compiled into a regex by length", () => {
+    const cost = (body: string) =>
+      tickOnce(`const p = 'a'.repeat(16000); const re = new RegExp(p); log(1);
+        for (let i = 0; i < 10; i++) ${body}; return { turn: 0 };`).work;
+    const base = cost("void 0");
+    // ~4 ns per char to escape the source (31–37 ms per tick when charged 1 unit per char).
+    expect(cost("re.source") - base).toBeGreaterThan(10 * 16000 * 4);
+    // match compiles its string argument: ~110 ns per char of a class-heavy pattern.
+    expect(cost("'a'.match(p.slice(0, 4000))") - base).toBeGreaterThan(10 * 4000 * 100);
+  });
+
+  it("charges a small regex a small share of the budget", () => {
+    const report = tickOnce(
+      "for (let i = 0; i < 10; i++) new RegExp('^[a-z_]+$', 'i'); return { turn: 0 };",
+    );
+    expect(report.outcome).toBe("ok");
+    expect(report.work).toBeLessThan(LIMIT / 4);
   });
 });
 
@@ -492,6 +555,24 @@ describe("cost meter: honest bots", () => {
     const most = Math.max(...reports.map((r) => r.work));
     expect(most).toBeGreaterThan(0);
     expect(most).toBeLessThan(LIMIT / 20);
+  });
+
+  // Re-verification of #62 (H4): minified bundles (`=>` with no space after it) died at load.
+  it("runs the minified SDK example bot with the same moves and logs", async () => {
+    const play = (source: string) => {
+      const life = sandbox.startLife(source, makeInfo());
+      expect(life.death, life.death?.message).toBeNull();
+      const reports = makeStates(100).map((s) => life.tick(s));
+      life.dispose();
+      expect(reports.every((r) => r.outcome === "ok")).toBe(true);
+      return reports;
+    };
+    const plain = play(await bundleExampleBot());
+    const minified = play(await bundleExampleBot(true));
+    expect(minified.map((r) => [r.action, r.log.lines])).toEqual(
+      plain.map((r) => [r.action, r.log.lines]),
+    );
+    expect(Math.max(...minified.map((r) => r.work))).toBeLessThan(LIMIT / 20);
   });
 
   it("charges a typical tick a small share of the budget", () => {

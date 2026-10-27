@@ -378,6 +378,43 @@ describe("wrapped built-ins still behave", () => {
       "a,b10",
     ],
     ["'aXbX'.split(/x/i).join('|')", "a|b|"],
+    // Re-verification of #62: rewrapped composers, cheap string methods and RegExp arguments.
+    ["Error.prototype.toString.call({ name: 5e-324 * 7, message: 1.5 })", "3.5e-323: 1.5"],
+    [
+      "Error.prototype.toString.call({}) + Error.prototype.toString.call({ name: '', message: 'm' }) + Error.prototype.toString.call({ name: 'N', message: '' })",
+      "ErrormN",
+    ],
+    [
+      "String(new RangeError('r')) + new Error('x', { cause: 1 }).toString()",
+      "RangeError: rError: x",
+    ],
+    [
+      "RegExp.prototype.toString.call({ source: 'a', flags: 1 }) + RegExp.prototype.toString.call({})",
+      "/a/1/undefined/undefined",
+    ],
+    ["String(/a\\/b/gi)", "/a\\/b/gi"],
+    [
+      "(() => { try { Error.prototype.toString.call(1); } catch (e) { return e instanceof TypeError; } })()",
+      "true",
+    ],
+    ["new RegExp(/ab/i, 'g').flags + new RegExp(/ab/i).flags + new RegExp(/ab/i).source", "giab"],
+    [
+      "new RegExp({ [Symbol.match]: true, source: 'x+', flags: 'g' }).flags + new RegExp({ [Symbol.match]: true, source: 'x+' }).source + new RegExp({ [Symbol.match]: true }).source",
+      "gx+(?:)",
+    ],
+    [
+      "(() => { const r = /a/; r.compile({ toString: () => 'zz' }); return r.source + r.compile(/q/i).flags; })()",
+      "zzi",
+    ],
+    [
+      "String.prototype.at.call(1.5, 0) + 'abc'.at(-1) + 'abc'.charCodeAt(1) + String.prototype.charAt.call(12, 1) + 'ab'.codePointAt()",
+      "1c98297",
+    ],
+    ["'xax'.match('a').index + 'xax'.search('x') + [...'aXa'.matchAll('a')].length", "3"],
+    [
+      "new RegExp('\\\\p{L}+', 'u').test('é') + ',' + new RegExp('[a-z]', 'i').test('Q')",
+      "true,true",
+    ],
     ["String('ab'.match(undefined)[0].length) + 'a.b'.search('.')", "00"],
     ["[...'a1b2'.matchAll(/\\d/g)].map((m) => m[0]).join()", "1,2"],
     ["/b/g[Symbol.replace]('abcb', '-')", "a-c-"],

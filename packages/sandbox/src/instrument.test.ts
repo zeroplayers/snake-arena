@@ -153,6 +153,17 @@ describe("instrument keeps the semantics", () => {
       try { throw new MyError('mine'); } catch (e) { out.push(e.name, e.message, e instanceof Error, Error.prototype.isPrototypeOf(e)); }
       out.push(Object.getPrototypeOf(TypeError) === Error, Error('no new').message);
       return out;`,
+    // Re-verification of #62 (H4): with no space after `=>` the `try` of the arrow and the
+    // body's string check started at the same position and nested the wrong way round.
+    "arrows without spaces (minified code)": `
+      const s=[1,2].reduce((a,b)=>a+b,0),m=[{x:1},{x:'2'}].map(k=>k.x),f=v=>v+1,g=(a)=>'s'+a;
+      const h=()=>({a:1}),n=x=>y=>x+y,c=(a,b)=>(a,b),q=x=>/*c*/x,r=x=>
+        x*2;
+      function u(o,k){o.n++;for(let i=0;i<3;i++)o[k]+=i
+        for(const x of[1,2])o.n+=x
+        for(const[y]of[[5]])o[k]+=y
+        switch(o.n){case 4:o[k]+=1;${"o.n+=o[k];".repeat(12)}break;default:o.n--}return o}
+      return[s,m,f(1),f('1'),g(2),h(),n(1)(2),c(1,2),q(3),r(4),u({n:0,a:'x'},'a'),u({n:0,a:1},'a')];`,
   };
   for (const [name, body] of Object.entries(programs)) {
     it(name, () => {
@@ -224,6 +235,22 @@ describe("instrument rejects", () => {
       `export default { tick() { let x = 0; ${"x = (x + 1) | 0;".repeat(MAX_FUNCTION_NODES / 6)} } };`,
       /too large for the sandbox/,
     ],
+    // Re-verification of #62: literals compile while QuickJS parses, before any charge runs.
+    [
+      "case-insensitive regex literals that take too long to compile",
+      `const r = /${"[a-z]".repeat(300)}/i; export default { tick() {} };`,
+      /regex literals of this bundle take too long/,
+    ],
+    [
+      "regex literals with too many properties of strings",
+      `${Array.from({ length: 11 }, (_, i) => `const r${i} = /\\p{RGI_Emoji}/v;`).join(" ")} export default { tick() {} };`,
+      /regex literals of this bundle take too long/,
+    ],
+    [
+      "many property escapes",
+      `const r = /${"\\p{L}".repeat(65)}/u; export default { tick() {} };`,
+      /more than 64 \\p\{…\} escapes/,
+    ],
     [
       "class fields over the size limit",
       `class A { ${Array.from({ length: MAX_FUNCTION_NODES / 2 }, (_, i) => `f${i} = ${i};`).join(" ")} } export default { tick() {} };`,
@@ -239,6 +266,11 @@ describe("instrument rejects", () => {
       expect(life.death).toMatchObject({ fault: "error", reason: "load" });
     });
   }
+
+  it("accepts the regex literals an honest bot uses", () => {
+    const source = `const r = [${"/^[a-z_]+$/i, /\\p{L}+/u, /(\\d+)\\.(\\d+)/g, ".repeat(20)}]; export default { tick() {} };`;
+    expect(instrument(source).ok).toBe(true);
+  });
 
   it("accepts big tables at module level", () => {
     const source = `const table = [${Array.from({ length: 20000 }, (_, i) => i).join(",")}];

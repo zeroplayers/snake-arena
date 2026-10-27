@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestD1, type TestD1 } from "../test/d1";
+import { webSessions } from "../test/accounts";
+import { createTestD1, dumpTables, type TestD1 } from "../test/d1";
 import { CookieJar, type FakeGithubUser, mockGithub } from "../test/github";
 import { type Auth, CLI_CLIENT_ID, createAuth, isValidUsername } from "./auth";
 import { type CliIdentity, type CliToken, hashToken } from "./cli-auth";
@@ -16,6 +17,7 @@ beforeEach(async () => {
   d1 = await createTestD1();
   auth = createAuth({
     DB: d1.db,
+    AUTH_KV: d1.kv,
     BETTER_AUTH_URL: BASE,
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
     GITHUB_CLIENT_ID: "test-client-id",
@@ -98,7 +100,13 @@ async function signUp(user: FakeGithubUser) {
 }
 
 type SessionResponse = {
-  user: { id: string; username?: string | null; githubLogin?: string | null; email: string };
+  user: {
+    id: string;
+    username?: string | null;
+    githubLogin?: string | null;
+    bannedAt?: string | null;
+    email: string;
+  };
   session: { id: string };
 } | null;
 
@@ -186,6 +194,61 @@ describe("GitHub sign-in", () => {
     const first = await getSession({ jar: await signInWithGithub(ada) });
     const second = await getSession({ jar: await signInWithGithub(ada) });
     expect(second?.user.id).toBe(first?.user.id);
+  });
+});
+
+describe("web sessions (KV, not the D1 that apps/arena shares)", () => {
+  const getSessionByCookie = async (cookie: string) =>
+    json<SessionResponse>(
+      await auth.handler(new Request(`${BASE}/api/auth/get-session`, { headers: { cookie } })),
+    );
+
+  it("live in AUTH_KV, expire with the session, and leave no token in D1", async () => {
+    const jar = await signUp(ada);
+    const sessions = await webSessions(d1.kv);
+    expect(sessions).toHaveLength(1);
+    const [session] = sessions;
+    expect(jar.header()).toContain(session?.token);
+    const thirtyDays = Date.now() / 1000 + 30 * 24 * 60 * 60;
+    expect(session?.expiration).toBeGreaterThan(thirtyDays - 60);
+    expect(session?.expiration).toBeLessThan(thirtyDays + 60);
+
+    const dump = await dumpTables(d1.db);
+    expect(dump).toContain("ada@example.com");
+    expect(dump).not.toContain(session?.token);
+    expect(dump).not.toContain('"sessions"');
+  });
+
+  it("are deleted from KV on sign-out", async () => {
+    const jar = await signUp(ada);
+    const cookie = jar.header();
+    expect((await post("/sign-out", {}, { jar })).status).toBe(200);
+    expect(await webSessions(d1.kv)).toEqual([]);
+    expect(await getSessionByCookie(cookie)).toBeNull();
+  });
+
+  it("are all deleted when the user revokes them", async () => {
+    const laptop = await signUp(ada);
+    const phone = await signInWithGithub(ada);
+    expect(await webSessions(d1.kv)).toHaveLength(2);
+    expect((await post("/revoke-sessions", {}, { jar: laptop })).status).toBe(200);
+    expect(await webSessions(d1.kv)).toEqual([]);
+    expect(await getSession({ jar: phone })).toBeNull();
+  });
+
+  it("see username claims and bans at once, though both are written to D1 directly", async () => {
+    const jar = await signInWithGithub(ada);
+    expect((await getSession({ jar }))?.user).toMatchObject({ username: null, bannedAt: null });
+    expect((await claim(jar, "ada")).status).toBe(200);
+    expect((await getSession({ jar }))?.user.username).toBe("ada");
+    await d1.db.prepare("UPDATE users SET banned_at = 1 WHERE username = 'ada'").run();
+    expect((await getSession({ jar }))?.user.bannedAt).toBe(new Date(1).toISOString());
+  });
+
+  it("end with the user", async () => {
+    const jar = await signUp(ada);
+    await d1.db.prepare("DELETE FROM users WHERE username = 'ada'").run();
+    expect(await getSession({ jar })).toBeNull();
   });
 });
 
@@ -335,9 +398,8 @@ describe("device flow (zerosnake login)", () => {
     expect(rows.results).toHaveLength(1);
     expect(rows.results[0]?.token_hash).toBe(await hashToken(token));
     expect(JSON.stringify(rows.results)).not.toContain(token);
-    // No Better Auth session was created for the CLI.
-    const sessions = await d1.db.prepare("SELECT count(*) AS n FROM sessions").first("n");
-    expect(sessions).toBe(1);
+    // No Better Auth session was created for the CLI: the web sign-in's is the only one.
+    expect(await webSessions(d1.kv)).toHaveLength(1);
   });
 
   it("redeems a device code only once", async () => {

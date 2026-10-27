@@ -5,6 +5,7 @@ import { deviceAuthorization } from "better-auth/plugins";
 import { createDb } from "../db";
 import { authSchema } from "../db/schema";
 import { CLI_CLIENT_ID, cliAuth } from "./cli-auth";
+import { kvSessionStore } from "./session-store";
 import { usernameClaim } from "./username";
 
 export { CLI_CLIENT_ID } from "./cli-auth";
@@ -12,6 +13,8 @@ export { isValidUsername } from "./username";
 
 export interface AuthEnv {
   DB: D1Database;
+  /** Web sessions (src/server/session-store.ts). Bound to this Worker only, never to apps/arena. */
+  AUTH_KV: KVNamespace;
   /** Public origin, e.g. `https://arena.surninsynergy.dev`. */
   BETTER_AUTH_URL: string;
   BETTER_AUTH_SECRET: string;
@@ -48,6 +51,8 @@ export function createAuth(env: AuthEnv) {
   for (const key of ["BETTER_AUTH_SECRET", "GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"] as const) {
     if (!env[key]) throw new Error(`${key} is not set (see apps/web/.dev.vars.example)`);
   }
+  // Without it Better Auth would quietly fall back to session rows in the shared D1.
+  if (!env.AUTH_KV) throw new Error("AUTH_KV is not bound (see apps/web/wrangler.jsonc)");
   const db = createDb(env.DB);
 
   return betterAuth({
@@ -55,6 +60,8 @@ export function createAuth(env: AuthEnv) {
     baseURL: env.BETTER_AUTH_URL,
     secret: env.BETTER_AUTH_SECRET,
     database: drizzleAdapter(db, { provider: "sqlite", schema: authSchema, usePlural: true }),
+    // Web sessions live in KV, not in D1, which apps/arena (untrusted bot code) can read.
+    secondaryStorage: kvSessionStore(env.AUTH_KV, db),
     disabledPaths: DISABLED_PATHS,
     // Better Auth skips the origin/CSRF check when it detects a test runner; keep it on so tests
     // exercise what production does.
@@ -89,7 +96,10 @@ export function createAuth(env: AuthEnv) {
     session: {
       expiresIn: 30 * DAY,
       updateAge: DAY,
+      storeSessionInDatabase: false,
     },
+    // OAuth state: single-use, which KV can't enforce (see session-store.ts).
+    verification: { storeInDatabase: true },
     hooks: { before: requireUsernameToApproveDevice },
     plugins: [
       deviceAuthorization({

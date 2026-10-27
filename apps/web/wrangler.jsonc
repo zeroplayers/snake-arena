@@ -4,6 +4,9 @@
  *
  * Bindings are not inherited by environments, so every binding is declared twice.
  *
+ * AUTH_KV (web sessions) is bound here only, never in apps/arena/wrangler.jsonc: apps/arena runs
+ * untrusted bot code and shares the D1 database, so session tokens are kept out of both.
+ *
  * Secrets (BETTER_AUTH_SECRET, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET) are not in this file:
  * `.dev.vars` locally (see `.dev.vars.example`), `wrangler secret put --env staging` on staging.
  *
@@ -56,6 +59,8 @@
       "migrations_dir": "migrations"
     }
   ],
+  // Better Auth web sessions (src/server/session-store.ts). Local id is arbitrary.
+  "kv_namespaces": [{ "binding": "AUTH_KV", "id": "zerosnake-dev-auth" }],
   "r2_buckets": [
     { "binding": "BUNDLES", "bucket_name": "zerosnake-dev-bundles" },
     { "binding": "SOURCES", "bucket_name": "zerosnake-dev-sources" },
@@ -125,6 +130,9 @@
           "migrations_dir": "migrations"
         }
       ],
+      // PLACEHOLDER until the namespace exists (the deploy workflow refuses this id):
+      // `pnpm exec wrangler kv namespace create zerosnake-staging-auth`, then paste its id here.
+      "kv_namespaces": [{ "binding": "AUTH_KV", "id": "00000000-0000-0000-0000-000000000000" }],
       "r2_buckets": [
         { "binding": "BUNDLES", "bucket_name": "zerosnake-staging-bundles" },
         { "binding": "SOURCES", "bucket_name": "zerosnake-staging-sources" },

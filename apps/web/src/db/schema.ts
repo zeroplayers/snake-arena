@@ -63,22 +63,7 @@ export const users = sqliteTable("users", {
   updatedAt: updatedAt(),
 });
 
-export const sessions = sqliteTable(
-  "sessions",
-  {
-    id: id(),
-    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
-    token: text("token").notNull().unique(),
-    ipAddress: text("ip_address"),
-    userAgent: text("user_agent"),
-    userId: text("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    createdAt: createdAt(),
-    updatedAt: updatedAt(),
-  },
-  (t) => [index("sessions_user_id_idx").on(t.userId)],
-);
+// No `sessions` table: web sessions live in KV, bound to apps/web only (src/server/session-store.ts).
 
 export const accounts = sqliteTable(
   "accounts",
@@ -498,4 +483,4 @@ export const moderationActions = sqliteTable(
   ],
 );
 
-export const authSchema = { users, sessions, accounts, verifications, deviceCodes };
+export const authSchema = { users, accounts, verifications, deviceCodes };

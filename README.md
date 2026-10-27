@@ -21,8 +21,19 @@ Cloudflare account "Surnin Synergy". Config lives in the `env.staging` blocks of
 | `zerosnake-web-staging`   | `https://arena.surninsynergy.dev`     | [`/api/health`](https://arena.surninsynergy.dev/api/health)        |
 | `zerosnake-arena-staging` | `https://api.arena.surninsynergy.dev` | [`/health`](https://api.arena.surninsynergy.dev/health) (pings DO) |
 
-Resources: D1 `zerosnake-staging` (shared by both Workers), R2 `zerosnake-staging-{bundles,sources,replays,traces}`,
-queues `zerosnake-staging-checks` and `zerosnake-staging-checks-dlq`.
+Resources: D1 `zerosnake-staging` (shared by both Workers), KV `zerosnake-staging-auth` (web only),
+R2 `zerosnake-staging-{bundles,sources,replays,traces}`, queues `zerosnake-staging-checks` and
+`zerosnake-staging-checks-dlq`.
+
+**Auth storage**: web sessions (Better Auth) live in the KV namespace `zerosnake-staging-auth`, bound
+as `AUTH_KV` to the web Worker only, never to arena: the arena runs untrusted bot code and shares the
+D1, so no session token is kept there. CLI tokens are in D1 as SHA-256 hashes, GitHub OAuth tokens
+encrypted. Create the namespace once and put its id into `env.staging.kv_namespaces` in
+`apps/web/wrangler.jsonc` (the deploy refuses the placeholder id):
+
+```bash
+cd apps/web && pnpm exec wrangler kv namespace create zerosnake-staging-auth
+```
 
 **Deploys** happen automatically: `.github/workflows/deploy-staging.yml` runs after CI passes on `main`
 (or via "Run workflow"). It deploys arena first (web binds to its Durable Objects), applies D1 migrations,

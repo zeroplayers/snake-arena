@@ -78,6 +78,13 @@
       "when": 1793105646666,
       "tag": "0010_ban_change_seq",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1793121243794,
+      "tag": "0011_web_sessions_to_kv",
+      "breakpoints": true
     }
   ]
 }

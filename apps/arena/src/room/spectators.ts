@@ -146,6 +146,11 @@ export class Spectators {
     await this.prepare(true);
     const room = this.room();
     if (!room) return new Response("Room closed", { status: 410 });
+    // Again after the await: a burst of upgrades all passed the checks above while the lookup ran.
+    if (this.count >= MAX_SPECTATORS) return new Response("Too many spectators", { status: 503 });
+    if (tag && this.open(tag).length >= MAX_SPECTATORS_PER_CLIENT) {
+      return new Response("Too many spectators from this client", { status: 429 });
+    }
     const { 0: client, 1: server } = new WebSocketPair();
     this.ctx.acceptWebSocket(server, tag ? [tag] : []);
     this.state.set(server, fresh());
@@ -167,8 +172,9 @@ export class Spectators {
     if (missing.length === 0) return;
     try {
       const found = await this.lookup(missing);
-      if (this.labels.size + found.size > MAX_LABELS) this.labels.clear();
-      for (const [id, label] of found) this.labels.set(id, label);
+      if (this.labels.size + missing.length > MAX_LABELS) this.labels.clear();
+      // Versions D1 doesn't know stay `UNKNOWN` instead of being looked up again on every upgrade.
+      for (const id of missing) this.labels.set(id, found.get(id) ?? UNKNOWN);
     } catch (e) {
       console.error("spectators: label lookup failed", room.roomId, e);
     }

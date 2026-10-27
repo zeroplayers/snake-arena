@@ -147,6 +147,26 @@ describe("spectators", () => {
     expect((res as Response & { webSocket: WebSocket | null }).webSocket ?? null).toBeNull();
   });
 
+  it("holds the per-client cap against a burst of upgrades on a fresh room", async () => {
+    await startRoom("burst");
+    // Spawn the deployed lives, so the first upgrades have labels to look up in D1 (an await).
+    await h.room("burst", "runBatch");
+    const client = { [SPECTATOR_CLIENT_HEADER]: "burst1" };
+    const tries = await Promise.all(
+      Array.from({ length: MAX_SPECTATORS_PER_CLIENT * 4 }, () =>
+        h.fetch("/spectate/burst", { headers: { Upgrade: "websocket", ...client } }),
+      ),
+    );
+    const accepted = tries.filter((r) => r.status === 101);
+    expect(accepted.length).toBe(MAX_SPECTATORS_PER_CLIENT);
+    expect(tries.filter((r) => r.status === 429).length).toBe(MAX_SPECTATORS_PER_CLIENT * 3);
+    for (const r of accepted) {
+      const ws = (r as Response & { webSocket: WebSocket | null }).webSocket;
+      ws?.accept();
+      ws?.close();
+    }
+  }, 30_000);
+
   it("caps sockets per client in the room itself", async () => {
     await startRoom("capped");
     const client = { [SPECTATOR_CLIENT_HEADER]: "abc123" };

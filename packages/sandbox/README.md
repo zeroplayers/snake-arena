@@ -107,8 +107,8 @@ The cap should cover bots × `memoryLimitBytes`, or honest bots can run the heap
   built-in function that walks a string is wrapped; these are syntax. A bot can build strings of
   tens of MB within one tick (`a = a + a`; the memory check only runs between ticks), and
   `for (;;) a === b` on two 16 MB strings runs for over a minute inside one tick (verified). Only
-  the DO's CPU limit stops that, so the room backstop (replay the batch with bots isolated, ban
-  the version) is required. Closing it needs a QuickJS build with real allocation accounting (so
+  the DO's CPU limit stops that, so the room backstop (evict the life whose call keeps getting
+  killed, quarantine the version; never a ban) is required. Closing it needs a QuickJS build with real allocation accounting (so
   `setMemoryLimit` bounds strings) or a more frequent interrupt counter.
 - Work weights are worst cases measured on an M1 (≈ 1 unit per ns). Regex methods also poll
   interrupts inside the regex engine, but a single poll can cover a few ms of match building.

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   BATCH_CPU_SHARE,
@@ -5,19 +7,20 @@ import {
   DO_CPU_LIMIT_MS,
   ENGINE_TICK_MS,
   MAX_BATCH_TICKS,
+  ROOM_CPU_BUDGET_MS,
   WORST_BOT_TICK_MS,
   WORST_LIFE_START_MS,
 } from "./limits.ts";
 import { houseFill } from "./room/house.ts";
 
 describe("batchTicks", () => {
-  it("fits the worst case in half the DO CPU limit", () => {
+  it("fits the worst case in half the room's CPU budget", () => {
     for (const bots of [1, 5, 10, 20]) {
       for (const starts of [0, bots]) {
         const ticks = batchTicks(bots, starts);
         const worst =
           ticks * (bots * WORST_BOT_TICK_MS + ENGINE_TICK_MS) + starts * WORST_LIFE_START_MS;
-        expect(worst).toBeLessThanOrEqual(DO_CPU_LIMIT_MS * BATCH_CPU_SHARE);
+        expect(worst).toBeLessThanOrEqual(ROOM_CPU_BUDGET_MS * BATCH_CPU_SHARE);
       }
     }
   });
@@ -30,6 +33,23 @@ describe("batchTicks", () => {
     expect(batchTicks(5, 0)).toBe(102);
     expect(batchTicks(5, 5)).toBe(92);
     expect(batchTicks(0, 0)).toBe(MAX_BATCH_TICKS);
+  });
+});
+
+describe("DO_CPU_LIMIT_MS", () => {
+  it("is the Worker's limits.cpu_ms in every environment of wrangler.jsonc", () => {
+    const text = readFileSync(join(import.meta.dirname, "../wrangler.jsonc"), "utf8");
+    // JSONC: drop comments (none of the config's strings contain `//` or `/*`) and trailing commas.
+    const config = JSON.parse(
+      text
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/.*$/gm, "")
+        .replace(/,(\s*[}\]])/g, "$1"),
+    ) as { limits?: { cpu_ms?: number }; env: Record<string, { limits?: { cpu_ms?: number } }> };
+    expect(config.limits?.cpu_ms).toBe(DO_CPU_LIMIT_MS);
+    for (const env of Object.values(config.env)) expect(env.limits?.cpu_ms).toBe(DO_CPU_LIMIT_MS);
+    // The room's budget leaves the hard limit far behind (see ROOM_CPU_BUDGET_MS).
+    expect(ROOM_CPU_BUDGET_MS * 5).toBeLessThanOrEqual(DO_CPU_LIMIT_MS);
   });
 });
 

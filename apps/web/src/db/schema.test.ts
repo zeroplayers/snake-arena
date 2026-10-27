@@ -104,6 +104,31 @@ describe("constraints", () => {
     ).rejects.toThrow(/CHECK/);
   });
 
+  it("bumps change_seq when a version is quarantined or released", async () => {
+    const seq = async () =>
+      (
+        await d1.db
+          .prepare("SELECT change_seq FROM versions WHERE id = 'seed-coward-1'")
+          .first<{ change_seq: number }>()
+      )?.change_seq ?? 0;
+    const max = async () =>
+      (await d1.db.prepare("SELECT max(change_seq) AS m FROM versions").first<{ m: number }>())
+        ?.m ?? 0;
+    const quarantine = (at: number | null) =>
+      d1.db
+        .prepare("UPDATE versions SET quarantined_at = ? WHERE id = 'seed-coward-1'")
+        .bind(at)
+        .run();
+    await quarantine(1);
+    expect(await seq()).toBe(await max());
+    const after = await seq();
+    // The same value again isn't a change.
+    await quarantine(1);
+    expect(await seq()).toBe(after);
+    await quarantine(null);
+    expect(await seq()).toBe(after + 1);
+  });
+
   it("enforces foreign keys", async () => {
     await expect(insertVersion("t-5", "no-such-bot", 1, "validating")).rejects.toThrow(
       /FOREIGN KEY/,

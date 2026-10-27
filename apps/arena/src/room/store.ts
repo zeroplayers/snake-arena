@@ -6,7 +6,7 @@
  * All methods are synchronous; writes made without an `await` in between commit together.
  */
 import type { IncidentOutcome, RoomLimits, RoomMode } from "../protocol.ts";
-import type { CrashMarker, KillStreak, WatchWindow } from "./backstop.ts";
+import type { CrashMarker, NamedKill, WatchWindow } from "./backstop.ts";
 
 /** A life the room holds: spawned (`roster`) or waiting for the next batch (`pending`). */
 export interface LifeEntry {
@@ -58,8 +58,8 @@ export interface Meta {
   watch: WatchWindow;
   /** Start tick of the replay chunk still being recorded (not in R2 yet), or null. */
   openChunkTick: number | null;
-  /** Watched kills in a row that named the same life (see `backstop.ts`). */
-  streak: KillStreak | null;
+  /** The kill window (see `backstop.ts`). Missing in rooms saved before it existed. */
+  kills: NamedKill[];
 }
 
 export type OutboxItem =

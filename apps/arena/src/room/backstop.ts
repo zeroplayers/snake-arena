@@ -26,8 +26,14 @@
  * A kill rolls the room back to its last saved frame and restarts every bot there, so a bot that
  * blows the limit by itself does it again on every attempt, whatever it depends on (its memory,
  * its neighbours): it is named by every watched kill. A restart lands wherever the room happens to
- * be. So a life is evicted after `KILLS_TO_EVICT` watched kills **in a row** that each interrupted
- * one of its calls; a kill that names nobody, or another life, starts the count over.
+ * be, and most of a watched batch's wall time is between calls. So the room keeps a **kill
+ * window** (`nextKills`): the watched kills that named a life, in order, since the last one that
+ * named nobody (only a restart lands between calls), and only while the room is less than
+ * `KILL_WINDOW_TICKS` past them (kills far apart in game time don't add up over a long life).
+ * - A life named `KILLS_TO_EVICT` times in the window is evicted, whatever the kills in between
+ *   named: colluding bots that take turns can't reset each other's count.
+ * - `ROOM_KILLS_TO_EVICT` kills in the window evict every life they named: however many bots take
+ *   turns, the room loses at most that many kills before it moves on.
  */
 
 /** A marker older than this share of the CPU limit is consistent with a CPU kill (clock skew). */
@@ -45,8 +51,16 @@ export const WATCH_WALL_SHARE = 1;
 export const WATCH_TICKS = 600;
 /** CPU incidents within this window escalate the watch. */
 export const INCIDENT_WINDOW_MS = 24 * 60 * 60 * 1000;
-/** Watched kills in a row, each inside one life's call, that evict that life. */
+/** Watched kills in the kill window, each inside one life's call, that evict that life. */
 export const KILLS_TO_EVICT = 3;
+/** Watched kills in the kill window that evict every life they named. */
+export const ROOM_KILLS_TO_EVICT = 6;
+/**
+ * A named kill leaves the window once the room has committed this many ticks past the frame it
+ * restarted from (5 minutes of game time, half a life): a bot named again and again gets no
+ * further than that between kills, a rare kill of an honest one ages out.
+ */
+export const KILL_WINDOW_TICKS = 3000;
 /** Evictions of one version (in this room) that quarantine it. */
 export const EVICTIONS_TO_QUARANTINE = 2;
 /**
@@ -110,28 +124,45 @@ export function judgeCrash(marker: CrashMarker, now: number, cpuLimitMs: number)
   return { kind: "overrun", gapMs };
 }
 
-/** Consecutive watched kills that named the same life. Lives in the room's meta. */
-export interface KillStreak {
+/** A watched kill that named a life: its call, and the frame the room restarted from. */
+export interface NamedKill {
   lifeId: string;
-  kills: number;
+  tick: number;
 }
 
 /**
- * The streak after a verdict, and whether it evicts. A kill naming another life starts a new
- * streak; one naming nobody in watch mode (between calls: a real overrun never gets there) ends
- * it. Restarts, and kills outside watch mode (no call to name), leave it as it was.
+ * The kill window after a verdict (oldest kill first), and whom it evicts. A watched kill naming
+ * nobody (between calls: a real overrun never gets there) empties it. Restarts, and kills outside
+ * watch mode (no call to name), leave it as it was. `tick` is the frame the room restarts from.
+ *
+ * An evicted life's kills stay in the window (it is never named again), so they still count
+ * toward `ROOM_KILLS_TO_EVICT`, which evicts the lives named fewer than `KILLS_TO_EVICT` times
+ * and empties the window.
  */
-export function nextStreak(
-  streak: KillStreak | null,
+export function nextKills(
+  kills: readonly NamedKill[],
   verdict: Verdict,
   watched: boolean,
-): { streak: KillStreak | null; evict: string | null } {
-  if (verdict.kind === "restart") return { streak, evict: null };
-  if (verdict.kind === "overrun") return { streak: watched ? null : streak, evict: null };
+  tick: number,
+): { kills: NamedKill[]; evict: string[] } {
+  if (verdict.kind === "restart") return { kills: [...kills], evict: [] };
+  if (verdict.kind === "overrun") return { kills: watched ? [] : [...kills], evict: [] };
   const lifeId = verdict.call.lifeId;
-  const kills = streak?.lifeId === lifeId ? streak.kills + 1 : 1;
-  if (kills >= KILLS_TO_EVICT) return { streak: null, evict: lifeId };
-  return { streak: { lifeId, kills }, evict: null };
+  const window = [...ageKills(kills, tick), { lifeId, tick }];
+  const named = new Map<string, number>();
+  for (const k of window) named.set(k.lifeId, (named.get(k.lifeId) ?? 0) + 1);
+  const reached = named.get(lifeId) === KILLS_TO_EVICT;
+  if (window.length >= ROOM_KILLS_TO_EVICT) {
+    // Lives named `KILLS_TO_EVICT` times before this kill are evicted already.
+    const evict = [...named].filter(([id, n]) => n < KILLS_TO_EVICT || (reached && id === lifeId));
+    return { kills: [], evict: evict.map(([id]) => id) };
+  }
+  return { kills: window, evict: reached ? [lifeId] : [] };
+}
+
+/** The kills still in the window once the room has committed up to `tick`. */
+export function ageKills(kills: readonly NamedKill[], tick: number): NamedKill[] {
+  return kills.filter((k) => tick - k.tick < KILL_WINDOW_TICKS);
 }
 
 /** How long to wait after a watched bot call that took `callMs` (wall, syncs included). */

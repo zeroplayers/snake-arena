@@ -79,61 +79,50 @@ export async function insertLives(db: D1Database, results: LifeResult[]): Promis
   );
 }
 
-/** `versions.report` (apps/web `CheckReport`): the deploy checks' result, shown by the CLI. */
-export interface CheckReport {
-  ok: boolean;
-  checks: { name: string; ok: boolean; message?: string }[];
-  qualificationScore?: number;
-}
-
-/** The check the arena appends to a version's report when the backstop quarantines it. */
-export const BACKSTOP_CHECK = "arena-backstop";
-
 /**
- * The version's report with the quarantine note appended as a failed `arena-backstop` check,
- * keeping the earlier checks and `ok` (the deploy checks did pass; the version stays `ready`).
- */
-export function quarantineReport(report: CheckReport | null, q: QuarantineRecord): CheckReport {
-  const checks = (report?.checks ?? []).filter((c) => c.name !== BACKSTOP_CHECK);
-  checks.push({ name: BACKSTOP_CHECK, ok: false, message: q.message });
-  return report ? { ...report, checks } : { ok: true, checks };
-}
-
-/** Attempts at the report's compare-and-swap before giving up (the outbox retries later). */
-const REPORT_CAS_ATTEMPTS = 5;
-
-/**
- * Notes a quarantine in D1 for review: appends the failed `arena-backstop` check to
- * `versions.report`. `versions` has no quarantine column yet (the matchmaker keeps the list
- * itself), and the status stays as it is: quarantine isn't a ban.
+ * Quarantines a version for everyone (apps/web `src/shared/arena.ts`, "Quarantine"): sets
+ * `versions.quarantined_at` and `quarantine_reason`, which bumps `change_seq` so the matchmaker's
+ * poll sees it. The status stays as it is: quarantine isn't a ban.
  *
- * Idempotent. The report is a compare-and-swap (`WHERE report IS <what we read>`), checked through
- * `RETURNING` (D1's `meta.changes` also counts rows that triggers change), so a concurrent write
- * of the report isn't lost and a row deleted in between isn't reported as `recorded`. Throws on D1
- * errors and on persistent contention (retry); `missing` means the version row is gone (deleted
- * with its bot), which no retry can fix.
+ * Idempotent: an earlier quarantine is kept (`WHERE quarantined_at IS NULL`). Checked through
+ * `RETURNING`, since D1's `meta.changes` also counts rows that triggers change. Throws on D1
+ * errors (retry); `missing` means the version row is gone (deleted with its bot), which no retry
+ * can fix.
  */
 export async function recordQuarantine(
   db: D1Database,
   q: QuarantineRecord,
 ): Promise<"recorded" | "missing"> {
-  for (let attempt = 0; attempt < REPORT_CAS_ATTEMPTS; attempt++) {
-    const row = await db
-      .prepare("SELECT report FROM versions WHERE id = ?")
-      .bind(q.versionId)
-      .first<{ report: string | null }>();
-    if (!row) return "missing";
-    const report = quarantineReport(row.report ? (JSON.parse(row.report) as CheckReport) : null, q);
-    const updated = await db
+  const [updated, existing] = await db.batch<{ id: string }>([
+    db
       .prepare(
-        `UPDATE versions SET report = ?1,
+        `UPDATE versions SET quarantined_at = ?2, quarantine_reason = ?3,
           updated_at = cast(unixepoch('subsecond') * 1000 as integer)
-         WHERE id = ?2 AND report IS ?3
+         WHERE id = ?1 AND quarantined_at IS NULL
          RETURNING id`,
       )
-      .bind(JSON.stringify(report), q.versionId, row.report)
-      .first<{ id: string }>();
-    if (updated) return "recorded";
-  }
-  throw new Error(`versions.report of ${q.versionId} kept changing; will retry`);
+      .bind(q.versionId, q.at, q.message),
+    db.prepare("SELECT id FROM versions WHERE id = ?1").bind(q.versionId),
+  ]);
+  return updated?.results.length || existing?.results.length ? "recorded" : "missing";
+}
+
+/** Whether D1 has `versionId` quarantined (by any room). */
+export async function isQuarantined(db: D1Database, versionId: string): Promise<boolean> {
+  const row = await db
+    .prepare("SELECT quarantined_at FROM versions WHERE id = ?1")
+    .bind(versionId)
+    .first<{ quarantined_at: number | null }>();
+  return row?.quarantined_at != null;
+}
+
+/**
+ * The arena's kill switch (apps/web `src/shared/arena.ts`, "Kill switch"): whether an admin
+ * stopped the arena. A missing row means running.
+ */
+export async function arenaPaused(db: D1Database): Promise<boolean> {
+  const row = await db
+    .prepare("SELECT paused FROM arena_control WHERE id = 1")
+    .first<{ paused: number }>();
+  return Boolean(row?.paused);
 }

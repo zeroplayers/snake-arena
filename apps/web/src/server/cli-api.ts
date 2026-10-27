@@ -27,6 +27,7 @@ import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import * as z from "zod";
 import { createDb, type Db } from "../db";
 import { arenaControl, bots, users, versions } from "../db/schema";
+import type { VersionQuarantine } from "../shared/arena";
 import {
   CHECK_JOB_VERSION,
   type CheckJob,
@@ -298,9 +299,16 @@ const versionInfo = (bot: BotRow, v: VersionRow): VersionInfo => ({
   status: v.status,
   report: v.report ?? null,
   meta: v.meta ?? null,
+  quarantine: quarantine(v),
   createdAt: v.createdAt.toISOString(),
   updatedAt: v.updatedAt.toISOString(),
 });
+
+const quarantine = (v: {
+  quarantinedAt: Date | null;
+  quarantineReason: string | null;
+}): VersionQuarantine | null =>
+  v.quarantinedAt ? { at: v.quarantinedAt.toISOString(), reason: v.quarantineReason ?? "" } : null;
 
 export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
   const db: Db = createDb(env.DB);
@@ -576,7 +584,11 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
               .orderBy(desc(versions.n))
               .limit(1);
             const [active] = await db
-              .select({ n: versions.n })
+              .select({
+                n: versions.n,
+                quarantinedAt: versions.quarantinedAt,
+                quarantineReason: versions.quarantineReason,
+              })
               .from(versions)
               .where(and(eq(versions.botId, bot.id), eq(versions.status, "ready")))
               .limit(1);
@@ -584,6 +596,7 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
               ...botInfo(bot),
               archived: bot.archivedAt !== null,
               activeVersion: active?.n ?? null,
+              activeQuarantine: active ? quarantine(active) : null,
               latestVersion: latest
                 ? { n: latest.n, status: latest.status, createdAt: latest.createdAt.toISOString() }
                 : null,

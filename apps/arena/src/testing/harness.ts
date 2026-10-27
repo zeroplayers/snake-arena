@@ -200,6 +200,19 @@ export const BOTS = {
         return { turn: 0 };
       },
     };`,
+  /**
+   * One of `of` colluders: burns forever once its sandbox life has seen more than `after` ticks,
+   * but only on room ticks whose residue mod `of` is `turn`. Restarts put it off (memory resets),
+   * and which colluder a kill names depends on the frame the room restarted from.
+   */
+  turns: (turn: number, of: number, after: number) => `
+    export default {
+      init() { return { seen: 0 }; },
+      tick(state, mem) {
+        if (++mem.seen > ${after} && state.tick % ${of} === ${turn}) console.log(${BURN});
+        return { turn: 1 };
+      },
+    };`,
   /** Honest about its result but slow every tick: the host is kept busy ~`ms` per tick. */
   slow: (ms: number) => `
     export default { tick(state) {

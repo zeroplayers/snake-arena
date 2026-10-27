@@ -54,8 +54,9 @@ export interface LifeResult {
 
 /**
  * A version a room's CPU backstop quarantined: its lives were evicted `EVICTIONS_TO_QUARANTINE`
- * times (see `room/backstop.ts`). Not a ban: the version stays `ready` in D1 with a note in its
- * report; it just isn't matched any more until a person has looked at it.
+ * times (see `room/backstop.ts`). Not a ban: the version stays `ready`, with `quarantined_at` and
+ * `quarantine_reason` (= `message`) set in D1 (apps/web `src/shared/arena.ts`, "Quarantine"); it
+ * just isn't matched any more, in any room, until a person has looked at it.
  */
 export interface QuarantineRecord {
   versionId: string;
@@ -67,6 +68,7 @@ export interface QuarantineRecord {
   tick: number;
   evictions: number;
   message: string;
+  /** Wall-clock ms; becomes `versions.quarantined_at`. */
   at: number;
 }
 
@@ -75,15 +77,21 @@ export interface QuarantineRecord {
  * - `overrun`: a batch died after long enough to be the CPU limit, with no bot call to name
  *   (normal mode, or between calls in watch mode). The room is watched.
  * - `suspect`: in watch mode, the batch died inside one bot's call. Counts toward evicting it.
- * - `evicted`: the `KILLS_TO_EVICT`-th such kill in a row in the same life's calls: the life was
- *   evicted (`versionId` set unless it's a house bot).
+ * - `evicted`: such a kill that evicted the life it named (its `KILLS_TO_EVICT`-th in the kill
+ *   window, or the window's `ROOM_KILLS_TO_EVICT`-th kill, which evicts every life it named).
+ *   `versionId` is the named life's, unless it's a house bot.
  */
 export type IncidentOutcome = "restart" | "overrun" | "suspect" | "evicted";
 
 /** Tunables of one room. Defaults suit production; tests shrink them. */
 export interface RoomLimits {
-  /** The DO CPU limit the room is deployed with (`limits.cpu_ms`). Default 30 000. */
+  /** The Worker's CPU limit (`limits.cpu_ms`), when Cloudflare kills a batch. Default 300 000. */
   cpuLimitMs?: number;
+  /**
+   * The room's own CPU budget per invocation, which batch sizes and watch mode keep to (see
+   * `ROOM_CPU_BUDGET_MS`). Default 30 000, or `cpuLimitMs` if that is lower.
+   */
+  cpuBudgetMs?: number;
   /** Fixed ticks per batch instead of worst-case sizing (0 = size it). Default 0. */
   batchTicks?: number;
   /** Stop simulating while the outbox holds more items than this. Default 500. */
@@ -92,6 +100,8 @@ export interface RoomLimits {
   chunkTicks?: number;
   /** Watch mode: base of the random wait after each bot call (`watchGapMs`). Default 10. */
   watchGapMs?: number;
+  /** How often to re-read the arena's kill switch from D1. Default `ARENA_CONTROL_POLL_MS`. */
+  arenaControlPollMs?: number;
 }
 
 export type JoinResult =
@@ -144,8 +154,10 @@ export interface RoomStatus {
   evictions: { versionId: string | null; lifeId: string; tick: number }[];
   /** Versions this room quarantined. */
   quarantined: string[];
-  /** Watched kills in a row that named the same life (see `backstop.ts`). */
-  streak: { lifeId: string; kills: number } | null;
+  /** The kill window: watched kills that named a life, oldest first (see `backstop.ts`). */
+  kills: { lifeId: string; tick: number }[];
+  /** An admin stopped the arena (`arena_control.paused`): lives retire, the room closes. */
+  arenaPaused: boolean;
   /** Watch mode (each bot call synced, batches stopped early) is on. */
   watching: boolean;
   /** Side effects not delivered yet; `failing` of them failed at least once. */
@@ -170,8 +182,8 @@ export interface MatchmakerRpc {
    */
   lifeEnded(result: LifeResult): Promise<void>;
   /**
-   * The room's backstop quarantined a version (already noted in D1): stop queuing its lives until
-   * a person clears it. At least once.
+   * The room's backstop quarantined a version (already set in D1, `versions.quarantined_at`):
+   * stop queuing its lives until a person clears it. At least once.
    */
   versionQuarantined(record: QuarantineRecord): Promise<void>;
   /** Only house bots were left and the queue was empty, so the room stopped. */

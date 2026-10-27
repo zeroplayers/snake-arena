@@ -10,10 +10,11 @@ import {
   type World,
 } from "@zerosnake/engine";
 import { createSandbox } from "@zerosnake/sandbox";
+import { ARENA_CONTROL_POLL_MS } from "@zerosnake/web/shared";
 // Wrangler only treats specifiers ending in .wasm as compiled modules; the package's "./wasm"
 // export doesn't, so the file is imported by path.
 import wasmModule from "../node_modules/@jitl/quickjs-wasmfile-release-sync/dist/emscripten-module.wasm";
-import { insertLives, recordQuarantine } from "./db.ts";
+import { arenaPaused, insertLives, isQuarantined, recordQuarantine } from "./db.ts";
 import {
   batchTicks,
   DEFAULT_MAX_OUTBOX,
@@ -22,6 +23,7 @@ import {
   DO_CPU_LIMIT_MS,
   NEXT_LIFE_RETRY_MS,
   REALTIME_BATCH_TICKS,
+  ROOM_CPU_BUDGET_MS,
   SAFETY_ALARM_MS,
 } from "./limits.ts";
 import type {
@@ -37,13 +39,14 @@ import type {
   RoomStatus,
 } from "./protocol.ts";
 import {
+  ageKills,
   type BotCall,
   DEFAULT_WATCH_GAP_MS,
   EVICTIONS_TO_QUARANTINE,
   INCIDENT_WINDOW_MS,
   judgeCrash,
-  KILLS_TO_EVICT,
-  nextStreak,
+  nextKills,
+  ROOM_KILLS_TO_EVICT,
   retryDelayMs,
   WATCH_ABORT_SHARE,
   WATCH_GAP_CAP_SHARE,
@@ -91,9 +94,12 @@ const TICK_MS = 1000 / TICK_RATE;
  * passed for it to have been the CPU limit, it was a restart: the batch runs again and counts for
  * nothing. Otherwise the room switches to watch mode (each bot call made durable, a random wait
  * after it, batches stopped early) for a window that grows with repeated incidents. Nobody is ever
- * struck or banned for a kill: a life whose calls `KILLS_TO_EVICT` watched kills in a row
- * interrupted is evicted (neutral end, not rated) so the room makes progress, and a version
- * evicted `EVICTIONS_TO_QUARANTINE` times is quarantined (no new lives; noted in D1 for review).
+ * struck or banned for a kill: a life that watched kills keep naming is evicted (neutral end, not
+ * rated) so the room makes progress (the kill window, `backstop.ts`), and a version evicted
+ * `EVICTIONS_TO_QUARANTINE` times is quarantined for every room (`versions.quarantined_at` in D1).
+ *
+ * The arena's kill switch (`arena_control.paused` in D1, re-read every `ARENA_CONTROL_POLL_MS`):
+ * while it's on, the room starts no lives, retires the running ones and closes.
  *
  * After any reload (eviction or crash) every bot restarts with `init` and empty memory; the
  * world, replay and roster continue exactly.
@@ -102,6 +108,9 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   private readonly store: RoomStore;
   private sim: RoomSim | null = null;
   private busy = false;
+  /** The kill switch as last read from D1, and when (wall ms; in memory only). */
+  private paused = false;
+  private pausedReadAt = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -124,10 +133,14 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         manual: options.manual ?? false,
         limits: {
           cpuLimitMs: limits.cpuLimitMs ?? DO_CPU_LIMIT_MS,
+          cpuBudgetMs:
+            limits.cpuBudgetMs ??
+            Math.min(ROOM_CPU_BUDGET_MS, limits.cpuLimitMs ?? DO_CPU_LIMIT_MS),
           batchTicks: limits.batchTicks ?? 0,
           maxOutbox: limits.maxOutbox ?? DEFAULT_MAX_OUTBOX,
           chunkTicks: limits.chunkTicks ?? CHUNK_TICKS,
           watchGapMs: limits.watchGapMs ?? DEFAULT_WATCH_GAP_MS,
+          arenaControlPollMs: limits.arenaControlPollMs ?? ARENA_CONTROL_POLL_MS,
         },
         livesEnded: 0,
         lastBatchTicks: 0,
@@ -135,7 +148,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         realtimeNext: 0,
         watch: { untilTick: 0, untilMs: 0 },
         openChunkTick: null,
-        streak: null,
+        kills: [],
       };
       this.store.transaction(() => {
         this.store.setMeta(meta);
@@ -148,8 +161,10 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
 
   async join(ticket: LifeTicket): Promise<JoinResult> {
     const meta = this.store.meta();
-    if (meta?.state !== "running") return { ok: false, reason: "closed" };
-    if (this.store.isQuarantined(ticket.versionId)) return { ok: false, reason: "quarantined" };
+    if (meta?.state !== "running" || this.paused) return { ok: false, reason: "closed" };
+    if (this.store.isQuarantined(ticket.versionId) || (await this.quarantinedInD1(ticket))) {
+      return { ok: false, reason: "quarantined" };
+    }
     const present = [...this.store.roster(), ...this.store.pending()];
     if (present.some((p) => p.lifeId === ticket.lifeId)) {
       return { ok: false, reason: "duplicate-life" };
@@ -210,7 +225,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         .evictions()
         .map(({ versionId, lifeId, tick }) => ({ versionId, lifeId, tick })),
       quarantined: this.store.quarantined(),
-      streak: meta?.streak ?? null,
+      kills: meta?.kills ?? [],
+      arenaPaused: this.paused,
       watching: meta ? watching(meta.watch, world?.tick ?? 0, Date.now()) : false,
       outbox: { size: outbox.size, failing: outbox.failing },
       paused: meta ? outbox.size > meta.limits.maxOutbox : false,
@@ -248,6 +264,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         await this.scheduleRetry(meta, outbox.nextAt);
         return;
       }
+      if (await this.arenaStopped(meta)) this.retireAll();
       try {
         const marker = this.store.marker();
         if (marker) await this.recover(meta, marker, invokedAt);
@@ -259,7 +276,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         throw e;
       }
       await this.drain();
-      const queueEmpty = await this.refill();
+      const queueEmpty = this.paused || (await this.refill());
       if (queueEmpty && !this.hasRealLives()) await this.close();
       else await this.scheduleNext();
     } finally {
@@ -289,16 +306,18 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   }
 
   /**
-   * Watch mode: before each bot call, make "this call is running" durable, and stop the batch
-   * before the invocation gets near the CPU limit (wall time minus the random waits bounds its CPU
-   * from above). While a kill streak is open (a watched kill named a life), also make "between
-   * calls" durable after each call and wait a random while (wall time only), so most of the
-   * batch's wall time is between calls and a restart rarely names the same life again. Without a streak that isn't needed: a kill only names a call that ran for
-   * most of the CPU limit, which restarts in production practically never look like.
+   * Watch mode: before each bot call, make "this call is running" durable, and stop the batch at
+   * shares of the room's CPU budget (wall time minus the random waits bounds its CPU from above).
+   * While the kill window holds a kill (a watched kill named a life), also make "between calls"
+   * durable after each call and wait a random while (wall time only), so most of the batch's wall
+   * time is between calls and a restart rarely names a life again. Without one that isn't needed:
+   * a kill only names a call that ran for most of the CPU limit, which restarts in production
+   * practically never look like.
    */
   private watchHooks(meta: Meta, marker: BatchMarker): BatchHooks {
-    const limit = meta.limits.cpuLimitMs;
-    const decorrelate = meta.streak !== null;
+    // The room's budget, not the hard limit: an honest watched invocation stays far below it.
+    const limit = meta.limits.cpuBudgetMs;
+    const decorrelate = (meta.kills ?? []).length > 0;
     let callAt = 0;
     let slept = 0;
     let first = true;
@@ -336,21 +355,32 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
 
   /**
    * A batch died before saving its result (the marker is still there). Count it toward evicting
-   * the life whose call it interrupted, watch the room, and run the batch again from the saved
-   * frame (every bot restarts there).
+   * the life whose call it interrupted (the kill window), watch the room, and run the batch again
+   * from the saved frame (every bot restarts there).
    */
   private async recover(meta: Meta, marker: BatchMarker, invokedAt: number): Promise<void> {
     this.dropSim();
     const now = Date.now();
     const verdict = judgeCrash(marker, now, meta.limits.cpuLimitMs);
     const named = verdict.kind === "suspect" ? this.findLife(verdict.call.lifeId) : null;
-    const { streak, evict } = nextStreak(meta.streak, verdict, marker.watch);
+    const { kills, evict } = nextKills(meta.kills ?? [], verdict, marker.watch, marker.fromTick);
     this.store.transaction(() => {
       this.store.clearMarker();
       let outcome: IncidentOutcome = verdict.kind;
-      if (evict && named && verdict.kind === "suspect") {
-        this.evict(meta, named, verdict.call.tick, evictionDetail(meta, verdict.call), now);
-        outcome = "evicted";
+      if (verdict.kind === "suspect") {
+        const call = verdict.call;
+        for (const lifeId of evict) {
+          const life = lifeId === named?.lifeId ? named : this.findLife(lifeId);
+          if (!life) continue;
+          // A life's own count keeps the window; the room's cap empties it.
+          const detail =
+            evict.length === 1 && kills.length > 0
+              ? evictionDetail(meta, call)
+              : `one of the bots whose calls ${ROOM_KILLS_TO_EVICT} kills in a row interrupted, ` +
+                `last at room tick ${call.tick} (${meta.limits.cpuLimitMs} ms CPU limit)`;
+          this.evict(meta, life, call.tick, detail, now);
+          if (lifeId === named?.lifeId) outcome = "evicted";
+        }
       }
       this.store.addIncident({
         tick: marker.fromTick,
@@ -361,11 +391,11 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       if (verdict.kind === "restart") return;
       const recent = this.store.cpuIncidentsSince(now - INCIDENT_WINDOW_MS);
       this.store.updateMeta((m) => {
-        m.streak = streak;
+        m.kills = kills;
         m.watch = watchWindow(m.watch, recent, marker.fromTick, now, DEFAULT_CONFIG.lifeCap);
       });
     });
-    console.error("room batch died", meta.roomId, verdict, { streak, evict });
+    console.error("room batch died", meta.roomId, verdict, { kills, evict });
     await this.batch(invokedAt);
   }
 
@@ -421,9 +451,9 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       tick,
       evictions,
       message:
-        `Quarantined by the arena for review: the room's CPU limit cut ${KILLS_TO_EVICT} runs in a ` +
-        `row short inside this bot's code, in ${evictions} lives (last: ${detail}). That's ` +
-        "usually an operator on huge strings or objects, which the tick budget can't meter.",
+        "Quarantined by the arena for review: the room's CPU limit kept cutting its runs short " +
+        `inside this bot's code, so ${evictions} of its lives were evicted (last: ${detail}). ` +
+        "That's usually an operator on huge strings or objects, which the tick budget can't meter.",
       at: now,
     };
     this.store.enqueue({ kind: "quarantine", json: JSON.stringify(record) });
@@ -451,10 +481,13 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       }
       spawns.push(stripSeq(p));
     }
-    spawns.push(...houseFill([...staying, ...spawns], meta.maxSnakes, meta.minAuthors, tick));
+    // House bots keep real lives company; with none (the arena stopped), the room closes.
+    if ([...staying, ...spawns].some((e) => e.versionId !== null)) {
+      spawns.push(...houseFill([...staying, ...spawns], meta.maxSnakes, meta.minAuthors, tick));
+    }
     const bots = staying.length + spawns.length;
     const starts = spawns.length + idleLives;
-    let ticks = meta.limits.batchTicks || batchTicks(bots, starts, meta.limits.cpuLimitMs);
+    let ticks = meta.limits.batchTicks || batchTicks(bots, starts, meta.limits.cpuBudgetMs);
     if (meta.mode === "realtime") ticks = Math.min(ticks, REALTIME_BATCH_TICKS);
     return { spawns, faults, ticks };
   }
@@ -504,8 +537,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       meta.lastBatchTicks = result.ticks;
       meta.openChunkTick = sim.openChunkTick;
       if (real > 0) meta.nextLifeAfter = 0;
-      // A streak is about one life: once it ended, the next kill starts over.
-      if (result.ended.some((e) => e.entry.lifeId === meta.streak?.lifeId)) meta.streak = null;
+      // Progress ages kills out of the window.
+      meta.kills = ageKills(meta.kills ?? [], sim.world.tick);
       this.store.setMeta(meta);
       this.store.clearMarker();
     });
@@ -683,6 +716,44 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   private dropSim(): void {
     this.sim?.dispose();
     this.sim = null;
+  }
+
+  /**
+   * Whether an admin stopped the arena (`arena_control.paused`), re-read at most every
+   * `arenaControlPollMs`. A failed read keeps the last answer.
+   */
+  private async arenaStopped(meta: Meta): Promise<boolean> {
+    const now = Date.now();
+    if (now - this.pausedReadAt < meta.limits.arenaControlPollMs) return this.paused;
+    try {
+      const paused = await arenaPaused(this.env.DB);
+      if (paused !== this.paused) console.warn("room arena control", meta.roomId, { paused });
+      this.paused = paused;
+      this.pausedReadAt = now;
+    } catch (e) {
+      console.error("room arena control read failed", meta.roomId, e);
+    }
+    return this.paused;
+  }
+
+  /** The arena is stopped: drop the tickets, retire every life at the next batch. */
+  private retireAll(): void {
+    for (const p of this.store.pending()) this.store.removePendingLife(p.lifeId);
+    for (const e of this.store.roster()) {
+      if (e.leaving || e.evicted) continue;
+      this.store.markLeaving(e.lifeId);
+      this.sim?.markLeaving(e.lifeId);
+    }
+  }
+
+  /** Whether D1 has the ticket's version quarantined (by any room). Fails open: logs, false. */
+  private async quarantinedInD1(ticket: LifeTicket): Promise<boolean> {
+    try {
+      return await isQuarantined(this.env.DB, ticket.versionId);
+    } catch (e) {
+      console.error("room quarantine read failed", ticket.versionId, e);
+      return false;
+    }
   }
 
   private findLife(lifeId: string): LifeEntry | null {

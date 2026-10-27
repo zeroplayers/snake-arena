@@ -585,6 +585,22 @@ describe("zerosnake status", () => {
     const one = await run(["status", "--bot", "draft"]);
     expect(one.out).not.toContain("greedy");
   });
+
+  it("shows when the arena quarantined the active version", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("my-snake");
+    expect((await run(["deploy", "--skip-local-checks"])).code).toBe(0);
+    const reason = "Its calls kept hitting the room's CPU limit.";
+    const version = arena.versions.at(-1);
+    if (version) version.info.quarantine = { at: "2026-10-27T10:00:00Z", reason };
+    const r = await run(["status"]);
+    expect(r.out).toMatch(
+      /active\s+v1 · quarantined by the arena 2 h ago: no new lives until reviewed/,
+    );
+    const logs = await run(["logs"]);
+    expect(logs.out).toContain("Quarantined by the arena");
+    expect(logs.out).toContain(reason);
+  });
 });
 
 describe("zerosnake logs", () => {

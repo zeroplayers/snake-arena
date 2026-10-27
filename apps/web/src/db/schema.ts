@@ -232,11 +232,19 @@ export const versions = sqliteTable(
     /**
      * Position in the order of status changes, for the matchmaker's incremental poll
      * (`src/shared/arena.ts`): set to one more than the largest so far when a row is inserted or
-     * its `status` changes. Kept by triggers (migration `0004_ratings_stint_change_seq`); writers
-     * need do nothing. D1 runs one write transaction at a time, so it grows in commit order,
-     * unlike `updated_at`.
+     * its `status` or `quarantined_at` changes. Kept by triggers (migrations
+     * `0004_ratings_stint_change_seq`, `0007_version_quarantine`); writers need do nothing. D1
+     * runs one write transaction at a time, so it grows in commit order, unlike `updated_at`.
      */
     changeSeq: integer("change_seq").notNull().default(0),
+    /**
+     * Set by the arena's room backstop when the version's lives kept getting cut short by the
+     * room's CPU limit and were evicted (`apps/arena/src/room.ts`). The version stays `ready`
+     * (it isn't a ban) but the matchmaker starts no lives of it until an admin clears this
+     * (`src/shared/arena.ts`, "Quarantine"). `quarantine_reason` says what happened, for people.
+     */
+    quarantinedAt: integer("quarantined_at", { mode: "timestamp_ms" }),
+    quarantineReason: text("quarantine_reason"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

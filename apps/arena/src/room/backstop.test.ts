@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { lifeRow, quarantineReport } from "../db.ts";
-import type { LifeResult, QuarantineRecord } from "../protocol.ts";
+import { lifeRow } from "../db.ts";
+import type { LifeResult } from "../protocol.ts";
 import {
+  ageKills,
   type BotCall,
   type CrashMarker,
   INCIDENT_WINDOW_MS,
   judgeCrash,
+  KILL_WINDOW_TICKS,
   KILLS_TO_EVICT,
-  type KillStreak,
-  nextStreak,
+  type NamedKill,
+  nextKills,
+  ROOM_KILLS_TO_EVICT,
   retryDelayMs,
   type Verdict,
   WATCH_TICKS,
@@ -64,60 +67,105 @@ describe("judgeCrash", () => {
   });
 });
 
-describe("nextStreak", () => {
+describe("nextKills", () => {
   const suspect = (lifeId: string): Verdict => ({
     kind: "suspect",
     call: call(0, lifeId),
     gapMs: LIMIT,
     callMs: LIMIT,
   });
-  const run = (verdicts: [Verdict, boolean][]) => {
-    let streak: KillStreak | null = null;
-    const evicted: string[] = [];
-    for (const [verdict, watchedKill] of verdicts) {
-      const next = nextStreak(streak, verdict, watchedKill);
-      streak = next.streak;
-      if (next.evict) evicted.push(next.evict);
-    }
-    return { streak, evicted };
-  };
-
-  it(`evicts after ${KILLS_TO_EVICT} watched kills in a row in one life's calls`, () => {
-    const kills = Array.from({ length: KILLS_TO_EVICT }, () => [suspect("a"), true] as const);
-    expect(run(kills.slice(0, -1) as [Verdict, boolean][])).toEqual({
-      streak: { lifeId: "a", kills: KILLS_TO_EVICT - 1 },
-      evicted: [],
+  const overrun: Verdict = { kind: "overrun", gapMs: LIMIT };
+  /** Kills as `[verdict, watched, frame tick]`; every eviction, in order, with its kill (1-based). */
+  const run = (verdicts: [Verdict, boolean, number?][]) => {
+    let kills: NamedKill[] = [];
+    const evicted: [string, number][] = [];
+    verdicts.forEach(([verdict, watchedKill, tick = 0], i) => {
+      const next = nextKills(kills, verdict, watchedKill, tick);
+      kills = next.kills;
+      for (const id of next.evict) evicted.push([id, i + 1]);
     });
-    expect(run(kills as [Verdict, boolean][])).toEqual({ streak: null, evicted: ["a"] });
+    return { kills, evicted };
+  };
+  const named = (ids: string) => [...ids].map((id) => [suspect(id), true] as [Verdict, boolean]);
+
+  it(`evicts a life named ${KILLS_TO_EVICT} times in the window`, () => {
+    expect(run(named("aa")).evicted).toEqual([]);
+    expect(run(named("aaa")).evicted).toEqual([["a", 3]]);
   });
 
-  it("starts over when a kill names another life or nobody in watch mode", () => {
-    const overrun: Verdict = { kind: "overrun", gapMs: LIMIT };
-    expect(
-      run([
-        [suspect("a"), true],
-        [suspect("a"), true],
-        [suspect("b"), true],
-        [suspect("a"), true],
-        [overrun, true], // between calls: a real overrun never gets there
-        [suspect("a"), true],
-        [suspect("a"), true],
-      ]).evicted,
-    ).toEqual([]);
+  it("can't be put off by colluders taking turns (they used to reset each other's streak)", () => {
+    // Two versions burning on their own tick parity: the kills alternate.
+    expect(run(named("ababab")).evicted).toEqual([
+      ["a", 5],
+      ["b", 6],
+    ]);
+    // However many take turns, the room loses at most ROOM_KILLS_TO_EVICT kills.
+    expect(ROOM_KILLS_TO_EVICT).toBe(6);
+    expect(run(named("abcdef")).evicted).toEqual(
+      [..."abcdef"].map((id) => [id, ROOM_KILLS_TO_EVICT]),
+    );
+    expect(run(named("abcabc")).evicted).toEqual([
+      ["a", 6],
+      ["b", 6],
+      ["c", 6],
+    ]);
+    // The kill that reaches both counts evicts everyone named.
+    expect(run(named("abcbaa")).evicted).toEqual([
+      ["a", 6],
+      ["b", 6],
+      ["c", 6],
+    ]);
+    // An evicted life's kills still count toward the room's cap.
+    expect(run(named("aabacb")).evicted).toEqual([
+      ["a", 4],
+      ["b", 6],
+      ["c", 6],
+    ]);
+  });
+
+  it("empties on a watched kill that names nobody (only a restart lands between calls)", () => {
+    const kills: [Verdict, boolean][] = [...named("aa"), [overrun, true], ...named("aab")];
+    expect(run(kills)).toEqual({
+      kills: [
+        { lifeId: "a", tick: 0 },
+        { lifeId: "a", tick: 0 },
+        { lifeId: "b", tick: 0 },
+      ],
+      evicted: [],
+    });
   });
 
   it("ignores restarts and unwatched kills (they can't name anyone)", () => {
     const restart: Verdict = { kind: "restart", gapMs: 100 };
-    const overrun: Verdict = { kind: "overrun", gapMs: LIMIT };
+    expect(run([...named("a"), [restart, true], [overrun, false], ...named("aa")]).evicted).toEqual(
+      [["a", 5]],
+    );
+  });
+
+  it(`forgets kills ${KILL_WINDOW_TICKS} ticks of progress back`, () => {
+    // Rare kills far apart in a long life don't add up.
+    const late = KILL_WINDOW_TICKS - 1;
     expect(
       run([
-        [suspect("a"), true],
-        [restart, true],
-        [overrun, false],
-        [suspect("a"), true],
-        [suspect("a"), true],
+        [suspect("a"), true, 0],
+        [suspect("a"), true, 1],
+        [suspect("a"), true, KILL_WINDOW_TICKS + 1],
       ]).evicted,
-    ).toEqual(["a"]);
+    ).toEqual([]);
+    expect(
+      run([
+        [suspect("a"), true, 0],
+        [suspect("a"), true, 1],
+        [suspect("a"), true, late],
+      ]).evicted,
+    ).toEqual([["a", 3]]);
+    // Committed batches age it too.
+    const kills = [
+      { lifeId: "a", tick: 0 },
+      { lifeId: "b", tick: 100 },
+    ];
+    expect(ageKills(kills, late)).toEqual(kills);
+    expect(ageKills(kills, KILL_WINDOW_TICKS + 50)).toEqual([{ lifeId: "b", tick: 100 }]);
   });
 });
 
@@ -151,24 +199,6 @@ describe("watchWindow", () => {
 it("backs off outbox retries exponentially up to 10 minutes", () => {
   expect([1, 2, 3, 4].map(retryDelayMs)).toEqual([1000, 2000, 4000, 8000]);
   expect(retryDelayMs(50)).toBe(600_000);
-});
-
-it("notes a quarantine as a failed check, keeping the report's checks and verdict", () => {
-  const q = { message: "under review" } as QuarantineRecord;
-  const before = { ok: true, checks: [{ name: "loads", ok: true }], qualificationScore: 12 };
-  expect(quarantineReport(before, q)).toEqual({
-    ok: true,
-    checks: [
-      { name: "loads", ok: true },
-      { name: "arena-backstop", ok: false, message: "under review" },
-    ],
-    qualificationScore: 12,
-  });
-  expect(quarantineReport(quarantineReport(before, q), q).checks).toHaveLength(2);
-  expect(quarantineReport(null, q)).toEqual({
-    ok: true,
-    checks: [{ name: "arena-backstop", ok: false, message: "under review" }],
-  });
 });
 
 it("keeps evicted lives out of the lives table", () => {

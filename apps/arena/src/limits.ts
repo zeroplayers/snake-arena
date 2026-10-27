@@ -8,9 +8,32 @@
  */
 import { DEFAULT_OP_BUDGET } from "@zerosnake/sandbox";
 
-/** CPU limit of one Durable Object invocation (Workers Paid default; `limits.cpu_ms` raises it). */
-export const DO_CPU_LIMIT_MS = 30_000;
-/** Share of the CPU limit a worst-case batch may use. */
+/**
+ * CPU limit of one invocation of this Worker, Durable Objects included: `limits.cpu_ms` in
+ * `wrangler.jsonc` (5 minutes, the plan maximum, which the checks consumer needs). Cloudflare has
+ * no per-class limit, so rooms get it too. `limits.test.ts` checks that it matches every
+ * environment of the config.
+ *
+ * This is when Cloudflare kills an invocation, so it is what the backstop's evidence is measured
+ * against: a batch that died younger than 0.9 × this was a restart.
+ */
+export const DO_CPU_LIMIT_MS = 300_000;
+
+/**
+ * The room's own CPU budget for an invocation, well under the hard limit: batches are sized for
+ * their worst case to fit `BATCH_CPU_SHARE` of it, and watch mode stops batches at shares of it.
+ * 30 s is what rooms were sized and measured for (Cloudflare's default limit, spike #2).
+ *
+ * So an honest invocation (worst case 15 s of CPU; a watched one at most this much wall time)
+ * never gets near the hard limit, and a kill is only ever a bot the meter can't stop, which the
+ * hard limit then has to: such a kill costs the full 300 s. The room can't stop a call sooner (the
+ * clock is frozen during CPU work, and what the meter can't charge never reaches its interrupt
+ * handler), so a burner costs up to (1 + `KILLS_TO_EVICT`) × 300 s per life, two lives before its
+ * version is quarantined. Making that seconds needs rooms in a Worker of their own with a lower
+ * `limits.cpu_ms`, which is a deploy change (a second script and a transferred DO class).
+ */
+export const ROOM_CPU_BUDGET_MS = 30_000;
+/** Share of the room's CPU budget a worst-case batch may use. */
 export const BATCH_CPU_SHARE = 0.5;
 
 /**
@@ -54,15 +77,19 @@ export const SAFETY_ALARM_MS = 1_000;
 
 /**
  * Ticks for the next batch: the most whose worst case (every bot at its full budget every tick,
- * plus starting `lifeStarts` lives) stays within `BATCH_CPU_SHARE` of the DO CPU limit.
+ * plus starting `lifeStarts` lives) stays within `BATCH_CPU_SHARE` of the room's CPU budget.
  *
  * The sandbox's meter bounds a tick's cost (with #62, also straight-line code, #60), except for
  * what it can't charge (operators on huge strings), which can still run far over this worst case.
  * The backstop (`room/backstop.ts`) covers that by evicting the bot.
  */
-export function batchTicks(bots: number, lifeStarts: number, cpuLimitMs = DO_CPU_LIMIT_MS): number {
+export function batchTicks(
+  bots: number,
+  lifeStarts: number,
+  cpuBudgetMs = ROOM_CPU_BUDGET_MS,
+): number {
   const budget =
-    cpuLimitMs * BATCH_CPU_SHARE - BATCH_OVERHEAD_MS - lifeStarts * WORST_LIFE_START_MS;
+    cpuBudgetMs * BATCH_CPU_SHARE - BATCH_OVERHEAD_MS - lifeStarts * WORST_LIFE_START_MS;
   const perTick = bots * WORST_BOT_TICK_MS + ENGINE_TICK_MS;
   return Math.max(1, Math.min(MAX_BATCH_TICKS, Math.floor(budget / perTick)));
 }

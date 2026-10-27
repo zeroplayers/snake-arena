@@ -36,6 +36,20 @@
       "when": 1793061971198,
       "tag": "0004_ratings_stint_change_seq",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1793067071315,
+      "tag": "0005_moderation",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1793070037007,
+      "tag": "0006_deploys_reason",
+      "breakpoints": true
     }
   ]
 }

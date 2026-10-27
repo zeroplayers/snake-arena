@@ -15,11 +15,18 @@
  * With an `Idempotency-Key`, a retry returns the version once it's queued, gets 409
  * `deploy_in_progress` while the first request is still going, and takes over a deploy stuck
  * unqueued for over a minute.
+ *
+ * Abuse controls: every call counts against the caller's `user` rate limit, deploys also
+ * against `deploy` (429 `rate_limited`, `src/server/rate-limit.ts`; the per-IP limit is applied
+ * before this, in `src/server/edge.ts`), except retries with an `Idempotency-Key` already in
+ * use. Banned users get 403 `user_banned` on every call, banned bots 403 `bot_banned` on deploy,
+ * and while an admin has paused deploys, 503 `deploys_paused` (`src/server/moderation.ts`) to
+ * new deploys; a retry of one made before the pause still gets its version.
  */
 import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import * as z from "zod";
 import { createDb, type Db } from "../db";
-import { bots, versions } from "../db/schema";
+import { arenaControl, bots, users, versions } from "../db/schema";
 import {
   CHECK_JOB_VERSION,
   type CheckJob,
@@ -43,6 +50,8 @@ import { insertBot } from "./bot-admin";
 import { parseBotName } from "./bot-names";
 import { authenticateCli, type CliIdentity } from "./cli-auth";
 import { deployQuota, quotaUsedSql, utcDayStart } from "./quota";
+import { noRateLimit, type RateLimiter, type RateLimitRule, rateLimitedBody } from "./rate-limit";
+import { setRequestOutcome, setRequestUser } from "./request-context";
 
 export interface CliApiEnv {
   DB: D1Database;
@@ -60,6 +69,8 @@ export interface CliApiOptions {
   now?: () => Date;
   /** Override any limit (tests); otherwise `DEPLOY_LIMITS` plus the env overrides. */
   limits?: Partial<DeployLimits>;
+  /** Per-user rate limits; none if left out. */
+  rateLimiter?: RateLimiter;
 }
 
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9_-]{8,128}$/;
@@ -72,13 +83,14 @@ class HttpError extends Error {
   constructor(
     readonly status: number,
     readonly body: ApiErrorBody,
+    readonly headers: Record<string, string> = {},
   ) {
     super(body.message);
   }
 }
 
-function fail(status: number, body: ApiErrorBody): never {
-  throw new HttpError(status, body);
+function fail(status: number, body: ApiErrorBody, headers?: Record<string, string>): never {
+  throw new HttpError(status, body, headers);
 }
 
 function unavailable(what: string): never {
@@ -293,6 +305,7 @@ const versionInfo = (bot: BotRow, v: VersionRow): VersionInfo => ({
 export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
   const db: Db = createDb(env.DB);
   const now = options.now ?? (() => new Date());
+  const rateLimiter = options.rateLimiter ?? noRateLimit;
   const limits: DeployLimits = {
     ...DEPLOY_LIMITS,
     deploysPerDay: positiveInt(env.DEPLOYS_PER_DAY) ?? DEPLOY_LIMITS.deploysPerDay,
@@ -313,9 +326,18 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
             : "Missing, expired or revoked CLI token. Run `zerosnake login`.",
         });
       }
+      setRequestUser(identity.user.id);
+      if (identity.banned) {
+        fail(403, {
+          error: "user_banned",
+          message: `Your account is suspended${identity.banned.reason ? `: ${identity.banned.reason}` : ""}. Nothing can be deployed from it.`,
+        });
+      }
+      await limit("user", identity.user.id);
       return await fn(identity);
     } catch (error) {
       if (!(error instanceof HttpError)) {
+        setRequestOutcome("internal_error");
         console.error("CLI API error", request.method, new URL(request.url).pathname, error);
         return json(
           {
@@ -325,10 +347,36 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
           500,
         );
       }
+      setRequestOutcome(error.body.error);
       const headers: Record<string, string> =
         error.status === 401 ? { "www-authenticate": 'Bearer realm="zerosnake"' } : {};
-      return json(error.body, error.status, headers);
+      return json(error.body, error.status, { ...headers, ...error.headers });
     }
+  }
+
+  async function limit(rule: RateLimitRule, userId: string) {
+    const verdict = await rateLimiter.check(rule, userId);
+    if (!verdict.ok) {
+      fail(429, rateLimitedBody(verdict), { "retry-after": String(verdict.retryAfter) });
+    }
+  }
+
+  /** 503 while an admin has paused deploys (the kill switch, `src/shared/arena.ts`). */
+  async function refuseIfDeploysPaused() {
+    const [control] = await db
+      .select({ deploysPaused: arenaControl.deploysPaused, reason: arenaControl.deploysReason })
+      .from(arenaControl)
+      .where(eq(arenaControl.id, 1))
+      .limit(1);
+    if (!control?.deploysPaused) return;
+    fail(
+      503,
+      {
+        error: "deploys_paused",
+        message: `Deploys are paused for now${control.reason ? ` (${control.reason})` : ""}. Nothing was deployed; try again later.`,
+      },
+      { "retry-after": "300" },
+    );
   }
 
   /** `:bot` is one of the caller's bots, by slug or id. */
@@ -378,7 +426,7 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
    * Makes the `validating` version, not yet queued. Next `n` and the daily quota in one
    * statement: D1 runs statements one at a time, so concurrent deploys can't take the same `n`
    * or squeeze past the quota. `undefined` if the quota is used up, the key is taken or the bot
-   * was archived meanwhile (the owner may archive it while the body is still uploading).
+   * was archived or banned meanwhile (that can happen while the body is still uploading).
    */
   async function insertVersion(
     bot: BotRow,
@@ -398,7 +446,11 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
         'validating', ${keys.bundleKey}, ${keys.sourceKey}, ${meta && JSON.stringify(meta)},
         ${idempotencyKey}, ${createdAt}, ${createdAt}
       WHERE ${quotaUsedSql(ownerId, utcDayStart(now()))} < ${limits.deploysPerDay}
-        AND EXISTS (SELECT 1 FROM ${bots} WHERE id = ${bot.id} AND archived_at IS NULL)
+        AND EXISTS (
+          SELECT 1 FROM ${bots} JOIN ${users} ON ${users.id} = ${bots.ownerId}
+          WHERE ${bots.id} = ${bot.id} AND ${bots.archivedAt} IS NULL
+            AND ${bots.bannedAt} IS NULL AND ${users.bannedAt} IS NULL
+        )
       ON CONFLICT DO NOTHING
       RETURNING n`);
     const n = inserted[0]?.n;
@@ -582,6 +634,13 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
       withCli(request, async ({ user }) => {
         const bot = await ownBot(user.id, botParam);
         const refuseArchived = (row: BotRow) => {
+          if (row.bannedAt) {
+            fail(403, {
+              error: "bot_banned",
+              message: `Bot "${row.slug}" is banned${row.banReason ? `: ${row.banReason}` : ""}. It can't be deployed to.`,
+              bot: botInfo(row),
+            });
+          }
           if (!row.archivedAt) return;
           fail(409, {
             error: "bot_archived",
@@ -589,7 +648,6 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
             bot: botInfo(row),
           });
         };
-        refuseArchived(bot);
         const idempotencyKey = request.headers.get("idempotency-key");
         if (idempotencyKey !== null && !IDEMPOTENCY_KEY.test(idempotencyKey)) {
           fail(400, {
@@ -597,6 +655,14 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
             message: "Idempotency-Key must be 8–128 of A-Z, a-z, 0-9, _ and -.",
           });
         }
+        // A retry of a deploy this key already made (the CLI retries 409 `deploy_in_progress`
+        // and lost answers) is the same deploy: it isn't charged the `deploy` rate limit again,
+        // and a pause that came after it doesn't hide it. A stale take-over that makes a new
+        // version still checks the pause, below.
+        const retried = idempotencyKey !== null && !!(await versionByKey(bot.id, idempotencyKey));
+        if (!retried) await limit("deploy", user.id);
+        refuseArchived(bot);
+        if (!retried) await refuseIfDeploysPaused();
         const raw = await readJson(request, limits.maxBodyBytes);
         checkFileCount(raw, limits);
         const body = parse(deployBody, raw);
@@ -637,12 +703,21 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
         for (let attempt = 0; attempt < 3; attempt++) {
           const settled = await settle();
           if (settled) return settled;
+          if (retried) await refuseIfDeploysPaused();
           const version = await insertVersion(bot, user.id, keys, body.meta, idempotencyKey);
           if (version) return finishDeploy(bot, version, upload, idempotencyKey);
-          // Nothing inserted: the bot was archived during the upload, the quota is used up, or
-          // a concurrent retry took the key.
+          // Nothing inserted: the bot was archived or banned during the upload (or its owner
+          // was), the quota is used up, or a concurrent retry took the key.
           const [current] = await db.select().from(bots).where(eq(bots.id, bot.id)).limit(1);
           if (current) refuseArchived(current);
+          const [owner] = await db
+            .select({ bannedAt: users.bannedAt })
+            .from(users)
+            .where(eq(users.id, user.id))
+            .limit(1);
+          if (owner?.bannedAt) {
+            fail(403, { error: "user_banned", message: "Your account was suspended meanwhile." });
+          }
           if (!idempotencyKey || !(await versionByKey(bot.id, idempotencyKey))) {
             quotaExceeded(await quota(user.id));
           }

@@ -10,6 +10,7 @@ import {
   runChecks,
 } from "@zerosnake/checks";
 import {
+  checkReportLines,
   DEPLOY_LIMITS,
   type DeployLimits,
   type DeployMeta,
@@ -290,9 +291,16 @@ function isSuiteReport(report: unknown): report is CheckReport {
 }
 
 /**
+ * The names the suite's own checks have in a stored report (apps/arena's `versionReport`). Any
+ * other check was added after the suite ran: a moderator's ban, the arena's backstop.
+ */
+const SUITE_CHECK_NAMES = new Set(["limits", "loads", "seeds", "qualification"]);
+
+/**
  * Lines for a stored version report (`versions.report`), tolerant of fields it doesn't know:
  * - the checks consumer's `{ ok, checks, suite, text, qualificationScore }`: its `suite` (a
- *   `@zerosnake/checks` report) as `zerosnake test` prints it, else its `text`;
+ *   `@zerosnake/checks` report) as `zerosnake test` prints it, else its `text`; failed checks
+ *   that aren't the suite's go first, since they're why a version the suite passed was rejected;
  * - a bare `@zerosnake/checks` report, printed the same way;
  * - else the `{ ok, checks, qualificationScore }` lines.
  */
@@ -306,10 +314,30 @@ export function formatReport(report: unknown): string[] {
   const suite = isSuiteReport(report) ? report : isSuiteReport(r?.suite) ? r.suite : null;
   const text = suite ? formatCheckReport(suite) : typeof r?.text === "string" ? r.text : "";
   if (text.trim()) {
-    return text
+    const lines = text
       .trimEnd()
       .split("\n")
       .map((line) => (line ? `  ${line}` : line));
+    const added = Array.isArray(r?.checks)
+      ? (r.checks as { name?: unknown; ok?: unknown; message?: unknown }[]).filter(
+          (c) =>
+            c.ok === false &&
+            typeof c.name === "string" &&
+            !SUITE_CHECK_NAMES.has(c.name) &&
+            // The server may have put it in `text` already.
+            !(typeof c.message === "string" && c.message && text.includes(c.message)),
+        )
+      : [];
+    if (added.length === 0) return lines;
+    const verdicts = checkReportLines({
+      ok: false,
+      checks: added.map((c) => ({
+        name: String(c.name),
+        ok: false,
+        ...(typeof c.message === "string" ? { message: c.message } : {}),
+      })),
+    });
+    return [...verdicts.map((line) => `  ${red("✗")} ${line}`), "", ...lines];
   }
   if (!r || !Array.isArray(r.checks)) return [];
   const lines = r.checks.map((c: { name?: unknown; ok?: unknown; message?: unknown }) => {

@@ -176,3 +176,125 @@ Defined in `src/shared/arena.ts` (`@zerosnake/web/shared`):
   the deleted row back.
 - **Checks consumer** (`src/shared/checks.ts`): when a version passes, it sets
   `versions.activated_at` and refuses if the bot is archived.
+
+## Operations
+
+Rate limits, the kill switch, bans, logs, metrics and alerts (issue #30). Nothing here relies on
+being secret: the code, the limits and the admin list are all public.
+
+### Rate limits
+
+Every `/api/*` request and server function call passes `src/server/edge.ts` (wired in
+`src/server.ts`, the Worker's entry) before TanStack Start sees it. The rules are in
+`src/server/rate-limit.ts`; the numbers are in `wrangler.jsonc` (`ratelimits`), and a test keeps
+the two in sync:
+
+| rule     | key                     | limit   | applies to                                                                                                                   |
+| -------- | ----------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `ip`     | client IP (IPv6 by /64) | 300/min | every `/api/*` and `/_serverFn/*` request                                                                                    |
+| `auth`   | client IP               | 30/min  | `/api/auth/*` except session reads and CLI token polling: sign-in, OAuth callback, device codes and approval, username claim |
+| `user`   | user id                 | 120/min | every CLI API call (CLI token) and server function (web session) of a signed-in user                                         |
+| `deploy` | user id                 | 6/min   | `POST /api/bots/:bot/versions`, on top of `user` and the daily quota                                                         |
+
+A refused request gets 429 with `Retry-After` and an `ApiErrorBody`:
+`{ "error": "rate_limited", "message": "…", "limit": 300, "retryAfter": 60 }`. Server functions
+return `{ ok: false, error: "rate_limited" }`. The CLI already retries 429s that aren't
+`quota_exceeded`. The exception is the CLI's device-flow polling (`/api/auth/cli/token`): it
+follows the device flow's own throttle (5 s interval, `slow_down` adds 5 s), and a poll refused
+by the `ip` limit gets that same RFC 8628 answer, 400 `{ "error": "slow_down" }`.
+
+**Why Cloudflare's rate-limit binding.** It runs on every request at no cost: the counter lives in
+the Cloudflare location that served it, with no call to a Durable Object or D1. The trade-off is
+precision. Counts are per location and eventually consistent, so a client spread over many
+locations, or a burst that lands before the counters sync, gets somewhat more than the limit.
+That's acceptable for shedding load and slowing down guessing. Everything that must be exact is
+counted in D1, in the same statement as the write: deploys per day, bots per author, lives per
+day. If a rule ever needs to be exact, a Durable Object per key can implement `RateLimitBinding`
+without changing callers.
+
+Better Auth's own limiter is off (`rateLimit.enabled: false`): it counts in memory per isolate, so
+on Workers it limited almost nothing. The `auth` and `ip` rules replace it. A missing binding or
+a failing check lets requests through and logs a warning, so the limiter can't take the site down.
+The bindings' `namespace_id`s (1001–1004 dev, 2001–2004 staging) only need to be unique in the
+account; nothing has to be created.
+
+### Admins, the kill switch and bans (`/admin`)
+
+Admins are listed in wrangler vars, comma-separated: `ADMIN_USER_IDS` (`users.id`) and/or
+`ADMIN_GITHUB_IDS` (numeric GitHub account ids, `gh api users/<login> --jq .id`). They are not
+GitHub logins: a login can be renamed and then registered by someone else, an id never changes.
+To find a user id on staging:
+
+```bash
+cd apps/web && pnpm exec wrangler d1 execute DB --env staging --remote --command "SELECT id FROM users WHERE username = '<you>'"
+```
+
+`/admin` works like `/bots`: web sessions only (a CLI token is never a session), every change
+must come from the site's origin, and each call counts against the admin's `user` rate limit.
+Non-admins get "admins only". Rules are in `src/server/moderation.ts`, and the contract for the
+arena is in `src/shared/arena.ts` ("Kill switch", "Moderation"):
+
+- **Pause the arena**: `arena_control.paused = 1` (one D1 row). The matchmaker starts no lives and
+  retires running ones; rooms check the row too. It's told at once through
+  `MatchmakerSiteRpc.arenaControlChanged` (best effort) and must poll the row at least every 30 s.
+- **Pause deploys**: `arena_control.deploys_paused = 1`. Deploys get 503 `deploys_paused`.
+- **Ban a user**: `users.banned_at`. Every `ready` version of theirs becomes `archived`, and versions
+  still in checks become `rejected`. They can sign in and look, but deploys get 403
+  `user_banned`, bot management refuses changes, the CLI can't be approved, and their profile and
+  leaderboard rows are gone. Admins can't be banned.
+- **Ban a bot**: `bots.banned_at`. Same as archiving it, but the owner can't restore it, roll back
+  or deploy to it (403 `bot_banned`) until an admin lifts the ban.
+- **Ban a version**: `status = 'rejected'` with a failed `moderation` check appended to its
+  report. This is final.
+
+Each ban changes `versions.status`, so the matchmaker's `change_seq` poll sees it, and a trigger
+(`versions_ready_unbanned`) stops any writer from making a banned bot's version `ready`. Every
+action is written to `moderation_actions` (shown on `/admin`), logged as `moderation.action` and
+counted in Analytics Engine.
+
+### Logs
+
+Workers Logs is on in both environments (`observability` in `wrangler.jsonc`). Each API request
+logs one structured record, `event: "api.request"`, with `requestId` (the `cf-ray`, also sent back
+as `x-request-id`), `userId`, `method`, `route` (the pattern, e.g. `/api/bots/:bot/versions`),
+`status`, `latencyMs` and `outcome` (the error code, or `ok`). In the dashboard (Workers & Pages →
+`zerosnake-web-staging` → Logs), filter on `event`, `route`, `outcome` or `userId`. The helper is
+`log()` in `packages/observability`. On the Free plan, Workers Logs keeps 200 000 events a day
+for 3 days. If traffic outgrows that, set `observability.logs.head_sampling_rate`.
+
+### Metrics
+
+Counters go to Workers Analytics Engine (`METRICS` binding, dataset `zerosnake_staging` on
+staging). The site writes deploys accepted and rejected (with the reason), 429s by rule and route,
+authentication failures, 5xx, admin actions and the liveness check. Event names, column layout,
+the events `apps/arena` should write (rooms, ticks/s, lives/h, rejected versions) and example
+queries are in [`packages/observability/README.md`](../../packages/observability/README.md). The
+dataset is created by the first write; Analytics Engine has to be available on the account
+(Workers & Pages → Analytics Engine).
+
+### Alerts
+
+Cloudflare has no built-in alert for Worker errors. Set them up as **Monitors** (Alerts →
+Monitors → Create a Monitor). A Monitor runs a SQL API query on a schedule and notifies by email
+or webhook. Choose **Threshold**, then **custom SQL** returning one column `value`, then a
+destination. Monitors and the SQL API are in beta (October 2026), so check the query preview when
+saving.
+
+| alert                   | query (Automatic time range, every 5 min)                                                                                                                                                                    | fire when |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
+| Site errors             | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'http.error'`                                                                                             | `> 0`     |
+| No lives recorded       | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'arena.liveness' AND blob3 = 'stalled'`                                                                   | `> 0`     |
+| Room crashed            | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'room.crashed'` (once apps/arena writes it)                                                               | `> 0`     |
+| Auth failures spike     | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'auth.failure'`                                                                                           | `> 50`    |
+| Arena worker exceptions | the Workers logs dataset (`logs.workersLogs`) in the visual builder: script `zerosnake-arena-staging`, error-level logs or exception outcomes. Field names are listed by `cf sql datasets --include-columns` | `> 0`     |
+
+**No lives recorded** comes from the Cron Trigger (`*/5 * * * *`, `src/server/liveness.ts`). It
+reads D1: the newest `lives` rows (by `rowid`, a few rows, not a scan), the latest activation of a
+`ready` version and the kill switch's last change (and counts 00:00 UTC, when quotas reset, as
+a fresh start). It reports `stalled` when the latest of those is older than
+`NO_LIVES_ALERT_MINUTES` (15) while the arena isn't paused and has playable versions: `ready`
+ones whose bot hasn't used its `livesPerBotPerDay` lives today. With no `ready` versions it's
+`idle` (house bots write no `lives` rows); when every bot's daily quota is used up, it's
+`exhausted` until 00:00 UTC, not an alert. Each run also logs
+`arena.liveness`, at level `error` with `alert: "no_lives"` when stalled, so a Workers Logs alert
+works as well. Locally, trigger it with `curl "http://localhost:3000/cdn-cgi/handler/scheduled"`.

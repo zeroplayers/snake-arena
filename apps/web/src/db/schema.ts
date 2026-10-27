@@ -52,6 +52,13 @@ export const users = sqliteTable("users", {
   displayUsername: text("display_username"),
   /** GitHub login at sign-in, used to suggest a username. */
   githubLogin: text("github_login"),
+  /**
+   * Set by an admin (`src/server/moderation.ts`); `null` while in good standing. A banned user
+   * can sign in and look, but can't deploy, create or change bots, or sign in the CLI, and none
+   * of their bots play (their `ready` versions were archived by the ban).
+   */
+  bannedAt: integer("banned_at", { mode: "timestamp_ms" }),
+  banReason: text("ban_reason"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -173,6 +180,12 @@ export const bots = sqliteTable(
      * version, doesn't count against `botsPerAuthor` and can't be deployed to until restored.
      */
     archivedAt: integer("archived_at", { mode: "timestamp_ms" }),
+    /**
+     * Set by an admin (`src/server/moderation.ts`). Like archiving, but only an admin lifts it:
+     * no `ready` version (a trigger refuses one), no deploys, no rollbacks or restore.
+     */
+    bannedAt: integer("banned_at", { mode: "timestamp_ms" }),
+    banReason: text("ban_reason"),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("bots_owner_slug_idx").on(t.ownerId, t.slug)],
@@ -348,6 +361,65 @@ export const ratings = sqliteTable(
       t.nLives,
       sql`${t.versionId} DESC`,
     ),
+  ],
+);
+
+// ─── Operations ─────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The kill switch: a single row (`id = 1`, made by the migration) that admins change from
+ * `/admin`. `paused` stops the arena (the matchmaker and rooms read it, contract in
+ * `src/shared/arena.ts`); `deploys_paused` makes the deploy API refuse new versions.
+ */
+export const arenaControl = sqliteTable(
+  "arena_control",
+  {
+    id: integer("id").primaryKey(),
+    paused: integer("paused", { mode: "boolean" }).notNull().default(false),
+    deploysPaused: integer("deploys_paused", { mode: "boolean" }).notNull().default(false),
+    /** Why `paused` last changed, shown on `/admin` and logged; free text. */
+    reason: text("reason"),
+    /** Why `deploys_paused` last changed; the deploy API's 503 quotes it. */
+    deploysReason: text("deploys_reason"),
+    /** Admin user id of the last change. */
+    updatedBy: text("updated_by"),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(now),
+  },
+  (t) => [check("arena_control_singleton", sql`${t.id} = 1`)],
+);
+
+export const moderationActionKinds = [
+  "pause_arena",
+  "resume_arena",
+  "pause_deploys",
+  "resume_deploys",
+  "ban_user",
+  "unban_user",
+  "ban_bot",
+  "unban_bot",
+  "ban_version",
+] as const;
+export type ModerationActionKind = (typeof moderationActionKinds)[number];
+
+/**
+ * Audit log of admin actions. Targets are plain ids, not foreign keys, so the record outlives
+ * a deleted account.
+ */
+export const moderationActions = sqliteTable(
+  "moderation_actions",
+  {
+    id: id(),
+    adminId: text("admin_id").notNull(),
+    action: text("action", { enum: moderationActionKinds }).notNull(),
+    targetUserId: text("target_user_id"),
+    targetBotId: text("target_bot_id"),
+    targetVersionId: text("target_version_id"),
+    reason: text("reason"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("moderation_actions_created_idx").on(t.createdAt),
+    check("moderation_actions_action_check", oneOf(t.action, moderationActionKinds)),
   ],
 );
 

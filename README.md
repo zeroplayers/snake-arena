@@ -43,6 +43,11 @@ To apply by hand:
 cd apps/web && pnpm exec wrangler d1 migrations apply DB --env staging --remote
 ```
 
+**Admins, rate limits, metrics and alerts**: see "Operations" in
+[`apps/web/README.md`](apps/web/README.md#operations). Set `ADMIN_USER_IDS` / `ADMIN_GITHUB_IDS`
+in `env.staging.vars` for `/admin`. The rate limit and Analytics Engine bindings need nothing
+created beforehand.
+
 **Secrets** (web): `BETTER_AUTH_SECRET`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, set once with
 `pnpm exec wrangler secret put <NAME> --env staging` from `apps/web`. The staging GitHub OAuth app uses
 homepage `https://arena.surninsynergy.dev` and callback `https://arena.surninsynergy.dev/api/auth/callback/github`.

@@ -9,6 +9,7 @@ import {
   explain,
   isTransient,
   NetworkError,
+  parseRetryAfter,
   RedirectError,
   withRetries,
 } from "./api.ts";
@@ -134,6 +135,9 @@ describe("explain", () => {
     expect(await explained(apiError(503, "unavailable", "Couldn't store the upload."))).toContain(
       "Nothing was deployed",
     );
+    expect(await explained(apiError(503, "arena_stopped", "The arena is stopped."))).toBe(
+      "The arena is stopped.\nThe server's admins stopped the arena for everyone; it isn't about your bot. Try again later.",
+    );
     expect(await explained(new Response("<html>", { status: 502 }))).toContain(
       "having trouble (HTTP 502)",
     );
@@ -158,6 +162,73 @@ describe("retries", () => {
     expect(isTransient(err(409, "idempotency_conflict"))).toBe(false);
     expect(isTransient(err(422, "bundle_too_large"))).toBe(false);
     expect(isTransient(err(401, "unauthorized"))).toBe(false);
+    expect(isTransient(err(503, "deploys_paused"))).toBe(false);
+    expect(isTransient(err(503, "arena_stopped"))).toBe(false);
+  });
+
+  it("read Retry-After as seconds or a date, else the body's retryAfter", async () => {
+    expect(parseRetryAfter("120", 0)).toBe(120_000);
+    expect(
+      parseRetryAfter("Tue, 27 Oct 2026 12:01:00 GMT", Date.parse("2026-10-27T12:00:00Z")),
+    ).toBe(60_000);
+    expect(parseRetryAfter("soon", 0)).toBeNull();
+    expect(parseRetryAfter(null, 0)).toBeNull();
+
+    const arena = new FakeArena();
+    arena.tokens.add("zsk_t");
+    arena
+      .fail(
+        "GET",
+        /^\/api\/me$/,
+        Response.json(
+          { error: "rate_limited", message: "" },
+          {
+            status: 429,
+            headers: { "retry-after": "7" },
+          },
+        ),
+      )
+      .fail("GET", /^\/api\/me$/, apiError(429, "rate_limited", "", { retryAfter: 9 }))
+      .fail("GET", /^\/api\/me$/, apiError(503, "unavailable", ""));
+    const api = new Api(SERVER, arena.remote(), "zsk_t");
+    const failure = () => api.call("GET", "/api/me").catch((e: ApiError) => e) as Promise<ApiError>;
+    expect((await failure()).retryAfterMs).toBe(7000);
+    expect((await failure()).retryAfterMs).toBe(9000);
+    expect((await failure()).retryAfterMs).toBeNull();
+  });
+
+  it("wait at least as long as the server asks, and give up if that's past the budget", async () => {
+    const remote = new FakeArena().remote();
+    const slept: number[] = [];
+    remote.sleep = async (ms) => {
+      slept.push(ms);
+    };
+    const limited = (seconds: number) =>
+      new ApiError(429, { error: "rate_limited", message: "" }, "/x", seconds * 1000);
+    let calls = 0;
+    const result = await withRetries(remote, async () => {
+      if (++calls < 3) throw limited(calls === 1 ? 30 : 0);
+      return "ok";
+    });
+    expect(result).toBe("ok");
+    expect(slept).toEqual([30_000, 2000]);
+
+    slept.length = 0;
+    await expect(withRetries(remote, () => Promise.reject(limited(300)))).rejects.toThrow(ApiError);
+    expect(slept).toEqual([]);
+  });
+
+  it("never retry a pause an admin switched on", async () => {
+    const remote = new FakeArena().remote();
+    let calls = 0;
+    const paused = () => {
+      calls++;
+      return Promise.reject(
+        new ApiError(503, { error: "deploys_paused", message: "" }, "/x", 300_000),
+      );
+    };
+    await expect(withRetries(remote, paused)).rejects.toThrow(ApiError);
+    expect(calls).toBe(1);
   });
 
   it("back off up to a total wait, then give up", async () => {

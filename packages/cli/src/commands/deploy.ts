@@ -219,7 +219,9 @@ export function upload(
             ? e.reason
             : e instanceof ApiError && e.code === "deploy_in_progress"
               ? "the server is still processing the first attempt"
-              : `HTTP ${(e as ApiError).status}`;
+              : e instanceof ApiError && e.code === "rate_limited"
+                ? "too many requests"
+                : `HTTP ${(e as ApiError).status}`;
         io.err(yellow(`Upload didn't go through (${why}); retrying in ${delay / 1000}s…`));
       },
     },

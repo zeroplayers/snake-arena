@@ -6,22 +6,44 @@
  *
  * Secrets (BETTER_AUTH_SECRET, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET) are not in this file:
  * `.dev.vars` locally (see `.dev.vars.example`), `wrangler secret put --env staging` on staging.
+ *
+ * Limits, kill switch and observability: see "Operations" in README.md.
  */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "zerosnake-web",
-  "main": "@tanstack/react-start/server-entry",
+  // Edge checks + TanStack Start, and the Cron Trigger (src/server.ts).
+  "main": "src/server.ts",
   "compatibility_date": "2026-10-15",
   "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true },
+  // Workers Logs: structured request logs (src/server/edge.ts) and invocation logs.
+  "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": true } },
+  // Arena liveness check (src/server/liveness.ts). Locally: curl "http://localhost:3000/cdn-cgi/handler/scheduled".
+  "triggers": { "crons": ["*/5 * * * *"] },
 
   // DEPLOYS_PER_DAY and BOTS_PER_AUTHOR override the CLI API's defaults (src/shared/deploy.ts).
+  // ADMIN_USER_IDS / ADMIN_GITHUB_IDS: comma-separated admins for /admin (src/server/moderation.ts);
+  // GitHub ids are numeric (`gh api users/<login> --jq .id`), never logins.
+  // NO_LIVES_ALERT_MINUTES: how long without lives the liveness check calls the arena stalled.
   "vars": {
     "ENVIRONMENT": "development",
     "BETTER_AUTH_URL": "http://localhost:3000",
     "DEPLOYS_PER_DAY": "20",
-    "BOTS_PER_AUTHOR": "3"
+    "BOTS_PER_AUTHOR": "3",
+    "ADMIN_USER_IDS": "",
+    "ADMIN_GITHUB_IDS": "",
+    "NO_LIVES_ALERT_MINUTES": "15"
   },
+  // Rate limits (src/server/rate-limit.ts; RATE_LIMITS there must match, a test checks).
+  // namespace_id: any integer unique in the Cloudflare account; nothing to create.
+  "ratelimits": [
+    { "name": "RATE_LIMIT_IP", "namespace_id": "1001", "simple": { "limit": 300, "period": 60 } },
+    { "name": "RATE_LIMIT_AUTH", "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } },
+    { "name": "RATE_LIMIT_USER", "namespace_id": "1003", "simple": { "limit": 120, "period": 60 } },
+    { "name": "RATE_LIMIT_DEPLOY", "namespace_id": "1004", "simple": { "limit": 6, "period": 60 } }
+  ],
+  // Metrics (@zerosnake/observability). The dataset is made by the first write.
+  "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "zerosnake_dev" }],
   "d1_databases": [
     // Same database as apps/arena. Local ID is arbitrary but must match apps/arena.
     // Migrations live here (src/db/schema.ts → `pnpm db:generate`) and are applied from here.
@@ -54,12 +76,40 @@
     "staging": {
       // Deployed as `zerosnake-web-staging`.
       "routes": [{ "pattern": "arena.surninsynergy.dev", "custom_domain": true }],
+      "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": true } },
+      "triggers": { "crons": ["*/5 * * * *"] },
       "vars": {
         "ENVIRONMENT": "staging",
         "BETTER_AUTH_URL": "https://arena.surninsynergy.dev",
         "DEPLOYS_PER_DAY": "20",
-        "BOTS_PER_AUTHOR": "3"
+        "BOTS_PER_AUTHOR": "3",
+        "ADMIN_USER_IDS": "",
+        "ADMIN_GITHUB_IDS": "",
+        "NO_LIVES_ALERT_MINUTES": "15"
       },
+      "ratelimits": [
+        {
+          "name": "RATE_LIMIT_IP",
+          "namespace_id": "2001",
+          "simple": { "limit": 300, "period": 60 }
+        },
+        {
+          "name": "RATE_LIMIT_AUTH",
+          "namespace_id": "2002",
+          "simple": { "limit": 30, "period": 60 }
+        },
+        {
+          "name": "RATE_LIMIT_USER",
+          "namespace_id": "2003",
+          "simple": { "limit": 120, "period": 60 }
+        },
+        {
+          "name": "RATE_LIMIT_DEPLOY",
+          "namespace_id": "2004",
+          "simple": { "limit": 6, "period": 60 }
+        }
+      ],
+      "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "zerosnake_staging" }],
       "d1_databases": [
         {
           "binding": "DB",

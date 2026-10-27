@@ -315,6 +315,49 @@ describe("zerosnake deploy", () => {
     expect(unfinished.err).toContain("✗ deploy: The checks didn't finish.");
   });
 
+  it("puts checks added after the suite (a ban, the arena's backstop) above its report", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("my-snake");
+    const suite = await runChecks(
+      { bundle: "export default {}", sources: [{ path: "src/bot.ts", bytes: 17 }] },
+      { seeds: [1], ticks: 10 },
+    );
+    // A version the suite passed would read "Checks passed", so the verdict has to come first.
+    const banned = {
+      ok: false,
+      checks: [
+        { name: "loads", ok: true, message: "loads" },
+        { name: "arena-backstop", ok: false, message: "It crashed its room 3 times." },
+        { name: "moderation", ok: false, message: "reads other bots' memory" },
+      ],
+      suite,
+      text: `Rejected by a moderator: reads other bots' memory\n\n${formatReport(suite)}`,
+    };
+    arena.outcome = { status: "rejected", report: banned as WebCheckReport, polls: 1 };
+    const r = await run(["deploy", "--skip-local-checks"]);
+    expect(r.code).toBe(1);
+    const backstop = r.err.indexOf("✗ Arena: It crashed its room 3 times.");
+    const ban = r.err.indexOf("✗ Moderation: reads other bots' memory");
+    const suiteAt = r.err.indexOf("Checks failed: this bot would be rejected.");
+    expect(backstop).toBeGreaterThan(-1);
+    expect(ban).toBeGreaterThan(backstop);
+    expect(suiteAt).toBeGreaterThan(ban);
+    expect((await run(["logs", "--version", "1"])).out).toContain(
+      "✗ Moderation: reads other bots' memory",
+    );
+
+    // Only the server's text (a suite this CLI doesn't know): the ban it carries isn't repeated.
+    arena.outcome = {
+      status: "rejected",
+      report: { ...banned, suite: { version: 999 } } as WebCheckReport,
+      polls: 1,
+    };
+    const textOnly = await run(["deploy", "--skip-local-checks"]);
+    expect(textOnly.err).toContain("  Rejected by a moderator: reads other bots' memory");
+    expect(textOnly.err).not.toContain("✗ Moderation");
+    expect(textOnly.err).toContain("✗ Arena: It crashed its room 3 times.");
+  });
+
   it("deploys to --bot, or the bot named in package.json", async () => {
     const { arena, run } = setUp();
     arena.addBot("greedy");
@@ -349,6 +392,48 @@ describe("zerosnake deploy", () => {
     expect(r.err).toContain("Upload didn't go through (ECONNRESET); retrying in 1s");
     expect(r.err).toContain("still processing the first attempt");
     expect(r.out).toContain("my-snake v1 passed the checks");
+  });
+
+  it("waits as long as Retry-After says before retrying", async () => {
+    const { arena, slept, run } = setUp();
+    arena.addBot("my-snake");
+    arena.fail(
+      "POST",
+      /versions$/,
+      Response.json(
+        { error: "rate_limited", message: "Too many requests.", retryAfter: 30 },
+        { status: 429, headers: { "retry-after": "30" } },
+      ),
+    );
+    const r = await run(["deploy", "--skip-local-checks", "--no-wait"]);
+    expect(r.code, r.err).toBe(0);
+    expect(slept).toContain(30_000);
+    expect(r.err).toContain("Upload didn't go through (too many requests); retrying in 30s");
+    expect(arena.versions).toHaveLength(1);
+  });
+
+  it("stops at once, with a clear message, while an admin has paused deploys", async () => {
+    const { arena, slept, run } = setUp();
+    arena.addBot("my-snake");
+    arena.fail(
+      "POST",
+      /versions$/,
+      Response.json(
+        {
+          error: "deploys_paused",
+          message:
+            "Deploys are paused for now (maintenance). Nothing was deployed; try again later.",
+        },
+        { status: 503, headers: { "retry-after": "300" } },
+      ),
+    );
+    const r = await run(["deploy", "--skip-local-checks"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("Deploys are paused for now (maintenance)");
+    expect(r.err).toContain("paused deploys for everyone; it isn't about your bot");
+    expect(r.err).not.toContain("retrying");
+    expect(arena.calls("POST", /versions$/)).toHaveLength(1);
+    expect(slept).toEqual([]);
   });
 
   it("prints the report and exits 1 when the checks reject the version", async () => {

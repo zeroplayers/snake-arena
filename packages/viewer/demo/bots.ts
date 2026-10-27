@@ -25,7 +25,7 @@ function steer(snake: Snake, heading: number, world: World): number {
 /** Steers home when close to the wall; `undefined` when the wall is far. */
 function avoidWall(snake: Snake, world: World, log: LogFn): Action | undefined {
   const { x, y } = snake.head;
-  const left = world.config.arenaRadius - Math.hypot(x, y);
+  const left = world.config.arenaHalfSize - Math.max(Math.abs(x), Math.abs(y));
   if (left > WALL_MARGIN + snake.size * 2) return undefined;
   log(`wall ${left.toFixed(1)} away, turning in`);
   return { turn: steer(snake, Math.atan2(-y, -x), world) };

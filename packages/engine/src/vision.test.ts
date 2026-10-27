@@ -55,7 +55,8 @@ describe("buildBotState", () => {
     });
     // y is up: heading π/2 moved the head towards +y.
     expect(state.self.head.y).toBeGreaterThan(40);
-    expect(state.wallDistance).toBeCloseTo(100 - Math.hypot(me.head.x, me.head.y), 12);
+    const { x, y } = me.head;
+    expect(state.wallDistance).toBeCloseTo(89 - Math.max(Math.abs(x), Math.abs(y)), 12);
     expect(buildBotState(world, me)).toEqual(state);
   });
 
@@ -268,7 +269,7 @@ describe("buildBotInfo", () => {
     const s = spawnSnake(world, { id: "a", author: "alice" });
     expect(buildBotInfo(world, s, { opBudget: 1000, logLimitBytes: 512 })).toEqual({
       snakeId: "a",
-      worldRadius: world.config.arenaRadius,
+      worldHalfSize: world.config.arenaHalfSize,
       visionRadius: world.config.visionRadius,
       tickRate: 10,
       maxLifeTicks: world.config.lifeCap,

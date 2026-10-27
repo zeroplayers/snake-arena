@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { MatchUpdate, SimLife } from "./protocol.ts";
 import { type SimServer, startSimServer } from "./server.ts";
 
-const info = { tps: 10, arenaRadius: 100, visionRadius: 40, title: "test" };
+const info = { tps: 10, arenaHalfSize: 89, visionRadius: 40, title: "test" };
 const life: SimLife = { id: "a#1", bot: "a", author: "a", bornTick: 0, you: true };
 let server: SimServer | undefined;
 

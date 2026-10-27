@@ -106,7 +106,7 @@ export class ReplaySource implements MatchSource {
     const config = (this.keyframes[0] as { world: World }).world.config;
     this.info = {
       tps: TICK_RATE,
-      arenaRadius: config.arenaRadius,
+      arenaHalfSize: config.arenaHalfSize,
       visionRadius: (config as { visionRadius?: number }).visionRadius ?? FALLBACK_VISION_RADIUS,
       ...(options.title !== undefined && { title: options.title }),
     };
@@ -292,7 +292,7 @@ export class ReplaySource implements MatchSource {
       tick,
       frame: {
         tick,
-        arenaRadius: world.config.arenaRadius,
+        arenaHalfSize: world.config.arenaHalfSize,
         snakes: renderSnakes,
         food: this.renderFood(world),
       },

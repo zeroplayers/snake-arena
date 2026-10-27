@@ -95,9 +95,47 @@ export function project(origin: Vec, angle: number, dist: number): Vec {
   return { x: origin.x + Math.cos(angle) * dist, y: origin.y + Math.sin(angle) * dist };
 }
 
-/** Distance from `point` to the arena edge (negative if outside). */
-export function distanceToWall(point: Vec, worldRadius: number): number {
-  return worldRadius - Math.hypot(point.x, point.y);
+/**
+ * Distance from `point` to the nearest edge of the square arena (negative if outside):
+ * `worldHalfSize - max(|x|, |y|)`. For your head this is `state.wallDistance`.
+ */
+export function distanceToWall(point: Vec, worldHalfSize: number): number {
+  return worldHalfSize - Math.max(Math.abs(point.x), Math.abs(point.y));
+}
+
+/** Result of {@link nearestWall}. */
+export interface Wall {
+  /** Same as {@link distanceToWall}. */
+  distance: number;
+  /** Unit vector pointing away from that wall, into the arena: e.g. `{ x: -1, y: 0 }` for the east wall. */
+  normal: Vec;
+}
+
+/**
+ * The arena edge closest to `point` and the direction away from it. Near a corner two edges
+ * are about as close; pass the heading `Math.atan2(normal.y, normal.x)` to {@link turnToward}
+ * to back off the nearest one, or steer for {@link CENTER} to leave the corner.
+ */
+export function nearestWall(point: Vec, worldHalfSize: number): Wall {
+  const ax = Math.abs(point.x);
+  const ay = Math.abs(point.y);
+  const normal = ax >= ay ? { x: point.x > 0 ? -1 : 1, y: 0 } : { x: 0, y: point.y > 0 ? -1 : 1 };
+  return { distance: worldHalfSize - Math.max(ax, ay), normal };
+}
+
+/**
+ * How far `origin` can travel straight along heading `angle` before its centre crosses an
+ * arena edge (0 if already outside). Unlike {@link distanceToWall}, this is what you have left
+ * on your current road: heading along a wall, it is large even when the wall is close.
+ */
+export function distanceToWallAlong(origin: Vec, angle: number, worldHalfSize: number): number {
+  if (Math.max(Math.abs(origin.x), Math.abs(origin.y)) >= worldHalfSize) return 0;
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  let t = Number.POSITIVE_INFINITY;
+  if (dx !== 0) t = Math.min(t, ((dx > 0 ? worldHalfSize : -worldHalfSize) - origin.x) / dx);
+  if (dy !== 0) t = Math.min(t, ((dy > 0 ? worldHalfSize : -worldHalfSize) - origin.y) / dy);
+  return t;
 }
 
 /** The item closest to `from`, or `undefined` if `items` is empty. Works on food or points. */

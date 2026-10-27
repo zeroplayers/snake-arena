@@ -1,8 +1,14 @@
-import { CENTER, defineBot, steerToward } from "@zerosnake/sdk";
-import { nearestReachableFood } from "./common.ts";
+import { defineBot, steerToward, turnToward } from "@zerosnake/sdk";
+import { nearestReachableFood, nearWall, turnRadius } from "./common.ts";
 
-/** Starts heading for the centre once the wall is this close. Late on purpose: easy is weak. */
+/** Turns straight away from the wall once it is this close. Late on purpose: easy is weak. */
 const WALL_MARGIN = 8;
+/**
+ * In the corners the wall counts as rounded off to this many turning radii, so easy turns back
+ * there in time, as it did from the round arena's wall: it is the qualification bar, and dying in
+ * corners would lower it.
+ */
+const CORNER_TURN_RADII = 4;
 
 /**
  * `easy`: heads for the nearest food and turns back from the wall at the last moment. Ignores
@@ -11,7 +17,8 @@ const WALL_MARGIN = 8;
 export const easy = defineBot({
   tick(state) {
     const { self } = state;
-    if (state.wallDistance < WALL_MARGIN) return { turn: steerToward(self, CENTER) };
+    const wall = nearWall(state, turnRadius(self) * CORNER_TURN_RADII);
+    if (wall.distance < WALL_MARGIN) return { turn: turnToward(self, wall.away) };
     const food = nearestReachableFood(state);
     return { turn: food ? steerToward(self, food) : 0 };
   },

@@ -6,9 +6,11 @@ import {
   distance,
   distanceSq,
   distanceToWall,
+  distanceToWallAlong,
   nearest,
   nearestDanger,
   nearestFood,
+  nearestWall,
   normalizeAngle,
   project,
   steerAway,
@@ -179,10 +181,32 @@ describe("project", () => {
 });
 
 describe("distanceToWall", () => {
-  it("measures to the circular edge", () => {
+  it("measures to the nearest edge of the square", () => {
     expect(distanceToWall({ x: 0, y: 0 }, 100)).toBe(100);
-    expect(distanceToWall({ x: 30, y: 40 }, 100)).toBe(50);
+    expect(distanceToWall({ x: 30, y: -40 }, 100)).toBe(60);
+    expect(distanceToWall({ x: 90, y: 90 }, 100)).toBe(10);
     expect(distanceToWall({ x: 0, y: 110 }, 100)).toBe(-10);
+  });
+});
+
+describe("nearestWall", () => {
+  it("points away from the closest edge", () => {
+    expect(nearestWall({ x: 90, y: 20 }, 100)).toEqual({ distance: 10, normal: { x: -1, y: 0 } });
+    expect(nearestWall({ x: -90, y: 20 }, 100).normal).toEqual({ x: 1, y: 0 });
+    expect(nearestWall({ x: 20, y: 95 }, 100)).toEqual({ distance: 5, normal: { x: 0, y: -1 } });
+    expect(nearestWall({ x: 20, y: -95 }, 100).normal).toEqual({ x: 0, y: 1 });
+  });
+});
+
+describe("distanceToWallAlong", () => {
+  it("is the road left on a heading, edges and corners included", () => {
+    expect(distanceToWallAlong({ x: 0, y: 0 }, 0, 100)).toBeCloseTo(100);
+    expect(distanceToWallAlong({ x: 0, y: 0 }, PI, 100)).toBeCloseTo(100);
+    expect(distanceToWallAlong({ x: 0, y: 0 }, PI / 4, 100)).toBeCloseTo(100 * Math.SQRT2);
+    // Running along the north wall, 5 below it: the east wall ends the road.
+    expect(distanceToWallAlong({ x: 50, y: 95 }, 0, 100)).toBeCloseTo(50);
+    expect(distanceToWallAlong({ x: 50, y: 95 }, PI / 2, 100)).toBeCloseTo(5);
+    expect(distanceToWallAlong({ x: 0, y: 101 }, -PI / 2, 100)).toBe(0);
   });
 });
 

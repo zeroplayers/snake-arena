@@ -32,7 +32,7 @@ describe("createHeroSource", () => {
     source.request(tick);
     const snap = source.snapshot(tick);
     expect(snap?.frame.snakes.length).toBeGreaterThan(0);
-    expect(snap?.frame.arenaRadius).toBe(38);
+    expect(snap?.frame.arenaHalfSize).toBe(34);
   });
 
   it("falls back where there is no WebSocket to the site (server render, tests)", async () => {

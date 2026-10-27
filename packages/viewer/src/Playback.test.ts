@@ -10,12 +10,12 @@ function recording(end: number, lives: LifeInfo[] = []): MatchSource & { request
   const requested: number[] = [];
   const snap = (tick: number): TickSnapshot => ({
     tick,
-    frame: { tick, arenaRadius: 100, snakes: [], food: [] },
+    frame: { tick, arenaHalfSize: 89, snakes: [], food: [] },
     snakes: [],
     deaths: [],
   });
   return {
-    info: { tps: 10, arenaRadius: 100, visionRadius: 30 },
+    info: { tps: 10, arenaHalfSize: 89, visionRadius: 30 },
     firstTick: 0,
     lastTick: end,
     endTick: end,

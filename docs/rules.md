@@ -17,12 +17,14 @@ Sources: [`config.ts`](../packages/engine/src/config.ts),
 
 ## Arena
 
-- A disc of radius **100** centred on (0, 0). `x` grows east (right), `y` grows **north (up)**.
+- A **square** centred on (0, 0): `x` and `y` both lie in [−89, 89] (`arenaHalfSize` 89, side 178,
+  about the area of a disc of radius 100). `x` grows east (right), `y` grows **north (up)**.
 - Angles are radians, counter-clockwise from +x: `0` is east, `π/2` north. Headings are kept in
   (−π, π].
-- A new snake spawns at a random spot within **80** of the centre (`arenaRadius × 0.8`), trying
-  up to 30 spots for one at least 10 units from every other snake's body, then taking the last one
-  tried. It faces the centre, with its body laid out straight behind it.
+- A new snake spawns at a uniformly random spot of the centred square [−71.2, 71.2]²
+  (`arenaHalfSize × 0.8`), trying up to 30 spots for one at least 10 units from every other
+  snake's body, then taking the last one tried. It faces the centre, with its body laid out
+  straight behind it.
 
 ## Mass, size and body
 
@@ -84,7 +86,7 @@ snakes have to keep eating to stay big, so circling in a corner doesn't pay.
 
 | Kind      | Value               | Pellet radius | Where it appears                            |
 | --------- | ------------------- | ------------- | ------------------------------------------- |
-| `ambient` | 1                   | 0.5           | uniformly at random within 98 of the centre |
+| `ambient` | 1                   | 0.5           | uniformly at random in [−87.2, 87.2]²       |
 | `boost`   | the mass burned (1) | 0.5           | at a boosting snake's tail                  |
 | `remains` | about 10 per pellet | 1.5           | along the body of a snake that died         |
 - **Ambient food** spawns, at most 4 pellets per tick, while the arena holds fewer than
@@ -116,8 +118,9 @@ head touches during its move is what kills it.
   bigger snake doesn't die by brushing the smaller one's body as it eats it. Masses are compared
   **after** this tick's boost and hunger, so boosting into a head-on against an equal snake loses
   it.
-- **Wall.** You die when your head point ends a tick farther than 100 from the centre, i.e. when
-  `state.wallDistance` would drop below 0. Your body radius doesn't count here.
+- **Wall.** You die when your head point ends a tick outside the square, i.e. when
+  `max(|x|, |y|) > 89` and `state.wallDistance` would drop below 0. Your body radius doesn't count
+  here. Corners are the dangerous spots: heading into one, a snake has two walls to turn away from.
 - **Your own body** never kills you.
 - A snake that dies this tick still kills others: its body and head stay in place for this tick's
   collisions.
@@ -137,7 +140,8 @@ where it stands without moving.
 
 When a snake dies for any reason, **all its mass** is dropped as `remains` pellets spread along its
 body: `ceil(mass / 10)` pellets of equal value, but never more pellets than the body has segments,
-each moved by up to half a segment gap in x and y. So pellets are worth at most 10 for small snakes
+each moved by up to half a segment gap in x and y (and kept within 87.2 of the centre on both
+axes, so remains of a snake that died at the wall can still be eaten). So pellets are worth at most 10 for small snakes
 and more for big ones (above mass ~380 the segment cap takes over: mass 1000 drops 76 pellets of
 about 13).
 

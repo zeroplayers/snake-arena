@@ -1,7 +1,7 @@
 import { turnToward } from "@zerosnake/sdk";
 import { describe, expect, it } from "vitest";
 import {
-  arenaRadius,
+  arenaHalfSize,
   castRay,
   collectObstacles,
   createRandom,
@@ -11,9 +11,9 @@ import {
 } from "./common.ts";
 import { line, self, snake, state } from "./testing.ts";
 
-describe("arenaRadius", () => {
+describe("arenaHalfSize", () => {
   it("is recovered from the head and wallDistance", () => {
-    expect(arenaRadius(state({ self: self({ head: { x: 30, y: 40 } }) }))).toBeCloseTo(100);
+    expect(arenaHalfSize(state({ self: self({ head: { x: 30, y: -40 } }) }))).toBeCloseTo(89);
   });
 });
 
@@ -33,6 +33,25 @@ describe("castRay", () => {
     expect(castRay({ x: 90, y: 0 }, 0, [], 100, 50)).toBeCloseTo(10);
     expect(castRay({ x: 90, y: 0 }, Math.PI, [], 100, 50)).toBe(50);
     expect(castRay({ x: 101, y: 0 }, Math.PI, [], 100, 50)).toBe(0);
+  });
+
+  it("stops at whichever edge of the square comes first", () => {
+    // Heading north-east from (90, 80): x = 100 is reached first, after 10 / cos(π/4).
+    expect(castRay({ x: 90, y: 80 }, Math.PI / 4, [], 100, 50)).toBeCloseTo(10 * Math.SQRT2);
+    expect(castRay({ x: 80, y: 95 }, Math.PI / 4, [], 100, 50)).toBeCloseTo(5 * Math.SQRT2);
+    expect(castRay({ x: 0, y: 95 }, Math.PI / 2, [], 100, 50)).toBeCloseTo(5);
+  });
+
+  it("can round off the corners", () => {
+    // Corner circle of radius 18 centred on (82, 82); from (80, 80) straight at it.
+    const diag = Math.PI / 4;
+    expect(castRay({ x: 80, y: 80 }, diag, [], 100, 50)).toBeCloseTo(20 * Math.SQRT2);
+    expect(castRay({ x: 80, y: 80 }, diag, [], 100, 50, 18)).toBeCloseTo(18 + 2 * Math.SQRT2);
+    // Edges away from the corners are unchanged.
+    expect(castRay({ x: 0, y: 90 }, Math.PI / 2, [], 100, 50, 18)).toBeCloseTo(10);
+    // Already inside a rounded-off corner: only the real square counts.
+    expect(castRay({ x: 98, y: 98 }, Math.PI, [], 100, 50, 18)).toBe(50);
+    expect(castRay({ x: 98, y: 98 }, 0, [], 100, 50, 18)).toBeCloseTo(2);
   });
 });
 
@@ -106,7 +125,7 @@ describe("steer", () => {
   it("turns the way it planned for a U-turn", () => {
     // Straight back is offset +π, checked as a left U-turn. turnToward() would resolve ±π to
     // a right turn, which here runs into the wall.
-    const nearWall = state({ self: self({ head: { x: 0, y: -95 } }) });
+    const nearWall = state({ self: self({ head: { x: 0, y: -84 } }) });
     const s = steer(nearWall, [], Math.PI, opts);
     expect(s.clearance).toBe(opts.lookahead);
     expect(s.turn).toBe(-1);

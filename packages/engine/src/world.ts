@@ -1,7 +1,7 @@
 import { createConfig, type EngineConfig } from "./config.ts";
 import { spawnAmbientFood } from "./food.ts";
 import { segmentCountForMass, sizeForMass } from "./growth.ts";
-import { cos, sin } from "./math.ts";
+import { atan2, cos, sin } from "./math.ts";
 import { rngFromState, seedRngState } from "./rng.ts";
 import type { Snake, SnakeId, Vec2, World } from "./types.ts";
 
@@ -43,16 +43,14 @@ export function spawnSnake(world: World, { id, author }: SpawnOptions): Snake {
 
   let x = 0;
   let y = 0;
-  let theta = 0;
+  const h = c.arenaHalfSize * c.spawnHalfSizeFactor;
   for (let attempt = 0; attempt < c.spawnAttempts; attempt++) {
-    const r = c.arenaRadius * c.spawnRadiusFactor * Math.sqrt(rng.next());
-    theta = rng.range(-Math.PI, Math.PI);
-    x = r * cos(theta);
-    y = r * sin(theta);
+    x = rng.range(-h, h);
+    y = rng.range(-h, h);
     if (isClear(world, x, y, c.spawnClearance)) break;
   }
 
-  const angle = theta > 0 ? theta - Math.PI : theta + Math.PI;
+  const angle = atan2(-y, -x);
   const mass = c.startMass;
   const size = sizeForMass(mass, c);
   const bodyLength = (segmentCountForMass(mass, c) - 1) * size;

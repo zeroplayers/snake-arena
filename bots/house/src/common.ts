@@ -17,10 +17,39 @@ import {
   type Vec,
 } from "@zerosnake/sdk";
 
-/** Arena radius, recovered from the head position and `wallDistance` (no `info` needed). */
-export function arenaRadius(state: Pick<BotState, "self" | "wallDistance">): number {
-  return Math.hypot(state.self.head.x, state.self.head.y) + state.wallDistance;
+/** Half-side of the square arena, recovered from the head and `wallDistance` (no `info` needed). */
+export function arenaHalfSize(state: Pick<BotState, "self" | "wallDistance">): number {
+  const { x, y } = state.self.head;
+  return Math.max(Math.abs(x), Math.abs(y)) + state.wallDistance;
 }
+
+/**
+ * The arena's edge as seen from the head, with its corners rounded off to radius `corner`:
+ * `distance` is `wallDistance` along the sides and less in the corners, where turning back takes
+ * more room; `away` is the heading straight away from that edge. Turn to `away`, not to the
+ * centre: off the axes, the shorter turn toward the centre can swing through the wall first.
+ */
+export function nearWall(
+  state: Pick<BotState, "self" | "wallDistance">,
+  corner: number,
+): { distance: number; away: number } {
+  const { x, y } = state.self.head;
+  const inner = arenaHalfSize(state) - corner;
+  const dx = Math.abs(x) - inner;
+  const dy = Math.abs(y) - inner;
+  if (dx > 0 && dy > 0) {
+    return {
+      distance: corner - Math.hypot(dx, dy),
+      away: Math.atan2(-Math.sign(y) * dy, -Math.sign(x) * dx),
+    };
+  }
+  if (Math.abs(x) >= Math.abs(y))
+    return { distance: state.wallDistance, away: x > 0 ? Math.PI : 0 };
+  return { distance: state.wallDistance, away: y > 0 ? -Math.PI / 2 : Math.PI / 2 };
+}
+
+/** `steer` rounds off the arena's corners to this many turning radii (see `castRay`). */
+export const CORNER_TURN_RADII = 3;
 
 /** Radius of the tightest circle the snake can drive at its current speed. */
 export function turnRadius(self: Pick<SelfState, "speed" | "turnRate">): number {
@@ -134,22 +163,53 @@ export function collectObstacles(
 }
 
 /**
+ * Distance from `from` along the unit vector (dx, dy) to the edge of the square of half-side
+ * `h`, with its corners rounded off to radius `corner` (0 if already outside). A road into a
+ * corner needs a much wider turn to get out than one into a flat wall (135° instead of 90°, with
+ * a second wall beside it), so the corners are kept clear of as if the wall curved there, like
+ * the round arena's did. Starting inside a rounded-off corner, only the real square counts.
+ */
+function wallDistanceAlong(from: Vec, dx: number, dy: number, h: number, corner: number): number {
+  const ax = Math.abs(from.x);
+  const ay = Math.abs(from.y);
+  if (Math.max(ax, ay) >= h) return 0;
+  let t = Number.POSITIVE_INFINITY;
+  if (dx !== 0) t = Math.min(t, ((dx > 0 ? h : -h) - from.x) / dx);
+  if (dy !== 0) t = Math.min(t, ((dy > 0 ? h : -h) - from.y) / dy);
+  const inner = h - corner;
+  if (
+    corner <= 0 ||
+    (ax > inner && ay > inner && (ax - inner) ** 2 + (ay - inner) ** 2 > corner ** 2)
+  )
+    return t;
+  // The square's exit point, if it lies in a corner zone, is beyond the rounded edge: the road
+  // leaves through that corner's arc instead (the rounded square is convex).
+  const ex = from.x + dx * t;
+  const ey = from.y + dy * t;
+  if (Math.abs(ex) <= inner || Math.abs(ey) <= inner) return t;
+  const px = from.x - Math.sign(ex) * inner;
+  const py = from.y - Math.sign(ey) * inner;
+  const b = px * dx + py * dy;
+  const c = px * px + py * py - corner * corner;
+  return Math.max(0, -b + Math.sqrt(Math.max(0, b * b - c)));
+}
+
+/**
  * Free distance from `from` along heading `angle` before touching an obstacle or the wall,
- * capped at `maxDist`. `wallRadius` should already be shrunk by our own radius.
+ * capped at `maxDist`. `wallHalfSize` (the square arena's) should already be shrunk by our own
+ * radius; `corner` rounds off its corners (see `wallDistanceAlong`).
  */
 export function castRay(
   from: Vec,
   angle: number,
   obstacles: readonly Obstacle[],
-  wallRadius: number,
+  wallHalfSize: number,
   maxDist: number,
+  corner = 0,
 ): number {
   const dx = Math.cos(angle);
   const dy = Math.sin(angle);
-  // Wall: solve |from + t·d| = wallRadius for the exit point.
-  const b = from.x * dx + from.y * dy;
-  const c = from.x * from.x + from.y * from.y - wallRadius * wallRadius;
-  let best = c >= 0 ? 0 : Math.min(maxDist, -b + Math.sqrt(b * b - c));
+  let best = Math.min(maxDist, wallDistanceAlong(from, dx, dy, wallHalfSize, corner));
   for (const o of obstacles) {
     const px = o.x - from.x;
     const py = o.y - from.y;
@@ -173,13 +233,14 @@ export function pathClearance(
   self: Pick<SelfState, "head" | "angle" | "speed" | "turnRate">,
   offset: number,
   obstacles: readonly Obstacle[],
-  wallRadius: number,
+  wallHalfSize: number,
   maxDist: number,
+  corner = 0,
 ): number {
   const r = turnRadius(self);
   const { head, angle } = self;
   if (offset === 0 || !Number.isFinite(r))
-    return castRay(head, angle, obstacles, wallRadius, maxDist);
+    return castRay(head, angle, obstacles, wallHalfSize, maxDist, corner);
   // Left turns (offset > 0) circle around a centre on the left of the heading.
   const side = offset > 0 ? 1 : -1;
   const cx = head.x - side * r * Math.sin(angle);
@@ -193,13 +254,15 @@ export function pathClearance(
   let from = head;
   for (const to of [at(offset / 2), at(offset)]) {
     const chord = distance(from, to);
-    const hit = castRay(from, angleTo(from, to), obstacles, wallRadius, chord);
+    const hit = castRay(from, angleTo(from, to), obstacles, wallHalfSize, chord, corner);
     if (hit < chord) return Math.min(maxDist, travelled + (hit * halfArc) / chord);
     travelled += halfArc;
     if (travelled >= maxDist) return maxDist;
     from = to;
   }
-  return travelled + castRay(from, angle + offset, obstacles, wallRadius, maxDist - travelled);
+  return (
+    travelled + castRay(from, angle + offset, obstacles, wallHalfSize, maxDist - travelled, corner)
+  );
 }
 
 export interface SteerOptions {
@@ -247,7 +310,8 @@ export function steer(
   previousTurn = 0,
 ): Steer {
   const { self } = state;
-  const wall = arenaRadius(state) - self.radius;
+  const wall = arenaHalfSize(state) - self.radius;
+  const corner = Math.min(wall, turnRadius(self) * CORNER_TURN_RADII);
   const step = (Math.PI * 2) / o.rays;
   let bestOffset = 0;
   let bestClearance = 0;
@@ -259,7 +323,7 @@ export function steer(
     const offset =
       k < 0 ? angleDiff(self.angle, desired) : (k % 2 === 1 ? (k + 1) / 2 : -k / 2) * step;
     const angle = self.angle + offset;
-    const clearance = pathClearance(self, offset, obstacles, wall, o.lookahead);
+    const clearance = pathClearance(self, offset, obstacles, wall, o.lookahead, corner);
     if (k === 0) ahead = clearance;
     const danger = clearance >= o.safe ? 0 : (1 - clearance / o.safe) * o.dangerWeight;
     // `turn` and `offset` have opposite signs, so the same sign means turning the other way.

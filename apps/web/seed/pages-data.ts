@@ -78,7 +78,7 @@ const RESPAWN_DELAY = 30;
 /** Plays the match and records it, as RoomDO would. */
 export function recordSeedReplay(): SeedReplay {
   // A small arena, so a two-minute match has a few deaths to look at.
-  const world = createWorld({ seed: 2026, config: { arenaRadius: 55 } });
+  const world = createWorld({ seed: 2026, config: { arenaHalfSize: 49 } });
   const chunks: Uint8Array[] = [];
   // One chunk for the whole match.
   const recorder = new ReplayRecorder(world, {

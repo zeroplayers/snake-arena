@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { FrameBuffer, interpolateSnake, lerpAngle, resamplePolyline } from "./interpolate.ts";
 import type { RenderFrame, RenderSnake } from "./types.ts";
 
-const frame = (tick: number): RenderFrame => ({ tick, arenaRadius: 10, snakes: [], food: [] });
+const frame = (tick: number): RenderFrame => ({ tick, arenaHalfSize: 10, snakes: [], food: [] });
 const snake = (segments: [number, number][], angle = 0): RenderSnake => ({
   id: "s",
   segments: segments.map(([x, y]) => ({ x, y })),

@@ -83,7 +83,7 @@ hard-coding them.
 | Field           | Default | Meaning                                                                               |
 | --------------- | ------- | ------------------------------------------------------------------------------------- |
 | `snakeId`       |         | your snake's id for this life; equals `state.self.id`                                 |
-| `worldRadius`   | 100     | the arena is a disc of this radius around (0, 0)                                      |
+| `worldHalfSize` | 89      | the arena is a square around (0, 0): `x` and `y` both lie in ±`worldHalfSize`         |
 | `visionRadius`  | 40      | you see snake points and food at most this far from your head                         |
 | `tickRate`      | 10      | ticks per second of game time (rooms may run faster in wall-clock time)               |
 | `maxLifeTicks`  | 6000    | the life retires after this many ticks                                                |
@@ -107,7 +107,7 @@ Passed to every `tick`. Plain JSON data.
 | `self`         | your snake, see below                                                                     |
 | `snakes`       | other snakes with at least one point in vision, nearest first                             |
 | `food`         | pellets in vision, nearest first: `{ x, y, value }`                                       |
-| `wallDistance` | `worldRadius − distance of your head from the centre`; you die when it would drop below 0 |
+| `wallDistance` | distance from your head to the nearest edge, `worldHalfSize − max(\|x\|, \|y\|)`; you die below 0 |
 
 ### `self`
 
@@ -202,7 +202,9 @@ dependencies and run inside the sandbox.
 | `angleDiff(from, to)`           | signed smallest rotation, positive = counter-clockwise (left)                 |
 | `normalizeAngle(a)`             | `a` wrapped into (−π, π]                                                      |
 | `distance(a, b)`, `distanceSq`  | distance between points (squared)                                             |
-| `distanceToWall(point, radius)` | distance from a point to the arena edge                                       |
+| `distanceToWall(point, half)`   | distance from a point to the nearest arena edge (negative outside)            |
+| `nearestWall(point, half)`      | that distance and the unit `normal` pointing away from the nearest edge       |
+| `distanceToWallAlong(p, a, half)` | how far `p` can go straight along heading `a` before crossing an edge       |
 | `project(origin, angle, dist)`  | the point `dist` ahead along `angle`                                          |
 | `nearest(from, items)`          | the closest item of a list of points                                          |
 | `nearestFood(state)`            | the closest visible pellet                                                    |

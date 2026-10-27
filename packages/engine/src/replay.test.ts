@@ -349,7 +349,7 @@ describe("hostile input", () => {
   it("rejects configs that would allocate or loop absurdly", () => {
     for (const config of [
       { gridCellSize: 1e-6 },
-      { arenaRadius: Number.POSITIVE_INFINITY },
+      { arenaHalfSize: Number.POSITIVE_INFINITY },
       { minSize: 0 },
       { baseSegments: 1e9 },
       { spawnAttempts: 1e12 },

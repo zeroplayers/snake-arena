@@ -69,8 +69,10 @@ will give the same. If a command is not available yet, say so; don't invent its 
 Work out the mechanism from the numbers, not from the cause label alone:
 
 - **`wall`:** was `wall` shrinking while `turn` was already ±1? Then it turned too late (margin
-  too small for the turning radius `speed / turnRate`, or boosting). Was `turn` pointing the wrong
-  way? Sign error.
+  too small for the turning radius `speed / turnRate`, or boosting). Was it in a corner? Corners
+  need far more room (two walls ahead): keep out of them. Was it turning toward the centre and
+  swung through the wall? Turn away from the nearest wall (`nearestWall(...).normal`) instead.
+  Was `turn` pointing the wrong way? Sign error.
 - **`collision`, `gap` shrinking over many ticks:** it saw the body and still drove in: avoidance
   only looked straight ahead, or turned toward another part of the body.
 - **`collision`, `gap` large then suddenly 0:** the other snake moved across the path (avoidance

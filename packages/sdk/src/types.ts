@@ -34,8 +34,11 @@ export interface BotAction {
 export interface BotInfo {
   /** Your snake's id for this life; matches `state.self.id`. */
   snakeId: string;
-  /** The arena is a circle of this radius centred on (0, 0). Touching its edge kills you. */
-  worldRadius: number;
+  /**
+   * The arena is a square centred on (0, 0) reaching this far along each axis: `x` and `y` both
+   * lie in [-worldHalfSize, worldHalfSize]. Your head crossing an edge kills you.
+   */
+  worldHalfSize: number;
   /** You see snakes and food whose distance from your head is at most this. */
   visionRadius: number;
   /** Simulation ticks per second of game time (wall-clock speed may differ). */
@@ -130,9 +133,11 @@ export interface BotState {
   /** Food within vision. */
   food: Food[];
   /**
-   * Distance from your head to the arena edge (`worldRadius - |head|`). You die when it drops
-   * below 0, i.e. when your head point crosses the edge. Use
-   * {@link angleTo}`(self.head, {x: 0, y: 0})` to head inwards.
+   * Distance from your head to the nearest arena edge
+   * (`worldHalfSize - max(|head.x|, |head.y|)`). You die when it drops below 0, i.e. when your
+   * head point crosses an edge. In a corner two edges are this close or nearly so; see
+   * {@link nearestWall} and {@link distanceToWallAlong}, or {@link angleTo}`(self.head, CENTER)`
+   * to head inwards.
    */
   wallDistance: number;
 }

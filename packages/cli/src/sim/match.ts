@@ -249,7 +249,7 @@ export async function runMatch(options: MatchOptions): Promise<MatchResult> {
 export function matchInfo(world: World, title: string): MatchInfo {
   return {
     tps: TICK_RATE,
-    arenaRadius: world.config.arenaRadius,
+    arenaHalfSize: world.config.arenaHalfSize,
     visionRadius: world.config.visionRadius,
     title,
   };

@@ -1,7 +1,7 @@
 import type { Bot } from "@zerosnake/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chaos, easy, hard, houseBots, medium, RANKED } from "./index.ts";
-import { act, drive, info, line, self, snake, state, WORLD_RADIUS } from "./testing.ts";
+import { act, drive, info, line, self, snake, state, WORLD_HALF_SIZE } from "./testing.ts";
 
 // Conventions (see @zerosnake/sdk): y is up, angle 0 is east, `turn` < 0 is left.
 const SMART: Record<string, Bot<object>> = { medium, hard, chaos };
@@ -64,7 +64,7 @@ describe.each(Object.entries(FARMERS))("%s: food", (_, bot) => {
 describe("easy", () => {
   it("turns back toward the centre near the wall", () => {
     // Near the top edge, heading north-east: the centre is to the right.
-    const me = self({ head: { x: 0, y: WORLD_RADIUS - 5 }, angle: Math.PI / 4 });
+    const me = self({ head: { x: 0, y: WORLD_HALF_SIZE - 5 }, angle: Math.PI / 4 });
     expect(act(easy, state({ self: me })).turn).toBe(1);
   });
 
@@ -72,7 +72,7 @@ describe("easy", () => {
     const s = state({ food: [{ x: 10, y: 0, value: 1 }], snakes: [wallAhead()] });
     expect(act(easy, s).turn).toBeCloseTo(0);
     // ...so it soon crashes in the arena the smarter bots survive.
-    expect(drive(easy, { obstacles: clutter(), worldRadius: 50, ticks: 2000 })).not.toBeNull();
+    expect(drive(easy, { obstacles: clutter(), worldHalfSize: 44, ticks: 2000 })).not.toBeNull();
   });
 });
 
@@ -91,7 +91,7 @@ describe.each(Object.entries(SMART))("%s: danger", (_, bot) => {
   });
 
   it("turns away from the wall ahead", () => {
-    const me = self({ head: { x: WORLD_RADIUS - 8, y: 0 }, angle: 0 });
+    const me = self({ head: { x: WORLD_HALF_SIZE - 8, y: 0 }, angle: 0 });
     expect(Math.abs(act(bot, state({ self: me })).turn)).toBe(1);
   });
 
@@ -104,7 +104,7 @@ describe.each(Object.entries(SMART))("%s: danger", (_, bot) => {
 
   it("survives a cluttered arena for 2000 ticks", () => {
     for (const seed of [1, 2, 3]) {
-      expect(drive(bot, { obstacles: clutter(), worldRadius: 50, ticks: 2000, seed })).toBeNull();
+      expect(drive(bot, { obstacles: clutter(), worldHalfSize: 44, ticks: 2000, seed })).toBeNull();
     }
   });
 });

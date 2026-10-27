@@ -8,7 +8,8 @@
  * - Units: positions, lengths, radii and distances are world units; speed is world units per
  *   tick; angles and `turnRate` are radians; time is ticks (`info.tickRate` per second).
  * - Coordinates: origin (0, 0) is the arena centre; `x` grows east (right), `y` grows north
- *   (UP, as in maths). The arena is a circle of `info.worldRadius` around the origin.
+ *   (UP, as in maths). The arena is a square: `x` and `y` both lie in
+ *   [-info.worldHalfSize, info.worldHalfSize].
  * - Angles: radians, counter-clockwise from +x: 0 points to +x, π/2 to +y; angles in state are
  *   normalised to (-π, π]. `Math.atan2(dy, dx)` is the heading to a point.
  * - Turning: `turn` > 0 turns right (clockwise, angle DEcreases), `turn` < 0 turns left
@@ -36,15 +37,18 @@ export {
   distance,
   distanceSq,
   distanceToWall,
+  distanceToWallAlong,
   nearest,
   nearestDanger,
   nearestFood,
+  nearestWall,
   normalizeAngle,
   project,
   steerAway,
   steerToward,
   TAU,
   turnToward,
+  type Wall,
 } from "./geometry.ts";
 export { createTickLog, LOG_LIMIT_BYTES, type LogFn, type TickLog, utf8Length } from "./log.ts";
 export type {

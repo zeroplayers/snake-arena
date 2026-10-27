@@ -64,8 +64,10 @@ Only `src/` is deployed. Keep tests and tools out of it.
 
 ## The game
 
-- **Arena:** a disc of radius `info.worldRadius` (default 100) centred on (0, 0). Your head crossing
-  its edge is death by `wall`.
+- **Arena:** a square centred on (0, 0): `x` and `y` both lie in ±`info.worldHalfSize` (default
+  89). Your head crossing an edge is death by `wall`. The corners are traps: heading into one you
+  have two walls ahead, so keep well clear of them, and to leave a wall turn straight away from it
+  (`nearestWall(head, info.worldHalfSize).normal`), not toward the centre.
 - **Time:** fixed ticks, `info.tickRate` (10) per second of game time. Rooms without spectators run
   faster than real time; nothing depends on wall-clock time.
 - **Movement:** every tick the snake turns by up to `self.turnRate` radians (0.25), then moves
@@ -85,7 +87,7 @@ Only `src/` is deployed. Keep tests and tools out of it.
 - **Deaths:**
   - your head touches another snake's body → `collision`, and the kill goes to that snake;
   - two heads touch → the shorter snake dies (kill to the longer one); equal length, both die;
-  - head crosses the arena edge → `wall`;
+  - head crosses an arena edge → `wall`;
   - over the op budget 3 ticks in a row → `timeout`; throwing 3 ticks in a row, or running out of
     memory → `error`;
   - at load: module evaluation + `init()` over their 100-interrupt budget → `timeout` before the
@@ -144,7 +146,7 @@ export default defineBot({
 - **`Math.random()`** works and is seeded per life (`info.seed`), so runs are reproducible.
 - **Throwing:** the tick's action is replaced by your previous one; three throws in a row kill you.
 
-`init(info)` gets `BotInfo`: `snakeId`, `worldRadius`, `visionRadius` (40), `tickRate` (10),
+`init(info)` gets `BotInfo`: `snakeId`, `worldHalfSize` (89), `visionRadius` (40), `tickRate` (10),
 `maxLifeTicks` (6000), `opBudget` (10), `logLimitBytes` (1024), `seed`.
 
 `tick(state, ...)` gets `BotState`:
@@ -153,7 +155,7 @@ export default defineBot({
 | -------------- | ------------------------------------------------------------------------------- |
 | `tick`         | Room tick (keeps counting across lives).                                        |
 | `lifeTick`     | Ticks since this life started; `0` on the first call.                           |
-| `wallDistance` | `worldRadius - distance(head, centre)`. You die below 0.                        |
+| `wallDistance` | Distance to the nearest edge: `worldHalfSize - max(\|x\|, \|y\|)`. Below 0: dead. |
 | `self`         | Your snake, always fully known (see below).                                     |
 | `snakes[]`     | Other snakes with at least one body point within `visionRadius`, nearest first. |
 | `food[]`       | Pellets `{ x, y, value }` within `visionRadius`, nearest first.                 |
@@ -187,7 +189,9 @@ Return `BotAction`: `{ turn: number in [-1, 1], boost?: boolean }`. Out-of-range
 | `normalizeAngle(a)`                          | Wraps into (-π, π].                                                                                                             |
 | `distance(a, b)`, `distanceSq(a, b)`         | Distances (`distanceSq` is cheaper for comparisons).                                                                            |
 | `project(origin, angle, dist)`               | The point `dist` ahead along a heading: look-ahead.                                                                             |
-| `distanceToWall(point, worldRadius)`         | Edge distance of any point (negative outside).                                                                                  |
+| `distanceToWall(point, worldHalfSize)`       | Distance from any point to the nearest edge (negative outside).                                                                 |
+| `nearestWall(point, worldHalfSize)`          | `{ distance, normal }`: the nearest edge and the unit vector pointing away from it, into the arena.                              |
+| `distanceToWallAlong(point, angle, half)`    | How far `point` can go straight along `angle` before crossing an edge: the road left, corners included.                         |
 | `nearest(from, items)`, `nearestFood(state)` | Closest point / pellet.                                                                                                         |
 | `nearestDanger(state)`                       | Closest visible body point of another snake: `{ snake, point, distance, gap }`; `gap` = free space, 0 = dead. Ignores the wall. |
 | `clamp`, `TAU`, `CENTER`                     | Small utilities; `CENTER` is (0, 0).                                                                                            |
@@ -218,6 +222,8 @@ candidate move is not. Precompute once per tick, filter by distance before inner
 | Symptom (in a death replay)                                       | Likely cause                                                                                                      | Fix                                                                                                       |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | `wall`, turning hard the last few ticks                           | Started turning back too late                                                                                     | Turn away when `wallDistance` < ~3 turning radii (`speed / turnRate`); more while boosting.               |
+| `wall` in a corner                                                | Two walls ahead; the turn out needs far more room than at a straight wall                                         | Keep out of the corners (treat them as rounded off to 3–4 turning radii); check the road with feelers.    |
+| `wall` while turning toward the centre                            | The shorter turn toward the centre swung the head through the wall first (off the axes)                           | Turn toward `nearestWall(...).normal`, straight away from the wall.                                       |
 | `wall` while chasing food near the edge                           | Food target overrides safety                                                                                      | Check safety after choosing a target, not before.                                                         |
 | Snake turns away from food / spins / hugs the wall                | `turn` sign flipped                                                                                               | Use `steerToward`/`turnToward`; `turn > 0` is right.                                                      |
 | Circles one pellet forever, starves                               | Pellet inside the turning circle                                                                                  | Skip food that would need a tighter circle than `speed / turnRate` (see `bestFood` in `src/bot.ts`).      |

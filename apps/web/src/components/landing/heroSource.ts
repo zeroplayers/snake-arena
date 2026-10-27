@@ -126,8 +126,8 @@ async function localMatch(seed = Math.floor(Math.random() * 2 ** 31)): Promise<M
   const source = new LiveEngineSource({
     bots: LINEUP.map((name, i) => houseBot(name, i)),
     seed,
-    // A smaller disc than a room's, so snakes read at hero size and meet more often.
-    config: { arenaRadius: 38 },
+    // A smaller square than a room's, so snakes read at hero size and meet more often.
+    config: { arenaHalfSize: 34 },
     // The hero never scrubs back; keep only a little history.
     maxTicks: 300,
     title: "House bots",

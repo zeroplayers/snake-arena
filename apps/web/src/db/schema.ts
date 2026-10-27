@@ -160,10 +160,19 @@ export const bots = sqliteTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
-    /** URL segment, unique per owner: `/@{username}/{slug}`. */
+    /**
+     * URL segment, unique per owner: `/@{username}/{slug}`, and the CLI's handle for the bot.
+     * Never changes: a rename only changes `name`, so links and `zerosnake deploy` keep working.
+     * An archived bot keeps its slug.
+     */
     slug: text("slug").notNull(),
     /** Skin id; `null` means the default skin. */
     skin: text("skin"),
+    /**
+     * Set when the owner archives the bot (`null` while active). An archived bot has no `ready`
+     * version, doesn't count against `botsPerAuthor` and can't be deployed to until restored.
+     */
+    archivedAt: integer("archived_at", { mode: "timestamp_ms" }),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("bots_owner_slug_idx").on(t.ownerId, t.slug)],
@@ -201,10 +210,25 @@ export const versions = sqliteTable(
      * `0002_page_counters`), so pages never count `lives` rows. Writers need do nothing.
      */
     livesCount: integer("lives_count").notNull().default(0),
+    /**
+     * When the version last became `ready` (checks passed, or the owner rolled back to it). Its
+     * rating covers lives started since then: a rollback starts the rating over (see
+     * `src/server/bot-admin.ts`). `null` if it hasn't been `ready` since migration 0003.
+     */
+    activatedAt: integer("activated_at", { mode: "timestamp_ms" }),
+    /**
+     * Position in the order of status changes, for the matchmaker's incremental poll
+     * (`src/shared/arena.ts`): set to one more than the largest so far when a row is inserted or
+     * its `status` changes. Kept by triggers (migration `0004_ratings_stint_change_seq`); writers
+     * need do nothing. D1 runs one write transaction at a time, so it grows in commit order,
+     * unlike `updated_at`.
+     */
+    changeSeq: integer("change_seq").notNull().default(0),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [
+    index("versions_change_seq_idx").on(t.changeSeq),
     // Bot page: versions newest first. No index on `status` alone: it would steer the
     // leaderboard query away from `ratings_rank_idx`.
     uniqueIndex("versions_bot_n_idx").on(t.botId, t.n),
@@ -212,6 +236,42 @@ export const versions = sqliteTable(
     // A bot has at most one active version.
     uniqueIndex("versions_bot_ready_idx").on(t.botId).where(sql`status = 'ready'`),
     check("versions_status_check", oneOf(t.status, versionStatuses)),
+  ],
+);
+
+export const activationKinds = ["activate", "deactivate", "archive_bot"] as const;
+export type ActivationKind = (typeof activationKinds)[number];
+
+/**
+ * Every change of a bot's active version made from the site (`src/server/bot-admin.ts`): a
+ * rollback (`activate`), archiving the active version (`deactivate`) or the whole bot. An audit
+ * log, and how rollbacks count against the daily deploy quota. Versions the checks make `ready`
+ * aren't logged here; they are `versions` rows created that day.
+ */
+export const activations = sqliteTable(
+  "activations",
+  {
+    id: id(),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    botId: text("bot_id")
+      .notNull()
+      .references(() => bots.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: activationKinds }).notNull(),
+    /** The version made active; `null` when the bot was left without one. */
+    versionId: text("version_id").references(() => versions.id, { onDelete: "cascade" }),
+    /** The version that was active before, if any. */
+    previousVersionId: text("previous_version_id").references(() => versions.id, {
+      onDelete: "set null",
+    }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    // Daily quota: an author's rollbacks today.
+    index("activations_owner_created_idx").on(t.ownerId, t.createdAt),
+    index("activations_bot_idx").on(t.botId),
+    check("activations_kind_check", oneOf(t.kind, activationKinds)),
   ],
 );
 
@@ -262,6 +322,13 @@ export const ratings = sqliteTable(
     /** Half-width of the 95% confidence interval around `mean`. */
     ci: real("ci").notNull(),
     nLives: integer("n_lives").notNull(),
+    /**
+     * The `versions.activated_at` of the stint this rating covers. A trigger (migration
+     * `0004_ratings_stint_change_seq`) ignores inserts and updates whose `activated_at` isn't the
+     * version's current one, so a writer that read the version before a rollback can't bring the
+     * old rating back (`src/shared/arena.ts`).
+     */
+    activatedAt: integer("activated_at", { mode: "timestamp_ms" }),
     /**
      * `mean - ci`, the leaderboard's sort key (as in `@zerosnake/rating`'s `leaderboard()`): a
      * lucky 30-life mean doesn't outrank a better bot with a tighter interval. Generated, so

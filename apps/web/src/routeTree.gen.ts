@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as BotsRouteImport } from './routes/bots'
 import { Route as DeviceRouteImport } from './routes/device'
 import { Route as LeaderboardRouteImport } from './routes/leaderboard'
 import { Route as SettingsRouteImport } from './routes/settings'
@@ -28,6 +29,11 @@ import { Route as ApiBotsBotVersionsNRouteImport } from './routes/api/bots/$bot/
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BotsRoute = BotsRouteImport.update({
+  id: '/bots',
+  path: '/bots',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DeviceRoute = DeviceRouteImport.update({
@@ -105,6 +111,7 @@ const ApiBotsBotVersionsNRoute = ApiBotsBotVersionsNRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/bots': typeof BotsRoute
   '/device': typeof DeviceRoute
   '/leaderboard': typeof LeaderboardRoute
   '/settings': typeof SettingsRoute
@@ -122,6 +129,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/bots': typeof BotsRoute
   '/device': typeof DeviceRoute
   '/leaderboard': typeof LeaderboardRoute
   '/settings': typeof SettingsRoute
@@ -140,6 +148,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/bots': typeof BotsRoute
   '/device': typeof DeviceRoute
   '/leaderboard': typeof LeaderboardRoute
   '/settings': typeof SettingsRoute
@@ -159,6 +168,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/bots'
     | '/device'
     | '/leaderboard'
     | '/settings'
@@ -176,6 +186,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/bots'
     | '/device'
     | '/leaderboard'
     | '/settings'
@@ -193,6 +204,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/bots'
     | '/device'
     | '/leaderboard'
     | '/settings'
@@ -211,6 +223,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  BotsRoute: typeof BotsRoute
   DeviceRoute: typeof DeviceRoute
   LeaderboardRoute: typeof LeaderboardRoute
   SettingsRoute: typeof SettingsRoute
@@ -232,6 +245,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/bots': {
+      id: '/bots'
+      path: '/bots'
+      fullPath: '/bots'
+      preLoaderRoute: typeof BotsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/device': {
@@ -359,6 +379,7 @@ const ApiBotsRouteWithChildren =
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  BotsRoute: BotsRoute,
   DeviceRoute: DeviceRoute,
   LeaderboardRoute: LeaderboardRoute,
   SettingsRoute: SettingsRoute,

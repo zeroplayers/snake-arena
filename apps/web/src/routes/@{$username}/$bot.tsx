@@ -76,7 +76,9 @@ function BotPage() {
         </p>
         <h1 className="title">{bot.name}</h1>
         <p className="muted">
-          {active ? (
+          {bot.archivedAt ? (
+            <>Archived by its author on {formatDate(bot.archivedAt)}.</>
+          ) : active ? (
             <>
               Active: <span className="accent">v{active.n}</span>, rated{" "}
               {formatRating(active.rating, active.ratingCi)}

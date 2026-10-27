@@ -260,4 +260,22 @@ describe("leaderboard order", () => {
       ratedLives: 30,
     });
   });
+
+  it("leaves out archived bots", async () => {
+    await d1.db.batch([
+      d1.db.prepare(
+        "INSERT INTO bots (id, owner_id, name, slug) VALUES ('t-gone', 'seed-grace', 'Gone', 'gone')",
+      ),
+      d1.db.prepare(
+        "INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key) VALUES ('t-gone-1', 't-gone', 1, 'ready', 'b', 's')",
+      ),
+      d1.db.prepare(
+        "INSERT INTO ratings (version_id, mean, ci, n_lives) VALUES ('t-gone-1', 900, 10, 200)",
+      ),
+    ]);
+    expect((await getLeaderboard(db))[0]?.botSlug).toBe("gone");
+    // A `ready` version on an archived bot breaks an invariant; the leaderboard still holds.
+    await d1.db.prepare("UPDATE bots SET archived_at = 1 WHERE id = 't-gone'").run();
+    expect((await getLeaderboard(db)).map((r) => r.botSlug)).not.toContain("gone");
+  });
 });

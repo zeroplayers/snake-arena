@@ -32,6 +32,9 @@ import {
 const DAY_MS = 86_400_000;
 const key = (room: string, tick: number) => `${room}/${String(tick).padStart(10, "0")}.zsr`;
 
+// The fixtures write a few hundred rows and R2 objects through workerd.
+vi.setConfig({ hookTimeout: 30_000 });
+
 let platform: Awaited<ReturnType<typeof createTestPlatform>>;
 let env: TestPlatformEnv;
 
@@ -63,14 +66,16 @@ async function reset() {
 }
 
 /** A bot with one version, `ready` unless said otherwise. */
-async function addBot(bot: string, version: string, status = "ready", n = 1) {
-  await run(
+function botSql(bot: string, version: string, status = "ready", n = 1) {
+  return [
     `INSERT INTO bots (id, owner_id, name, slug) VALUES ('${bot}', 'u', '${bot}', '${bot}')
      ON CONFLICT DO NOTHING`,
     `INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key)
      VALUES ('${version}', '${bot}', ${n}, '${status}', 'b', 's')`,
-  );
+  ];
 }
+
+const addBot = (...args: Parameters<typeof botSql>) => run(...botSql(...args));
 
 function lifeSql(
   id: string,
@@ -123,24 +128,24 @@ describe("loadPinnedLives", () => {
   beforeAll(async () => {
     await reset();
     // 21 ranked bots, `b01` first; each has 7 lives scoring 10..16, all below the filler's.
-    for (let i = 1; i <= REPLAY_PINNED_TOP_BOTS + 1; i++) {
-      const n = String(i).padStart(2, "0");
-      await addBot(`b${n}`, `v${n}`);
-      const lives = Array.from({ length: 7 }, (_, j) =>
-        lifeSql(`v${n}-${j}`, `v${n}`, { score: 10 + j, replayKey: key(`room-${n}`, j) }),
-      );
-      await run(
-        ...lives,
+    const ranked = Array.from({ length: REPLAY_PINNED_TOP_BOTS + 1 }, (_, k) => {
+      const n = String(k + 1).padStart(2, "0");
+      return [
+        ...botSql(`b${n}`, `v${n}`),
+        ...Array.from({ length: 7 }, (_, j) =>
+          lifeSql(`v${n}-${j}`, `v${n}`, { score: 10 + j, replayKey: key(`room-${n}`, j) }),
+        ),
         `INSERT INTO ratings (version_id, activated_at, mean, ci, n_lives)
-         VALUES ('v${n}', (SELECT activated_at FROM versions WHERE id = 'v${n}'), ${100 - i}, 0, 30)`,
-      );
-    }
-    // `b01`'s older version: its best life counts for the bot.
-    await addBot("b01", "v01-old", "archived", 2);
-    await run(lifeSql("v01-old-best", "v01-old", { score: 500, replayKey: key("room-01", 99) }));
-    // An unranked bot with 120 lives scoring 1000..1119, the best of all time.
-    await addBot("filler", "vf");
+         VALUES ('v${n}', (SELECT activated_at FROM versions WHERE id = 'v${n}'), ${99 - k}, 0, 30)`,
+      ];
+    });
     await run(
+      ...ranked.flat(),
+      // `b01`'s older version: its best life counts for the bot.
+      ...botSql("b01", "v01-old", "archived", 2),
+      lifeSql("v01-old-best", "v01-old", { score: 500, replayKey: key("room-01", 99) }),
+      // An unranked bot with 120 lives scoring 1000..1119, the best of all time.
+      ...botSql("filler", "vf"),
       `INSERT INTO lives (id, version_id, room, start_tick, end_tick, score, replay_key, started_at,
          ended_at)
        WITH RECURSIVE seq(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM seq WHERE i < 119)

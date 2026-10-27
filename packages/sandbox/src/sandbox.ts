@@ -16,19 +16,26 @@ import {
   type QuickJSRuntime,
   type QuickJSWASMModule,
 } from "quickjs-emscripten-core";
+import { type InstrumentResult, instrument, MAX_STRING_LENGTH } from "./instrument.ts";
 import { PRELUDE } from "./prelude.ts";
-import { checkSource } from "./source.ts";
 
-/** Interrupt-handler calls allowed per `tick()`; use it as `BotInfo.opBudget`. */
+/**
+ * Per-tick budget; use it as `BotInfo.opBudget`. A tick may make that many interrupt-handler calls
+ * and spend `opBudget × WORK_PER_OP` cost units (≈ 10 ms of CPU on an M1).
+ */
 export const DEFAULT_OP_BUDGET = 10;
 /** Cap of the wasm heap shared by every bot of one {@link Sandbox}. */
 export const DEFAULT_WASM_MEMORY_CAP_BYTES = 64 * 1024 * 1024;
 
 /**
- * Native work units (≈ 1 ns of CPU each) allowed per unit of op budget. Native built-ins that
- * loop internally are charged in these units by the prelude; see `prelude.ts`.
+ * Cost units (≈ 1 ns of CPU on an M1 each) allowed per unit of op budget. The instrumented bot
+ * code charges its own bytecode in these units (see `instrument.ts`), and the prelude charges
+ * native built-ins that loop internally (see `prelude.ts`).
  */
 export const WORK_PER_OP = 1_000_000;
+
+/** Instrumented bundles kept per sandbox, so respawning the same bot doesn't parse it again. */
+const INSTRUMENT_CACHE_SIZE = 16;
 
 const WASM_PAGE = 64 * 1024;
 /** The QuickJS emscripten build starts with 16 MB of heap. */
@@ -119,7 +126,10 @@ export interface TickReport {
   error: string | null;
   /** Interrupt-handler calls during this tick; the budget is `info.opBudget`. */
   interrupts: number;
-  /** Native work units charged this tick; the budget is `info.opBudget × WORK_PER_OP`. */
+  /**
+   * Cost units charged this tick, by the bot's code and by native built-ins; the budget is
+   * `info.opBudget × WORK_PER_OP`. Deterministic: the same bot and states give the same numbers.
+   */
   work: number;
   /** `log()` output of this tick, even when it timed out or threw. */
   log: TickLogOutput;
@@ -138,6 +148,7 @@ export interface TickReport {
 export class Sandbox {
   private readonly qjs: QuickJSWASMModule;
   private readonly heap: Heap;
+  private readonly instrumented = new Map<string, InstrumentResult>();
 
   private constructor(qjs: QuickJSWASMModule, heap: Heap) {
     this.qjs = qjs;
@@ -167,14 +178,30 @@ export class Sandbox {
 
   /**
    * Starts a life: a fresh runtime and context, the hardened prelude, the bot module (an ESM
-   * bundle that default-exports `defineBot({ init, tick })`) and `init(info)`.
+   * bundle that default-exports `defineBot({ init, tick })`, instrumented here with
+   * {@link instrument}) and `init(info)`.
    * Never throws for problems in the bot: a bot that fails to load comes back already dead.
    *
-   * `info.opBudget` is the per-tick budget in interrupt-handler calls ({@link DEFAULT_OP_BUDGET}),
-   * `info.seed` seeds `Math.random`, `info.logLimitBytes` caps `log()` output per tick.
+   * `info.opBudget` is the per-tick budget ({@link DEFAULT_OP_BUDGET}), `info.seed` seeds
+   * `Math.random`, `info.logLimitBytes` caps `log()` output per tick.
    */
   startLife(source: string, info: BotInfo, options: LifeOptions = {}): BotLife {
-    return new BotLife(this.qjs, this.heap, source, info, options);
+    return new BotLife(this.qjs, this.heap, this.instrument(source), info, options);
+  }
+
+  private instrument(source: string): InstrumentResult {
+    let result = this.instrumented.get(source);
+    if (result) {
+      this.instrumented.delete(source); // re-inserted below as the most recent
+    } else {
+      result = instrument(source);
+      if (this.instrumented.size >= INSTRUMENT_CACHE_SIZE) {
+        const oldest = this.instrumented.keys().next().value;
+        if (oldest !== undefined) this.instrumented.delete(oldest);
+      }
+    }
+    this.instrumented.set(source, result);
+    return result;
   }
 }
 
@@ -242,7 +269,8 @@ interface Vm {
   driver: Driver;
 }
 
-// Date and Proxy are off; BigInt and eval are removed by the prelude.
+// Date and Proxy are off; BigInt, eval and the Promise global are removed by the prelude (module
+// evaluation itself needs the Promise intrinsic).
 const INTRINSICS: Intrinsics = {
   BaseObjects: true,
   Date: false,
@@ -295,7 +323,7 @@ export class BotLife {
   constructor(
     qjs: QuickJSWASMModule,
     heap: Heap,
-    source: string,
+    bundle: InstrumentResult,
     info: BotInfo,
     options: LifeOptions,
   ) {
@@ -310,17 +338,16 @@ export class BotLife {
     this.maxStrikes = options.maxStrikes ?? 3;
     this.maxErrors = options.maxErrors ?? 3;
 
-    const problem = checkSource(source);
-    if (problem) {
+    if (!bundle.ok) {
       this.loadLog = { lines: [], truncated: false };
-      this.kill({ fault: "error", reason: "load", message: problem });
+      this.kill({ fault: "error", reason: "load", message: bundle.error });
       return;
     }
     const exhaustedBefore = heap.exhausted;
     try {
       this.vm = this.boot(qjs, options);
       heap.lives.add(this);
-      this.load(this.vm, source, options.initOpBudget ?? 100);
+      this.load(this.vm, bundle.source, options.initOpBudget ?? 100);
     } catch (e) {
       if (heap.exhausted === exhaustedBefore) {
         this.kill({ fault: "error", reason: "crash", message: hostMessage(e) });
@@ -375,7 +402,7 @@ export class BotLife {
       if (timedOut) {
         outcome = "timeout";
         error = this.forced
-          ? `over budget: native built-ins did more than ${this.opBudget * WORK_PER_OP} units of work`
+          ? `over budget: more than ${this.opBudget * WORK_PER_OP} cost units`
           : `over budget: more than ${this.opBudget} interrupts`;
       } else if (result.error) {
         outcome = "error";
@@ -486,6 +513,7 @@ export class BotLife {
     for (const [key, value] of Object.entries({
       seed: this.info.seed,
       maxArrayLength: options.maxArrayLength ?? 100_000,
+      maxStringLength: MAX_STRING_LENGTH,
       logLimitBytes: this.logLimit,
     })) {
       const v = ctx.newNumber(value);
@@ -560,8 +588,8 @@ export class BotLife {
 
   /**
    * Whether the current budgeted call went over. The interrupt handler keeps failing every check
-   * once this is true, and the host also checks it after the call returns, because QuickJS turns
-   * an interrupt inside a Promise executor or async function into a rejection the bot can catch.
+   * once this is true, and the host also checks it after the call returns, because bot code can
+   * swallow the stop before the next check comes (a `finally` that ends with `continue`).
    */
   private overBudget(): boolean {
     return this.forced || this.interrupts > this.interruptLimit;

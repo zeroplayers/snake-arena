@@ -153,9 +153,8 @@ describe("native work budget", () => {
   const loops = {
     "sparse slice": "const a = []; a.length = 1e5; for (;;) a.slice();",
     "caught errors": "const a = []; a.length = 1e8; for (;;) { try { a.indexOf(1); } catch {} }",
-    "string search": "const s = 'a'.repeat(1e5); for (;;) s.indexOf('b');",
-    "big string": "'x'.repeat(5e7);",
-    "naive search": "const s = 'a'.repeat(1e5); s.indexOf('a'.repeat(1000) + 'b');",
+    "string search": "const s = 'a'.repeat(1.6e4); for (;;) s.indexOf('b');",
+    "naive search": "const s = 'a'.repeat(1.6e4); for (;;) s.indexOf('a'.repeat(1000) + 'b');",
     "typed array alloc": "for (;;) new Uint8Array(1e6);",
     "buffer alloc": "for (;;) new ArrayBuffer(1e6);",
     "typed copy": "const t = new Uint8Array(1e5); for (;;) new Uint8Array(t);",
@@ -168,44 +167,46 @@ describe("native work budget", () => {
     "valueOf size":
       "let n = 0; const size = { valueOf: () => (n++ % 2 ? 1e7 : 1) }; for (;;) new ArrayBuffer(size);",
     // Review of #49: natives that walk every key or char of their input.
-    descriptors: "const s = 'x'.repeat(2e5); for (;;) Object.getOwnPropertyDescriptors(s);",
-    assign: "const s = 'x'.repeat(2e5); for (;;) Object.assign({}, s);",
+    descriptors: "const s = 'x'.repeat(1.6e4); for (;;) Object.getOwnPropertyDescriptors(s);",
+    assign: "const s = 'x'.repeat(1.6e4); for (;;) Object.assign({}, s);",
     "String.raw": "const raw = new Uint8Array(1e5); for (;;) String.raw({ raw });",
-    "Object.values": "const s = 'x'.repeat(2e5); for (;;) Object.values(s);",
+    "Object.values": "const s = 'x'.repeat(1.6e4); for (;;) Object.values(s);",
     "Object.entries": "const a = new Array(5e4).fill(0); for (;;) Object.entries(a);",
     isFrozen: "const a = new Array(5e4).fill(0); for (;;) Object.isFrozen(a);",
-    parseFloat: "const s = '1'.repeat(1e6); for (;;) parseFloat(s);",
-    RegExp: "const p = 'a'.repeat(1e5); for (;;) new RegExp(p);",
+    parseFloat: "const s = '1'.repeat(1.6e4); for (;;) parseFloat(s);",
+    RegExp: "const p = 'a'.repeat(1.6e4); for (;;) new RegExp(p);",
     "join separator":
-      "const a = new Array(100).fill(1); const sep = 'x'.repeat(1e5); for (;;) a.join(sep);",
+      "const a = new Array(10).fill(1); const sep = 'x'.repeat(1500); for (;;) a.join(sep).length;",
     "string indexOf in array":
-      "const s = 'x'.repeat(1e6); const a = new Array(100).fill(s + 'y'); for (;;) a.indexOf(s + 'z');",
+      "const s = 'x'.repeat(1.6e4); const a = new Array(100).fill(s + 'y'); for (;;) a.indexOf(s + 'z');",
     bind: "const args = new Array(6e4).fill(0); for (;;) Math.max.bind(null, ...args);",
     // Follow-up review of #49: built-ins that copy, convert or quote a whole string.
-    "JSON.stringify string": "const s = 'x'.repeat(1e5); for (;;) JSON.stringify(s);",
-    "JSON.stringify key": "const o = { ['k'.repeat(1e5)]: 1 }; for (;;) JSON.stringify(o);",
+    "JSON.stringify string": "const s = 'x'.repeat(1.6e4); for (;;) JSON.stringify(s);",
+    "JSON.stringify key": "const o = { ['k'.repeat(1.6e4)]: 1 }; for (;;) JSON.stringify(o);",
     "JSON.stringify escapes":
-      "const s = String.fromCharCode(1).repeat(1e4); for (;;) JSON.stringify(s);",
+      "const s = String.fromCharCode(1).repeat(2e3); for (;;) JSON.stringify(s);",
     "JSON.stringify String object":
-      "const s = new String('x'.repeat(1e5)); for (;;) JSON.stringify(s);",
+      "const s = new String('x'.repeat(1.6e4)); for (;;) JSON.stringify(s);",
     normalize: "const s = String.fromCharCode(101, 769).repeat(5e3); for (;;) s.normalize('NFC');",
-    toUpperCase: "const s = 'x'.repeat(1e5); for (;;) s.toUpperCase();",
-    toLowerCase: "const s = 'X'.repeat(1e5); for (;;) s.toLowerCase();",
-    localeCompare: "const s = 'x'.repeat(1e5); for (;;) s.localeCompare(s);",
+    toUpperCase: "const s = 'x'.repeat(1.6e4); for (;;) s.toUpperCase();",
+    toLowerCase: "const s = 'X'.repeat(1.6e4); for (;;) s.toLowerCase();",
+    localeCompare: "const s = 'x'.repeat(1.6e4); for (;;) s.localeCompare(s);",
     encodeURIComponent:
-      "const s = String.fromCharCode(233).repeat(1e4); for (;;) encodeURIComponent(s);",
-    escape: "const s = String.fromCharCode(233).repeat(1e4); for (;;) escape(s);",
-    decodeURIComponent: "const s = '%C3%A9'.repeat(1e4); for (;;) decodeURIComponent(s);",
+      "const s = String.fromCharCode(233).repeat(2e3); for (;;) encodeURIComponent(s);",
+    escape: "const s = String.fromCharCode(233).repeat(2e3); for (;;) escape(s);",
+    decodeURIComponent: "const s = '%C3%A9'.repeat(2e3); for (;;) decodeURIComponent(s);",
     "split into chars": "const s = 'x'.repeat(1e4); for (;;) s.split('');",
     "string spread": "const s = 'x'.repeat(1e4); for (;;) [...s];",
     "Array.from string": "const s = 'x'.repeat(1e4); for (;;) Array.from(s);",
     "global match": "const s = 'x'.repeat(1e4); for (;;) s.match(/x/g);",
     "matchAll spread": "const s = 'x'.repeat(1e4); for (;;) [...s.matchAll(/x/g)];",
-    "regex split": "const s = 'x,'.repeat(1e4); for (;;) s.split(/,/);",
-    "long replacement": "const r = 'y'.repeat(1e5); for (;;) 'xxxxxxxxxx'.replaceAll('x', r);",
-    "replacement prefix": "const s = 'x'.repeat(1000); for (;;) s.replaceAll('x', '$`');",
-    "replacer function": "const r = 'y'.repeat(1e5); for (;;) 'xxxxxxxxxx'.replace(/x/g, () => r);",
-    "Symbol.replace": "const r = 'y'.repeat(1e5); for (;;) /x/g[Symbol.replace]('xxxxxxxxxx', r);",
+    "regex split": "const s = 'x,'.repeat(8e3); for (;;) s.split(/,/);",
+    "long replacement": "const r = 'y'.repeat(1.6e3); for (;;) 'xxxxxxxxxx'.replaceAll('x', r);",
+    "replacement prefix": "const s = 'x'.repeat(100); for (;;) s.replaceAll('x', '$`');",
+    "replacer function":
+      "const r = 'y'.repeat(1.6e3); for (;;) 'xxxxxxxxxx'.replace(/x/g, () => r);",
+    "Symbol.replace":
+      "const r = 'y'.repeat(1.6e3); for (;;) /x/g[Symbol.replace]('xxxxxxxxxx', r);",
     "fake global":
       "const s = 'x'.repeat(1e4); const rx = /x/; Object.defineProperty(rx, 'global', { value: true }); for (;;) s.match(rx);",
   };
@@ -213,7 +214,6 @@ describe("native work budget", () => {
   const byWork = new Set([
     "sparse slice",
     "string search",
-    "big string",
     "naive search",
     "typed array alloc",
     "buffer alloc",
@@ -253,27 +253,18 @@ describe("native work budget", () => {
       const report = tickOnce(`${body} return { turn: 0 };`);
       expect(report.ms).toBeLessThan(FAST_MS);
       expect(report.outcome).toBe("timeout");
-      if (byWork.has(name)) expect(report.error).toMatch(/native built-ins/);
+      if (byWork.has(name)) expect(report.error).toMatch(/cost units/);
     });
   }
 
-  it("stops set algebra within one tick", () => {
+  it("stops the review repro: JSON.stringify of a long string 50 times per loop", () => {
+    // Strings are capped (16 384 chars), so the 4 MB string of the original repro can't exist.
     const report = tickOnce(
-      "for (;;) a.union(b); return { turn: 0 };",
-      "const a = new Set(), b = new Set(); for (let i = 0; i < 5e4; i++) { a.add(i); b.add(-i); }",
-    );
-    expect(report.ms).toBeLessThan(FAST_MS);
-    expect(report.error).toMatch(/native built-ins/);
-  });
-
-  it("stops the review repro: JSON.stringify of a 4 MB string 50 times", () => {
-    const report = tickOnce(
-      "for (let j = 0; j < 50; j++) JSON.stringify(s); return { turn: 0.5 };",
-      "const s = 'x'.repeat(4e6);",
+      "for (;;) for (let j = 0; j < 50; j++) JSON.stringify(s); return { turn: 0.5 };",
+      "const s = 'x'.repeat(1.6e4);",
     );
     expect(report.ms).toBeLessThan(FAST_MS);
     expect(report.outcome).toBe("timeout");
-    expect(report.error).toMatch(/native built-ins/);
     expect(report.action.turn).not.toBe(0.5);
   });
 
@@ -289,7 +280,7 @@ describe("native work budget", () => {
     it(`stops ${name} within one tick`, () => {
       const report = tickOnce(`for (;;) ${body}; return { turn: 0 };`, collections);
       expect(report.ms).toBeLessThan(FAST_MS);
-      expect(report.error).toMatch(/native built-ins/);
+      expect(report.error).toMatch(/cost units/);
     });
   }
 
@@ -345,18 +336,32 @@ describe("wrapped built-ins still behave", () => {
     ["JSON.stringify(Object.assign({ a: 1 }, 'xy', [3]))", '{"0":3,"1":"y","a":1}'],
     ["Object.keys(Object.getOwnPropertyDescriptors('ab')).join()", "0,1,length"],
     ["String.raw({ raw: ['a', 'b', 'c'] }, 1, 2)", "a1b2c"],
-    ["[...new Set([1, 2]).union(new Set([2, 3]))].join()", "1,2,3"],
-    ["new Set([1]).isSubsetOf(new Set([1, 2]))", "true"],
+    ["typeof new Set().union + typeof Set.prototype.isSubsetOf", "undefinedundefined"],
+    ["[...new Set('abca')].join() + new Map([[1, 2]]).get(1) + new Set().size", "a,b,c20"],
+    ["new (class S extends Set {})([1]).has(1) && new Map(new Map([['a', 1]])).get('a')", "1"],
+    ["JSON.stringify(Object.fromEntries([['a', 1], ['b', [2]]]))", '{"a":1,"b":[2]}'],
+    ["JSON.stringify(Object.fromEntries(new Map([['k', 'v']])))", '{"k":"v"}'],
+    [
+      "Symbol('d').description + Symbol.for('f').toString() + String(Symbol.iterator)",
+      "dSymbol(f)Symbol(Symbol.iterator)",
+    ],
+    ["typeof Symbol() + (Symbol.prototype.constructor === Symbol)", "symboltrue"],
+    [
+      "[1, 2].map(String).join() + ['1', '2'].map(Number)[1] + ['b', 'a'].sort().join('')",
+      "1,22ab",
+    ],
+    ["Uint8Array.from(new Set([1, 2])).join() + new Uint8Array(new Set([3])).join()", "1,23"],
+    ["new Uint8Array({ length: 2, 0: '7' }).join() + Math.max(...new Set([4, 5]))", "7,05"],
+    ["Array.prototype.push.call({ length: 1 }, 'x') + [1].at(-1)", "3"],
+    ["/a/g.test('a') + '' + /b/.exec('ab').index + [1, [2]].toString()", "true11,2"],
+    ["Math.max.bind(null, 1).name + (function f() {}).bind().name", "bound maxbound f"],
     ["parseInt('ff', 16) + parseFloat('1.5') + Number(isNaN('x'))", "257.5"],
     ["encodeURIComponent('a b') + decodeURI('%41')", "a%20bA"],
     ["new RegExp('a+', 'g').test('caa') && RegExp('b').source", "b"],
     ["Object.isFrozen(Object.freeze([1])) && Object.entries({ a: 1 }).length", "1"],
     ["Math.max.bind(null, 1, 2)(3)", "3"],
     ["Array.of(1, 2).length + String.fromCharCode(65)", "2A"],
-    ["new Promise((resolve) => resolve(1)) instanceof Promise", "true"],
-    ["new (class P extends Promise {})(() => {}) instanceof Promise", "true"],
-    ["Promise.resolve(1).constructor === Promise", "true"],
-    ["typeof Promise.try", "undefined"],
+    ["typeof Promise + typeof globalThis.Promise", "undefinedundefined"],
     ["JSON.stringify(new String('a\\u0001'))", '"a\\u0001"'],
     ["JSON.stringify({ ['k' + String.fromCharCode(10)]: 'x'.repeat(100) }).length", "110"],
     ["JSON.stringify(String.fromCharCode(0xd800))", '"\\ud800"'],
@@ -373,20 +378,143 @@ describe("wrapped built-ins still behave", () => {
       "a,b10",
     ],
     ["'aXbX'.split(/x/i).join('|')", "a|b|"],
+    // Re-verification of #62: rewrapped composers, cheap string methods and RegExp arguments.
+    ["Error.prototype.toString.call({ name: 5e-324 * 7, message: 1.5 })", "3.5e-323: 1.5"],
+    [
+      "Error.prototype.toString.call({}) + Error.prototype.toString.call({ name: '', message: 'm' }) + Error.prototype.toString.call({ name: 'N', message: '' })",
+      "ErrormN",
+    ],
+    [
+      "String(new RangeError('r')) + new Error('x', { cause: 1 }).toString()",
+      "RangeError: rError: x",
+    ],
+    [
+      "RegExp.prototype.toString.call({ source: 'a', flags: 1 }) + RegExp.prototype.toString.call({})",
+      "/a/1/undefined/undefined",
+    ],
+    ["String(/a\\/b/gi)", "/a\\/b/gi"],
+    [
+      "(() => { try { Error.prototype.toString.call(1); } catch (e) { return e instanceof TypeError; } })()",
+      "true",
+    ],
+    ["new RegExp(/ab/i, 'g').flags + new RegExp(/ab/i).flags + new RegExp(/ab/i).source", "giab"],
+    [
+      "new RegExp({ [Symbol.match]: true, source: 'x+', flags: 'g' }).flags + new RegExp({ [Symbol.match]: true, source: 'x+' }).source + new RegExp({ [Symbol.match]: true }).source",
+      "gx+(?:)",
+    ],
+    [
+      "(() => { const r = /a/; r.compile({ toString: () => 'zz' }); return r.source + r.compile(/q/i).flags; })()",
+      "zzi",
+    ],
+    [
+      "String.prototype.at.call(1.5, 0) + 'abc'.at(-1) + 'abc'.charCodeAt(1) + String.prototype.charAt.call(12, 1) + 'ab'.codePointAt()",
+      "1c98297",
+    ],
+    ["'xax'.match('a').index + 'xax'.search('x') + [...'aXa'.matchAll('a')].length", "3"],
+    [
+      "new RegExp('\\\\p{L}+', 'u').test('é') + ',' + new RegExp('[a-z]', 'i').test('Q')",
+      "true,true",
+    ],
     ["String('ab'.match(undefined)[0].length) + 'a.b'.search('.')", "00"],
     ["[...'a1b2'.matchAll(/\\d/g)].map((m) => m[0]).join()", "1,2"],
     ["/b/g[Symbol.replace]('abcb', '-')", "a-c-"],
-    ["new (class R extends RegExp {})('b', 'g')[Symbol.split]('abc').join()", "a,c"],
+    ["new (class R extends RegExp {})('b', 'g')[Symbol.replace]('abcb', '-')", "a-c-"],
+    ["'xay'.replace(/(?<n>a)/, '[$<n>$1]') + 'aa'.replace(/(?=(a))/g, '$1')", "x[aa]yaaaa"],
+    ["[...'abab'.matchAll(/(?=(ab))/g)].map((m) => m[1] + m.index).join()", "ab0,ab2"],
+    [
+      "'a1b22c'.split(/(\\d+)/).join('|') + /a/.exec('ba').index + /(a)/.test(1)",
+      "a|1|b|22|c1false",
+    ],
+    ["String(new RegExp(1.5)) + new RegExp('x', { toString: () => 'g' }).flags", "/1.5/g"],
+    ["RegExp.escape('a.b') + new RegExp('/').source", "\\x61\\.b\\/"],
+    // Joins, conversions and sorts the prelude does itself.
+    [
+      "[1, 'a', null, undefined, [2, 3], { toString: () => 'o' }, 0.5].join('-')",
+      "1-a---2,3-o-0.5",
+    ],
+    [
+      "[1, 2].join({ toString: () => '+' }) + Array.prototype.join.call({ length: 2, 0: 'x' })",
+      "1+2x,",
+    ],
+    ["Array.prototype.join.call(new Float64Array([0.5, 1e300, 5e-324]), ' ')", "0.5 1e+300 5e-324"],
+    [
+      "new Float32Array([1.5, 2]).join() + new Int8Array([-1, 2]).join(';') + new Uint8Array(2)",
+      "1.5,2-1;20,0",
+    ],
+    [
+      "[1.5, 'a', null, { toLocaleString: () => 7 }].toLocaleString() + new Float64Array([0.25]).toLocaleString()",
+      "1.5,a,,70.25",
+    ],
+    [
+      "[10, 9, 1, 'b', undefined, 'a', , 2e-7].sort().join() + [3, 20, 100].toSorted()",
+      "1,10,2e-7,9,a,b,,100,20,3",
+    ],
+    ["(() => { const a = [3, 1, 2]; return a.sort() === a && a.join() === '1,2,3'; })()", "true"],
+    [
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: bot code with a template literal
+      "String.raw`a${1.5}b${'c'}d` + String.raw({ raw: ['x', 'y', 'z'] }, 1, 2, 3) + String.raw({ raw: [] })",
+      "a1.5bcdx1y2z",
+    ],
+    [
+      "String(0.1) + String(5e-324) + String(Symbol('s')) + new String(2.5).length + String()",
+      "0.15e-324Symbol(s)3",
+    ],
+    [
+      "(1e21).toString(36).length + (0.5).toString(2) + (255).toString(16) + (1.005).toFixed(2) + (1234.5).toPrecision(2) + (0.5).toExponential(1)",
+      "140.1ff1.001.2e+35.0e-1",
+    ],
+    [
+      "Number.parseFloat(1.5) + Number.parseInt(' 12px') + parseInt(0.0000005) + parseFloat({ toString: () => '2.5' })",
+      "21",
+    ],
+    [
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: bot code with a template literal
+      "`${1e-7}|${0.5}|${2}` + 'x'.concat(1.5, null) + 'a'.padEnd(4, 0.5) + 'x'.anchor(1.5)",
+      '1e-7|0.5|2x1.5nulla0.5<a name="1.5">x</a>',
+    ],
+    [
+      "new Error(1.5).message + new AggregateError([], 2.5).message + Symbol(0.5).description + Symbol.for(1.25).description",
+      "1.52.50.51.25",
+    ],
+    [
+      "JSON.stringify([0.5, 1e300, new Number(2.5), { a: new Number(3) }, Object(5e-324)])",
+      '[0.5,1e+300,2.5,{"a":3},5e-324]',
+    ],
+    [
+      "JSON.stringify({ 1.5: 'a', b: 2 }, [1.5]) + JSON.stringify(new Map([[1, 2]]))",
+      '{"1.5":"a"}{}',
+    ],
+    // Property keys converted by the instrumented code and by the prelude.
+    [
+      "(() => { const o = { [1.5]: 'a', [{ toString: () => 'k' }]: 'b' }; return o['1.5'] + o[1.5] + o.k + (2.5 in o) + ('k' in o); })()",
+      "aabfalsetrue",
+    ],
+    [
+      "(() => { const o = {}; o[0.5] = 1; o[{ toString: () => 'x' }] = 2; const k = 0.5; o[k] += 1; return o['0.5'] + o.x; })()",
+      "4",
+    ],
+    [
+      "(() => { const o = { 1.5: 1 }; return o.hasOwnProperty(1.5) && Object.hasOwn(o, 1.5) && Reflect.has(o, 1.5) && Reflect.get(o, 1.5); })()",
+      "1",
+    ],
+    [
+      "(() => { const o = {}; Object.defineProperty(o, 0.5, { value: 1, enumerable: true }); Reflect.set(o, 2.5, 2); return Object.keys(o).join() + Object.getOwnPropertyDescriptor(o, 2.5).value; })()",
+      "0.5,2.52",
+    ],
+    [
+      "JSON.stringify(Object.groupBy([1, 2, 3], (x) => x / 2)) + Object.keys(Object.fromEntries([[0.5, 1], [{ toString: () => 'k' }, 2]])).join()",
+      '{"1":[2],"0.5":[1],"1.5":[3]}0.5,k',
+    ],
+    [
+      "(() => { const { [0.5]: a, [{ toString: () => 'b' }]: b } = { 0.5: 1, b: 2 }; class C { static [1.5]() { return 3; } } return a + b + C[1.5](); })()",
+      "6",
+    ],
     ["'ÄB'.toLowerCase() + 'ß'.toUpperCase() + 'e\\u0301'.normalize('NFC').length", "äbSS1"],
     ["'a'.localeCompare('b') + 'b'.localeCompare('a')", "0"],
     ["[...'héllo'].length + Array.from('ab').join('')", "5ab"],
     ["[...new Map([[1, 2]])].join() + [...new Set([3]).entries()].join()", "1,23,3"],
     ["(() => { let n = 0; new Map([[1, 2]]).forEach((v) => { n += v; }); return n; })()", "2"],
     ["escape('é') + unescape('%E9') + decodeURIComponent('%C3%A9')", "%E9éé"],
-    [
-      "(() => { let e; new Promise(() => { throw 7; }).catch((x) => { e = x; }); return typeof e; })()",
-      "undefined",
-    ],
   ];
   for (const [expr, expected] of cases) {
     it(expr, () => {

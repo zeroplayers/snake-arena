@@ -169,36 +169,34 @@ clears that comfortably (medium and hard both score ~3.5× easy).
 
 ## Cost caps
 
-The sandbox's per-tick budget **does not bound CPU yet** (#60). It counts QuickJS interrupt
-polls, and QuickJS polls about once per ~4,300 loop iterations however long the loop body is.
-So a bot can stay inside 10 "ops" per tick and still take most of a second per tick. With
-`init()`'s 100-op budget, starting each life can take seconds too. A bot with easy's logic plus
-an 8-statement padding loop passed the first version of this suite in 141 s, and a 300-statement
-body would have taken about 70 minutes.
+Before #60 the sandbox's per-tick budget only counted QuickJS interrupt polls, which come about
+once per ~4,300 loop iterations however long the loop body is: a bot could stay inside 10 "ops"
+per tick and still take most of a second per tick. A bot with easy's logic plus an 8-statement
+padding loop passed the first version of this suite in 141 s. Since #60 the sandbox charges every
+bundle's own code and every native built-in in cost units (≈ 1 ns of CPU each, 10 M per tick by
+default) next to the interrupt polls, so the per-tick budget bounds CPU, up to the gaps listed
+in the sandbox's README ("Known gaps").
 
-Until #60 lands, `SuiteBudget` caps the whole suite on top of the per-tick budget:
+`SuiteBudget` caps the whole suite on top of the per-tick budget:
 
 | cap             | default                                            | deterministic | where it bites                       |
 | --------------- | -------------------------------------------------- | ------------- | ------------------------------------ |
 | `maxInterrupts` | half the per-tick budget on average over all ticks | yes           | Node and workerd                     |
-| `maxWork`       | the same, in native work units                     | yes           | Node and workerd                     |
+| `maxWork`       | the same, in cost units                            | yes           | Node and workerd                     |
 | `maxMillis`     | 60 s of wall clock, read between ticks and lives   | no            | Node only (workerd's clock is still) |
 - A run that hits a cap fails `run` with "too slow" and a hint. `report.run.overrun` names the
   cap, and `report.run.cost` holds the totals.
 - The interrupt and work caps are part of the rules: a bot that uses more than half its budget
   on average is rejected, because crowded rooms cost more than these matches.
-- They don't bound CPU: a bot can stay under them with slow ops. In Node the wall clock does,
-  to within one tick past 60 s.
+- The wall clock is the backstop for the sandbox's known gaps: in Node it bounds the suite to
+  within one tick past 60 s.
 - In workerd `performance.now()` doesn't advance during computation, so the only backstop there
   is the Worker's CPU limit. The consumer (#22) must treat "exceeded CPU" on a check job as a
   rejection ("too slow"), not as a retryable failure.
 - The wall-clock cap makes local and server results differ, but only for bots far slower than
   any honest one.
 
-`CostMeter` (`src/cost.ts`) is the only code that reads costs out of a `TickReport`. When #60
-gives the sandbox a real per-opcode meter, its unit is charged there and `opBudget` means CPU.
-`runChecks`, `CheckOptions` and the report keep their shape. The skipped test "rejects a long
-straight-line loop body by the per-tick budget (#60)" in `checks.test.ts` is to be enabled then.
+`CostMeter` (`src/cost.ts`) is the only code that reads costs out of a `TickReport`.
 
 ## Report
 
@@ -232,20 +230,22 @@ Last log lines before it died (seed 443573865, tick 6):
 Whole suite, Node 24, Apple M1 Max, with other work running (`BENCH=1 pnpm vitest run
 packages/checks/src/bench.test.ts`):
 
-| bot                                          | time   | result                       |
-| -------------------------------------------- | ------ | ---------------------------- |
-| easy / medium / hard                         | 3–5 s  | pass                         |
-| suicidal                                     | 1.7 s  | rejected: qualify            |
-| infinite loop                                | 0.04 s | rejected: timeout death      |
-| ~90% of the op budget on every tick          | 8.3 s  | rejected: `maxInterrupts`    |
-| easy + 8-statement padding loop (7 ops/tick) | 26 s   | rejected: `maxInterrupts`    |
-| easy + 300-statement loop body (5 ops/tick)  | 60 s   | rejected: `maxMillis` (Node) |
+| bot                                 | time   | result                    |
+| ----------------------------------- | ------ | ------------------------- |
+| easy / medium / hard                | 2–5 s  | pass                      |
+| suicidal                            | 2.0 s  | rejected: qualify         |
+| infinite loop                       | 0.07 s | rejected: timeout death   |
+| ~80% of the op budget on every tick | 7.7 s  | rejected: `maxInterrupts` |
+| easy + 8-statement padding loop     | 0.05 s | rejected: timeout death   |
+| easy + 200-statement loop body      | 0.03 s | rejected: timeout death   |
+
+Before #60 the two padding bots stayed within their ops and took 26 s and 60 s (`maxMillis`).
 
 Times vary by bundle, because each bundle gets its own seeds. Honest bots cost the candidate's
 5000 sandbox ticks, plus ~0.5 s for the baseline and the house bots (including the pre-roll).
-That time is bounded only for bots whose ops are cheap. Until #60, the Node bound is the 60 s
-cap. In workerd, the bound is the consumer's CPU limit: set `limits.cpu_ms` to the maximum the
-plan allows (e.g. 300 000) and reject a job that exceeds it.
+The per-tick budget bounds that time, up to the sandbox's known gaps, for which the Node bound is
+the 60 s cap. In workerd, the bound is the consumer's CPU limit: set `limits.cpu_ms` to the
+maximum the plan allows (e.g. 300 000) and reject a job that exceeds it.
 
 Process one check job at a time per isolate. Each `runChecks` holds a sandbox with a wasm heap
 of up to 64 MiB while it runs. The `Sandbox` has no `dispose()`: every life is disposed, and the

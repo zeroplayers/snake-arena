@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "f067f2e0-cdbd-453c-89b1-d19d39ed9642",
+  "id": "f3b78538-47b2-421e-86f3-178425aa0000",
   "prevId": "3df58339-2146-4e2f-b418-c83e205b4673",
   "tables": {
     "accounts": {
@@ -745,6 +745,13 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "seq": {
+          "name": "seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {
@@ -761,6 +768,21 @@
           "columns": [
             "room",
             "start_tick"
+          ],
+          "isUnique": false
+        },
+        "lives_seq_idx": {
+          "name": "lives_seq_idx",
+          "columns": [
+            "seq"
+          ],
+          "isUnique": true
+        },
+        "lives_version_seq_idx": {
+          "name": "lives_version_seq_idx",
+          "columns": [
+            "version_id",
+            "seq"
           ],
           "isUnique": false
         }
@@ -869,6 +891,60 @@
         }
       }
     },
+    "rating_progress": {
+      "name": "rating_progress",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "assigned_seq": {
+          "name": "assigned_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "rated_seq": {
+          "name": "rated_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "rev": {
+          "name": "rev",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsecond') * 1000 as integer))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "rating_progress_singleton": {
+          "name": "rating_progress_singleton",
+          "value": "\"rating_progress\".\"id\" = 1"
+        }
+      }
+    },
     "ratings": {
       "name": "ratings",
       "columns": {
@@ -918,6 +994,20 @@
             "type": "virtual"
           }
         },
+        "recent_scores": {
+          "name": "recent_scores",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "life_seq": {
+          "name": "life_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "updated_at": {
           "name": "updated_at",
           "type": "integer",
@@ -944,6 +1034,14 @@
             "\"version_id\" DESC"
           ],
           "isUnique": false
+        },
+        "ratings_rebuild_idx": {
+          "name": "ratings_rebuild_idx",
+          "columns": [
+            "version_id"
+          ],
+          "isUnique": false,
+          "where": "life_seq IS NULL"
         }
       },
       "foreignKeys": {
@@ -1332,20 +1430,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": 0
-        },
-        "quarantined_at": {
-          "name": "quarantined_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "quarantine_reason": {
-          "name": "quarantine_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         },
         "created_at": {
           "name": "created_at",

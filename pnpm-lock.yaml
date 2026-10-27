@@ -75,6 +75,9 @@ importers:
       '@zerosnake/observability':
         specifier: workspace:*
         version: link:../../packages/observability
+      '@zerosnake/rating':
+        specifier: workspace:*
+        version: link:../../packages/rating
       '@zerosnake/renderer':
         specifier: workspace:*
         version: link:../../packages/renderer

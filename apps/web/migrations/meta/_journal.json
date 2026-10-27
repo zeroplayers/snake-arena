@@ -54,15 +54,22 @@
     {
       "idx": 7,
       "version": "6",
-      "when": 1793073527007,
-      "tag": "0007_version_quarantine",
+      "when": 1793079321380,
+      "tag": "0007_rating_job",
       "breakpoints": true
     },
     {
       "idx": 8,
       "version": "6",
-      "when": 1793079329148,
-      "tag": "0008_version_kills",
+      "when": 1793082134081,
+      "tag": "0008_version_quarantine",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1793082142750,
+      "tag": "0009_version_kills",
       "breakpoints": true
     }
   ]

@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "27a9171c-4e1c-400c-a1c3-5504faec806d",
-  "prevId": "f067f2e0-cdbd-453c-89b1-d19d39ed9642",
+  "id": "2471c8c0-e1e2-403d-a711-de6870d0811f",
+  "prevId": "f3b78538-47b2-421e-86f3-178425aa0000",
   "tables": {
     "accounts": {
       "name": "accounts",
@@ -745,6 +745,13 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "seq": {
+          "name": "seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {
@@ -761,6 +768,21 @@
           "columns": [
             "room",
             "start_tick"
+          ],
+          "isUnique": false
+        },
+        "lives_seq_idx": {
+          "name": "lives_seq_idx",
+          "columns": [
+            "seq"
+          ],
+          "isUnique": true
+        },
+        "lives_version_seq_idx": {
+          "name": "lives_version_seq_idx",
+          "columns": [
+            "version_id",
+            "seq"
           ],
           "isUnique": false
         }
@@ -869,6 +891,60 @@
         }
       }
     },
+    "rating_progress": {
+      "name": "rating_progress",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "assigned_seq": {
+          "name": "assigned_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "rated_seq": {
+          "name": "rated_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "rev": {
+          "name": "rev",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsecond') * 1000 as integer))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "rating_progress_singleton": {
+          "name": "rating_progress_singleton",
+          "value": "\"rating_progress\".\"id\" = 1"
+        }
+      }
+    },
     "ratings": {
       "name": "ratings",
       "columns": {
@@ -918,6 +994,20 @@
             "type": "virtual"
           }
         },
+        "recent_scores": {
+          "name": "recent_scores",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "life_seq": {
+          "name": "life_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "updated_at": {
           "name": "updated_at",
           "type": "integer",
@@ -944,6 +1034,14 @@
             "\"version_id\" DESC"
           ],
           "isUnique": false
+        },
+        "ratings_rebuild_idx": {
+          "name": "ratings_rebuild_idx",
+          "columns": [
+            "version_id"
+          ],
+          "isUnique": false,
+          "where": "life_seq IS NULL"
         }
       },
       "foreignKeys": {
@@ -1232,89 +1330,6 @@
         }
       },
       "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "version_kills": {
-      "name": "version_kills",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "version_id": {
-          "name": "version_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "room": {
-          "name": "room",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "life_id": {
-          "name": "life_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "tick": {
-          "name": "tick",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "retracted": {
-          "name": "retracted",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
-        "at": {
-          "name": "at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "version_kills_version_at_idx": {
-          "name": "version_kills_version_at_idx",
-          "columns": [
-            "version_id",
-            "at"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "version_kills_version_id_versions_id_fk": {
-          "name": "version_kills_version_id_versions_id_fk",
-          "tableFrom": "version_kills",
-          "tableTo": "versions",
-          "columnsFrom": [
-            "version_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}

@@ -1,4 +1,6 @@
+import { DEFAULT_CONFIG } from "@zerosnake/engine";
 import { houseBots } from "@zerosnake/house-bots";
+import { foodDisplaySize } from "@zerosnake/viewer/food";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { bundleBot } from "../bundle.ts";
 import { cleanUp, makeProject, SLOW_BOT } from "../testing/project.ts";
@@ -74,6 +76,16 @@ describe("RecordedMatchSource", () => {
     expect(source.snapshot(tick - 1)?.snakes.some((s) => s.id === "slow#1")).toBe(true);
     expect(source.snapshot(tick)?.snakes.some((s) => s.id === "slow#1")).toBe(false);
     expect(source.snapshot(tick)?.deaths).toContain("slow#1");
+  });
+
+  it("draws remains with the viewer's display size, not their gameplay radius", () => {
+    const source = fullSource();
+    const tick = source.life("slow#1")?.death?.tick as number;
+    const sizes = (source.snapshot(tick)?.frame.food ?? []).map((f) => f.size);
+    const ambient = foodDisplaySize("ambient", DEFAULT_CONFIG);
+    const remains = foodDisplaySize("remains", DEFAULT_CONFIG);
+    expect(sizes).toContain(remains);
+    expect(sizes.every((s) => s === ambient || s === remains)).toBe(true);
   });
 
   it("seeks backwards and forwards to the same frames", () => {

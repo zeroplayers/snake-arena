@@ -1,18 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { foodGlow } from "./FoodRenderer.ts";
+import { foodGlowScale } from "./FoodRenderer.ts";
 
-describe("foodGlow", () => {
+describe("foodGlowScale", () => {
   it("gives ambient-sized and smaller pellets the full halo", () => {
-    expect(foodGlow(0.5)).toEqual(foodGlow(0.25));
-    expect(foodGlow(0.5).intensity).toBe(1);
+    expect(foodGlowScale(0.5)).toBe(foodGlowScale(0.25));
   });
 
-  it("tames the halo of bigger pellets", () => {
-    const base = foodGlow(0.5);
-    const big = foodGlow(0.8);
-    // Relative to the pellet the halo shrinks, and in world units it grows only with √size.
-    expect(big.scale).toBeLessThan(base.scale);
-    expect((0.8 * big.scale) / (0.5 * base.scale)).toBeCloseTo(Math.sqrt(0.8 / 0.5), 12);
-    expect(big.intensity).toBeCloseTo(0.5 / 0.8, 12);
+  it("grows the halo of bigger pellets only with √size", () => {
+    const base = foodGlowScale(0.5);
+    const big = foodGlowScale(0.8);
+    expect(big).toBeLessThan(base);
+    expect((0.8 * big) / (0.5 * base)).toBeCloseTo(Math.sqrt(0.8 / 0.5), 12);
   });
 });

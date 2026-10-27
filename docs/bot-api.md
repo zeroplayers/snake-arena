@@ -140,7 +140,8 @@ Treat bodies as circles of `radius` around each point; the spacing between liste
 guaranteed.
 
 **Authors.** The SDK's doc comment calls `author` a username and says house bots use `"house"`. The
-rooms in review pass the owner's user id, and the check suite uses random UUIDs. For house bots both
+rooms in review pass the owner's user id (a 32-character Better Auth id), and the check suite uses
+ids in the same format. For house bots both
 the rooms ([#56](https://github.com/zeroplayers/snake-arena/pull/56)) and the check suite
 ([#54](https://github.com/zeroplayers/snake-arena/pull/54)) use `house:<kind>` (`house:medium`,
 `house:easy#2`), and the check suite deliberately shows some house opponents under made-up author

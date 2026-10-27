@@ -11,7 +11,8 @@ From an empty folder to your own snake in the arena.
 >   bundles the bot and loads it in the sandbox; running the full check suite waits for
 >   [#54](https://github.com/zeroplayers/snake-arena/pull/54) (in review).
 > - `zerosnake login`, `deploy`, `status` and `logs` are in progress
->   ([#21](https://github.com/zeroplayers/snake-arena/issues/21)); today they print "isn't available
+>   ([#21](https://github.com/zeroplayers/snake-arena/issues/21), in review as
+>   [#64](https://github.com/zeroplayers/snake-arena/pull/64)); today they print "isn't available
 >   yet". The server side of deploy is merged
 >   ([#52](https://github.com/zeroplayers/snake-arena/pull/52)).
 > - Bots don't play in the arena yet: rooms
@@ -102,7 +103,8 @@ lands, `test` only bundles your bot and loads it in the sandbox, says so and exi
 
 ## 5. Sign in and deploy
 
-> The CLI side is in progress ([#21](https://github.com/zeroplayers/snake-arena/issues/21)). What
+> The CLI side is in progress ([#21](https://github.com/zeroplayers/snake-arena/issues/21), PR
+> [#64](https://github.com/zeroplayers/snake-arena/pull/64)). What
 > follows is how the merged server side ([#52](https://github.com/zeroplayers/snake-arena/pull/52),
 > [`apps/web/src/shared/deploy.ts`](../apps/web/src/shared/deploy.ts)) works. Until the check
 > consumer ([#22](https://github.com/zeroplayers/snake-arena/issues/22)) is built, a new version

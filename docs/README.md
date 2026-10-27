@@ -31,7 +31,7 @@ issue, rather than describing behaviour that isn't merged yet. The status as of 
 | Check suite                                        | in review ([#54](https://github.com/zeroplayers/snake-arena/pull/54))                                                                                                           |
 | Rooms (`RoomDO`)                                   | in review ([#56](https://github.com/zeroplayers/snake-arena/pull/56)); a stub on `main`                                                                                         |
 | CPU-accurate op metering in the sandbox            | in review ([#62](https://github.com/zeroplayers/snake-arena/pull/62), for [#60](https://github.com/zeroplayers/snake-arena/issues/60)); see [Limits](limits.md#per-tick-budget) |
-| CLI `login`, `deploy`, `status`, `logs`            | in progress ([#21](https://github.com/zeroplayers/snake-arena/issues/21))                                                                                                       |
+| CLI `login`, `deploy`, `status`, `logs`            | in review ([#64](https://github.com/zeroplayers/snake-arena/pull/64), [#21](https://github.com/zeroplayers/snake-arena/issues/21))                                              |
 | Matchmaker, check queue consumer                   | not built ([#23](https://github.com/zeroplayers/snake-arena/issues/23), [#22](https://github.com/zeroplayers/snake-arena/issues/22)); stubs on `main`                           |
 
 So no bot plays in the arena yet: the room, matchmaker and check consumer in

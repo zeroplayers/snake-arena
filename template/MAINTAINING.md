@@ -43,8 +43,12 @@ When the packages are published:
 `test/match.ts` plays real matches: the bot bundled by esbuild, run in `@zerosnake/sandbox` with the
 arena's budget, in `@zerosnake/engine` worlds, against `@zerosnake/house-bots`. That gives authors
 (and their Claude) a deterministic local loop (`npm test`, `npm run bench`) before the CLI exists.
-Once `zerosnake sim` / `test` ship, the bench can stay as a quick headless check or be replaced by
-them; keep `CLAUDE.md` and the skills in sync with whichever exists.
+In an `init` project those packages are left out, so `npm test`, `npm run bench` and
+`npm run typecheck` fail there; `CLAUDE.md`, README.md and the skills therefore lead with the CLI
+(`npx tsc -p .`, `zerosnake sim --headless`, `zerosnake test`) and mark the bench as monorepo-only.
+Keep them in sync with the CLI's commands and output (`packages/cli`), and with the check suite's
+rules (`packages/checks`: seeds from the bundle hash, the average budget share, the slow-suite
+warning's 20 s in `packages/cli/src/artifact.ts`).
 
 `npm run bench` runs TypeScript with `node --experimental-transform-types` because the engine uses a
 TS parameter property, which Node's default type stripping rejects. Published packages will be

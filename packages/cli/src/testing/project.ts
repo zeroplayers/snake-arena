@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { templateDir } from "../assets.ts";
 import type { Io } from "../io.ts";
 
 const made: string[] = [];
@@ -68,6 +69,18 @@ export const THROWING_BOT = `import { defineBot } from "@zerosnake/sdk";
 export default defineBot({
   tick(state) {
     return { turn: state.self.nope.x };
+  },
+});
+`;
+
+/** The template's starter bot (`template/src/bot.ts`): passes the deploy checks. */
+export const TEMPLATE_BOT = readFileSync(join(templateDir(), "src", "bot.ts"), "utf8");
+
+/** Drives straight on into the wall every life: loads and runs, but can't qualify. */
+export const SUICIDAL_BOT = `import { defineBot } from "@zerosnake/sdk";
+export default defineBot({
+  tick() {
+    return { turn: 0 };
   },
 });
 `;

@@ -18,7 +18,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { main } from "./cli.ts";
 import type { Remote } from "./remote/api.ts";
 import { Credentials } from "./remote/config.ts";
-import { captureIo, cleanUp, GOOD_BOT, makeProject, TUNING } from "./testing/project.ts";
+import { captureIo, cleanUp, makeProject, TEMPLATE_BOT, TUNING } from "./testing/project.ts";
 
 interface D1 {
   prepare(sql: string): {
@@ -131,7 +131,7 @@ let consuming: Promise<unknown> = Promise.resolve();
 const configDir = makeProject({});
 const project = makeProject({
   "package.json": JSON.stringify({ name: "my-snake" }),
-  "src/bot.ts": GOOD_BOT,
+  "src/bot.ts": TEMPLATE_BOT,
   "src/tuning.ts": TUNING,
 });
 

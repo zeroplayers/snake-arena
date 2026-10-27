@@ -1,9 +1,28 @@
 import { join } from "node:path";
+import {
+  CHECK_SEED_COUNT,
+  CHECK_TICKS,
+  type CheckReport,
+  REPORT_VERSION,
+  runChecks,
+} from "@zerosnake/checks";
 import { afterAll, describe, expect, it } from "vitest";
+import { readSources } from "./artifact.ts";
+import { bundleBot } from "./bundle.ts";
 import { main } from "./cli.ts";
 import { simCommand } from "./commands/sim.ts";
+import { findProject } from "./project.ts";
 import type { MatchUpdate } from "./sim/protocol.ts";
-import { captureIo, cleanUp, GOOD_BOT, makeProject, SLOW_BOT, TUNING } from "./testing/project.ts";
+import {
+  captureIo,
+  cleanUp,
+  GOOD_BOT,
+  makeProject,
+  SLOW_BOT,
+  SUICIDAL_BOT,
+  TEMPLATE_BOT,
+  TUNING,
+} from "./testing/project.ts";
 
 afterAll(cleanUp);
 
@@ -147,11 +166,78 @@ describe("zerosnake sim (viewer)", () => {
 });
 
 describe("zerosnake test", () => {
-  it("bundles and loads the bot, then says the check suite is pending", async () => {
-    const io = captureIo(botProject());
+  it("passes the template bot with the server's checks and report", async () => {
+    const io = captureIo(botProject({ "src/bot.ts": TEMPLATE_BOT }));
+    expect(await main(["test"], io), io.stderr()).toBe(0);
+    const out = io.stdout();
+    expect(out).toContain("✓ bundles");
+    expect(out).toContain("✓ within the deploy limits");
+    expect(out).toContain("Checks passed: this bot can be deployed.");
+    expect(out).toMatch(/✓ Runs {6}5 matches, 5000 ticks/);
+    expect(out).toContain("✓ Qualifies beats easy");
+    expect(out).toContain("Ready to deploy");
+    // Not a TTY: one line instead of the live progress.
+    expect(io.stderr()).toContain(
+      "Running the checks (5 matches × 1000 ticks against the house bots)",
+    );
+  }, 120_000);
+
+  it("prints the report as JSON with --json, and nothing else on stdout", async () => {
+    const cwd = botProject({ "src/bot.ts": TEMPLATE_BOT });
+    const io = captureIo(cwd);
+    expect(await main(["test", "--json"], io)).toBe(0);
+    const report = JSON.parse(io.stdout()) as CheckReport;
+    expect(report).toMatchObject({ version: REPORT_VERSION, passed: true, ticks: CHECK_TICKS });
+    expect(report.seeds).toHaveLength(CHECK_SEED_COUNT);
+    expect(io.stderr()).toContain("✓ bundles");
+
+    // The server's report: same bundle, same seeds, same verdict.
+    const { root } = findProject(cwd);
+    const bundle = await bundleBot(join(root, "src", "bot.ts"), { cwd: root });
+    const sources = readSources(root, bundle).map(({ path, bytes }) => ({ path, bytes }));
+    expect(report).toEqual(await runChecks({ bundle: bundle.code, sources }));
+  }, 120_000);
+
+  it("fails a bot that can't beat easy, and says so", async () => {
+    const io = captureIo(botProject({ "src/bot.ts": SUICIDAL_BOT }));
     expect(await main(["test"], io)).toBe(1);
-    expect(io.stdout()).toContain("bundles");
-    expect(io.stdout()).toContain("loads in the sandbox");
-    expect(io.stderr()).toContain("coming with zeroplayers/snake-arena#13");
+    const out = io.stdout();
+    expect(out).toContain("Checks failed: this bot would be rejected.");
+    expect(out).toContain("✓ Runs");
+    expect(out).toContain("✗ Qualifies");
+    expect(out).toContain("What to fix:");
+    expect(out).not.toContain("Ready to deploy");
+  }, 120_000);
+
+  it("fails a bot that hangs, with its log", async () => {
+    const io = captureIo(botProject({ "src/bot.ts": SLOW_BOT }));
+    expect(await main(["test"], io)).toBe(1);
+    const out = io.stdout();
+    expect(out).toContain("✗ Runs");
+    expect(out).toContain("over budget");
+    expect(out).toContain("- Qualifies skipped");
+    expect(out).toContain("thinking hard");
+  }, 120_000);
+
+  it("stops before the matches when the bundle is over a deploy limit", async () => {
+    const io = captureIo(botProject({ "src/my notes.md": "# ideas" }));
+    expect(await main(["test", "--json"], io)).toBe(1);
+    expect(io.stdout()).toBe("");
+    expect(io.stderr()).toContain("✗ source paths: src/my notes.md");
+    expect(io.stderr()).not.toContain("Running the checks");
   });
+
+  it("shows live progress on a terminal", async () => {
+    const lines: string[] = [];
+    const io = {
+      ...captureIo(botProject({ "src/bot.ts": SLOW_BOT })),
+      progress: (t: string) => lines.push(t),
+    };
+    expect(await main(["test"], io)).toBe(1);
+    expect(lines[0]).toMatch(
+      /^Running the checks \(5 matches × 1000 ticks against the house bots\)… 0% /,
+    );
+    expect(lines.at(-1)).toBe("");
+    expect(io.stderr()).not.toContain("Running the checks");
+  }, 120_000);
 });

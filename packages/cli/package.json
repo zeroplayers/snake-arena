@@ -26,6 +26,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "@zerosnake/checks": "workspace:*",
     "@zerosnake/engine": "workspace:*",
     "@zerosnake/house-bots": "workspace:*",
     "@zerosnake/renderer": "workspace:*",

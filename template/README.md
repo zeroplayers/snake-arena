@@ -8,53 +8,63 @@ the wall. It beats the weakest house bot and loses to the rest: make it yours.
 
 ## Quick start
 
-> **Today the `@zerosnake/*` packages are not on npm yet**, so `npm install` in a copy of this
-> folder fails (`workspace:*` ranges, or `^0.0.0` after `zerosnake init`). Until they are published,
-> work in a checkout of the [monorepo](https://github.com/zeroplayers/snake-arena), where this
-> folder is `template/` and pnpm links the packages:
->
-> ```sh
-> git clone https://github.com/zeroplayers/snake-arena && cd snake-arena
-> pnpm install
-> cd template
-> pnpm test            # does the bot load and play without errors, within budget?
-> pnpm bench           # how does it score against the house bots?
-> ```
-
-Once the packages are published, it becomes:
-
 ```sh
 npx zerosnake init my-snake && cd my-snake
-npm install
-npm test             # does the bot load and play without errors, within budget?
-npm run bench        # how does it score against the house bots?
+npm install                  # the SDK's types for your editor (init copies the SDK into vendor/)
+npx zerosnake sim            # watch your bot play the house bots in the browser
+npx zerosnake test           # the checks the server runs before accepting a version
 ```
 
-Below, `npm run x` and `pnpm x` mean the same script.
+> Until the `zerosnake` package is on npm, `npx zerosnake` doesn't resolve: build the CLI in a
+> checkout of the [monorepo](https://github.com/zeroplayers/snake-arena)
+> (`pnpm install && pnpm --filter zerosnake build`) and use
+> `node <checkout>/packages/cli/bin/zerosnake.js` wherever these docs say `npx zerosnake`.
 
 Then open the folder in Claude Code (`claude`) and describe the snake you want ("make it
-aggressive: cut off smaller snakes"). `CLAUDE.md` gives Claude the rules, the API and the limits;
-the skills in `.claude/skills/` cover writing a new strategy, debugging deaths and comparing
-versions. You can of course write the code yourself: start with `src/bot.ts` and `CLAUDE.md`.
+aggressive: cut off smaller snakes"). `CLAUDE.md` gives Claude the rules, the API, the limits and
+the commands; the skills in `.claude/skills/` cover writing a new strategy, debugging deaths and
+comparing versions. You can of course write the code yourself: start with `src/bot.ts` and
+`CLAUDE.md`.
+
+When it's ready:
+
+```sh
+npx zerosnake login          # sign in through the browser, once
+npx zerosnake deploy         # runs the checks, uploads src/, waits for the server's checks
+npx zerosnake status         # active version, rating, lives, deploys left today
+```
 
 ## Commands
 
-| Command                                                  | What it does                                                 |
-| -------------------------------------------------------- | ------------------------------------------------------------ |
-| `npm run typecheck`                                      | Type-check the bot and the tests.                            |
-| `npm test`                                               | Smoke test in the real sandbox: loads, 3 matches, no faults. |
-| `npm run bench`                                          | 20 local matches vs house bots: score, deaths, ops per tick. |
-| `npm run bench -- --deaths 5`                            | Also print the last ticks before 5 deaths.                   |
-| `npm run bench -- src/bot.ts .zerosnake/prev/src/bot.ts` | Compare two versions on the same seeds.                      |
+| Command                          | What it does                                                         |
+| -------------------------------- | -------------------------------------------------------------------- |
+| `npx tsc -p .`                   | Type-check the bot.                                                  |
+| `npx zerosnake sim`              | A local match vs house bots in the viewer (`--seed`, `--vs`).        |
+| `npx zerosnake sim --headless`   | The same match as a summary: scores, kills, deaths, ops per tick.    |
+| `npx zerosnake test`             | The server's deploy checks, here. Exit 0 pass, 1 fail.               |
+| `npx zerosnake deploy -m "note"` | Check, upload and wait for the server; a failing bot isn't uploaded. |
+| `npx zerosnake logs`             | A version's check report and recent lives.                           |
+| `npx zerosnake <command> --help` | All the options.                                                     |
 
-The `zerosnake` CLI (in progress) adds a local viewer and the arena:
+About `test`: the seeds of its 5 matches come from your bundle's hash, so every edit plays other
+seeds. A bot only just above the `easy` house bot can pass on one version and fail on the next:
+aim for a clear margin.
+
+### Inside the monorepo
+
+The `@zerosnake/*` packages are not on npm yet, so `init` leaves the engine, sandbox and house bots
+out, and the scripts in `test/` (`npm test`, `npm run bench`, `npm run typecheck`) don't work in an
+`init` project; the CLI covers the same ground. They work in a checkout of the
+[monorepo](https://github.com/zeroplayers/snake-arena), where this folder is `template/`:
 
 ```sh
-npx zerosnake sim       # local match vs house bots, opens the viewer
-npx zerosnake test      # the same checks the server runs before accepting a version
-npx zerosnake login     # sign in through the browser
-npx zerosnake deploy    # bundle src/ and send it to the arena
-npx zerosnake logs      # recent lives and causes of death
+git clone https://github.com/zeroplayers/snake-arena && cd snake-arena
+pnpm install
+cd template
+pnpm test            # smoke test in the real sandbox: loads, 3 matches, no faults
+pnpm bench           # 20 local matches vs house bots: score, deaths, ops per tick
+pnpm bench -- --deaths 5                                  # also print the last ticks before 5 deaths
+pnpm bench -- src/bot.ts .zerosnake/prev/src/bot.ts       # compare two versions on the same seeds
 ```
 
 ## The rules in one minute
@@ -75,7 +85,8 @@ Details: `CLAUDE.md`.
 
 ```
 src/bot.ts          the bot (deploy bundles src/)
-test/               smoke test, bench and the local match runner
+test/               smoke test, bench and the local match runner (monorepo only)
+vendor/             the SDK, copied by zerosnake init until it is on npm
 CLAUDE.md           rules, API, limits, debugging (for Claude and for you)
 AGENTS.md           points other coding agents to CLAUDE.md
 .claude/skills/     new-strategy, debug-death, compare-with-previous

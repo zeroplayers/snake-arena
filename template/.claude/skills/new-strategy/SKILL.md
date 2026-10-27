@@ -14,8 +14,10 @@ this session: rules, API, coordinate convention and limits are there.
 
 1. Make sure the current version is committed (`git status`); if not, ask before committing, or
    copy it aside: `mkdir -p .zerosnake/prev && cp -r src .zerosnake/prev/`.
-2. `npm run bench` and keep the table: mean score ± error, deaths by cause, max ops. This is the
-   number the new strategy has to beat (unless the author explicitly wants a style over a score).
+2. Measure it on a fixed set of seeds and keep the numbers (step 2 of skill
+   `compare-with-previous`: `npx zerosnake sim --headless --seed N` for N = 1…20; in the monorepo,
+   `npm run bench`): mean score ± error, deaths by cause, max ops. This is what the new strategy has
+   to beat (unless the author explicitly wants a style over a score).
 
 ## 2. Design (say it in a few lines before coding)
 
@@ -50,17 +52,24 @@ Pin down, in terms of the real mechanics:
 ## 4. Verify
 
 ```sh
-npm run typecheck && npm test
-npm run bench -- src/bot.ts .zerosnake/prev/src/bot.ts   # or just `npm run bench` vs the saved table
-npm run bench -- --deaths 5 --context 10                 # look at how it dies now
+npx tsc -p .                 # type-check src/
+npx zerosnake test           # the server's deploy checks: must pass
+npx zerosnake sim --headless --seed 1    # quick look: score, kills, deaths by cause, max ops
 ```
 
-- No `timeout`/`error` lives, `max ops` well under 10 (aim for ≤ 5).
-- Mean score clearly above `house:easy` (deploy qualification) and, ideally, above the baseline by
-  more than twice the `±`. If it is worse, say so with the numbers and iterate (skill
-  `debug-death` on the most common death cause), don't claim success.
-- For a style request, also check the style shows up: e.g. an aggressive bot should have kills; add
-  a `log("kill attempt", id)` and count, or compare deaths/kills in the replays.
+Then compare with the baseline on the same seeds (skill `compare-with-previous`). In the monorepo
+checkout, `npm run typecheck && npm test`, `npm run bench -- src/bot.ts .zerosnake/prev/src/bot.ts`
+and `npm run bench -- --deaths 5 --context 10` do the same with more detail.
 
-When the CLI is installed, finish with `npx zerosnake test` (exact server checks) and
-`npx zerosnake sim --vs easy,hard` to watch it. Report the before/after table to the author.
+- `zerosnake test` passes: no `timeout`/`error`, at most half the budget on average, and a mean
+  score per life above `easy` in your seat. Look at the margin seed by seed: a narrow pass can turn
+  into a fail on the next edit (the seeds come from the bundle's hash), so make it clear, not lucky.
+  If `test` warns that the checks were slow, cut the work per tick.
+- `max … ops per tick` well under 10 (aim for ≤ 5).
+- Mean score above the baseline by more than twice the `±`. If it is worse, say so with the numbers
+  and iterate (skill `debug-death` on the most common death cause); don't claim success.
+- For a style request, also check the style shows up: e.g. an aggressive bot should have kills
+  (the `kills` column of `sim --headless`); compare kills and deaths with the baseline.
+
+Report the before/after table to the author, and suggest `npx zerosnake sim --vs easy,hard` to
+watch it (it opens the viewer and waits, so let the author run it) and `npx zerosnake deploy`.

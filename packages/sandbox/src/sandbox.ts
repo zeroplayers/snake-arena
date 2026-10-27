@@ -16,7 +16,7 @@ import {
   type QuickJSRuntime,
   type QuickJSWASMModule,
 } from "quickjs-emscripten-core";
-import { type InstrumentResult, instrument } from "./instrument.ts";
+import { type InstrumentResult, instrument, MAX_STRING_LENGTH } from "./instrument.ts";
 import { PRELUDE } from "./prelude.ts";
 
 /**
@@ -269,7 +269,8 @@ interface Vm {
   driver: Driver;
 }
 
-// Date and Proxy are off; BigInt and eval are removed by the prelude.
+// Date and Proxy are off; BigInt, eval and the Promise global are removed by the prelude (module
+// evaluation itself needs the Promise intrinsic).
 const INTRINSICS: Intrinsics = {
   BaseObjects: true,
   Date: false,
@@ -512,6 +513,7 @@ export class BotLife {
     for (const [key, value] of Object.entries({
       seed: this.info.seed,
       maxArrayLength: options.maxArrayLength ?? 100_000,
+      maxStringLength: MAX_STRING_LENGTH,
       logLimitBytes: this.logLimit,
     })) {
       const v = ctx.newNumber(value);
@@ -586,8 +588,8 @@ export class BotLife {
 
   /**
    * Whether the current budgeted call went over. The interrupt handler keeps failing every check
-   * once this is true, and the host also checks it after the call returns, because QuickJS turns
-   * an interrupt inside a Promise executor or async function into a rejection the bot can catch.
+   * once this is true, and the host also checks it after the call returns, because bot code can
+   * swallow the stop before the next check comes (a `finally` that ends with `continue`).
    */
   private overBudget(): boolean {
     return this.forced || this.interrupts > this.interruptLimit;

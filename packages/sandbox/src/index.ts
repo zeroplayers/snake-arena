@@ -12,7 +12,7 @@
  * @packageDocumentation
  */
 
-export { type InstrumentResult, instrument } from "./instrument.ts";
+export { type InstrumentResult, instrument, MAX_STRING_LENGTH } from "./instrument.ts";
 export {
   type BotLife,
   createSandbox,

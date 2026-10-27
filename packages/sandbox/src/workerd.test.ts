@@ -104,8 +104,8 @@ describe("workerd", () => {
       const t = state.lifeTick % 4;
       let x = 0;
       if (t === 0) { for (let i = 0; i < 50; i++) { ${body} } }
-      if (t === 1) { for (let i = 0; i < 20; i++) { try { null.x; } catch (e) { x++; } } }
-      if (t === 2) { const o = { ...state.self, ...[1, 2] }; for (const k in o) x++; x += [...state.food].length; }
+      if (t === 1) { for (let i = 0; i < 20; i++) { try { null.x; } catch (e) { x++; } } const s = 'ab'.repeat(60) + t; x += s < 'b' && new Map([[s, 1]]).get(s) ? 1 : 0; }
+      if (t === 2) { const o = { ...state.self, ...[1, 2] }; for (const k in o) x++; x += [...state.food].length | 0; }
       if (t === 3) { for (;;) { ${body} } }
       return { turn: x > 0 ? 0.25 : 0 };`,
     );

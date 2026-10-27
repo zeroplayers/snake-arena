@@ -44,23 +44,32 @@ report is identical.
   `info.opBudget` interrupt-handler calls (QuickJS calls it about every 10 000 bytecode branches or
   C-function calls; `report.interrupts`). Over either → previous action and a strike; 3 strikes in
   a row → death `timeout`. Exceptions 3 ticks in a row → death `error`. Once over budget, every
-  later interrupt check fails, and the host counts the tick as a timeout even if the call returned
-  normally.
+  later interrupt check fails, no `catch` in bot code runs again in that tick (each one rethrows),
+  and the host counts the tick as a timeout even if the call returned normally.
 - Module evaluation + `init()` share a budget of `initOpBudget` (100), in both units.
 - Out of memory → death `error` (reason `oom`) at once, and the runtime is freed. A bot can't
   survive by catching the error: the host watches the shared heap itself (see below).
 - Outcome `skipped`: the shared heap ran out during this bot's tick because another bot was over
   its limit (that bot is killed). The tick is discarded: previous action, no strike, no error.
-- `Math.random` is seeded from `info.seed`. No `Date`, `fetch`, timers, `import`, `eval`/`Function`,
-  `Proxy`, `BigInt` (literals are rejected by `checkSource`), `WeakRef`.
+- `Math.random` is seeded from `info.seed`, and `Math` is read-only. No `Date`, `fetch`, timers,
+  `import`, `eval`/`Function`, `Proxy`, `BigInt` (literals are rejected by `checkSource`), `WeakRef`,
+  `Promise`, or the Set methods `union`, `intersection`, `difference`, `symmetricDifference`,
+  `isSubsetOf`, `isSupersetOf` and `isDisjointFrom` (they read the other set through methods bot
+  code can supply).
+- Strings are at most `MAX_STRING_LENGTH` (16 384) UTF-16 units: building a longer one (`+`, `+=`,
+  a template, `repeat`, `join`, `JSON.stringify`, …) throws a `RangeError`, before the result is
+  stored. Longer string literals, template parts, names and regex literals are rejected at load.
+  An error's `stack` is cut to that length. `log()` is capped separately (`logLimitBytes`).
+- `Array.prototype.push`, `pop` and `at` on something that isn't an array need a plain number
+  `length`, like every other array method.
 - No `import` (not even dynamic), no identifiers starting with `__zs`, no destructuring in a
   `catch` clause, object rest only as `const { a, ...rest } = value` or `({ a, ...rest } = value)`,
   no function with more than 3 000 syntax nodes, no brackets nested more than 200 deep:
   `instrument` rejects these with a message (see below for why).
-- No `async`: `checkSource` rejects the keyword. An exception inside an async function becomes a
-  rejection, including the interrupt that ends an over-budget tick, and promise jobs never run in
-  the sandbox anyway. The `Promise` constructor calls its executor from JS, where the interrupt
-  can't be caught; `Promise.try` is removed.
+- No `async` and no `Promise`: `checkSource` rejects the keyword, and the prelude removes
+  `Promise`. Promise code catches exceptions in C and turns them into rejections (including the
+  interrupt that ends an over-budget tick), so no `catch` would ever charge them, and promise jobs
+  never run in the sandbox anyway.
 - `log()` and `console.*` go to the tick's log, capped at `info.logLimitBytes` with the SDK's
   truncation rules. Lines logged before a timeout are kept. Unlike the SDK's `createTickLog`, an
   empty line costs 1 byte, so `log('')` in a loop can't keep unbounded lines.
@@ -92,6 +101,36 @@ house bot, ~40 ms for 200 KB), and pays for its own code:
   per-char rate set by the bundle's largest function, plus the largest parameter list (a
   parameter pattern can throw before the function's own charge). Functions are capped at 3 000
   syntax nodes, which keeps one exception under ~8 M units.
+- Strings: comparing, hashing or converting a string to a number runs in C in time linear in
+  its length, as one bytecode (`+s` on `"0.1111…"` costs ~6–15 ns per char), so a short loop on a
+  long string ran for minutes per tick. Every place a string operand can reach such an operation
+  is charged by its length: `==`/`<`/arithmetic/unary operands (16 units per char), `===` and
+  `switch` (1 per char), property keys and `in` (4 per char), arguments of every call (a built-in
+  may convert them), return and yield values (a `valueOf`, getter, comparator or iterator feeds
+  them to built-ins), and values stored into `a[i]` or `a.length`. The check is inline
+  (`(typeof v === "string" && (__zs_g -= v.length * 16) < 0 && __zs_o(), v)`, ~40 ns), so it is
+  left out where it can't matter: a scope analysis (`src/types.ts`) proves which variables only
+  ever hold numbers (`const dx = p.x - q.x`, loop counters; `Math.f()` returns a number since
+  `Math` is read-only), and calls by name to the bot's own functions skip the argument checks
+  (and their return checks when the name is only ever called). The prelude charges what built-ins
+  read on their own: a native passed as a callback (`strs.map(Number)`), elements of an array or
+  iterable it converts or hashes (typed arrays, `new Set`, `Object.fromEntries`, `apply`, spread
+  arguments, `sort`), `String`/`Array`/`Function`/`Object`/`Error`/`RegExp` conversion methods,
+  `lastIndex`, bound arguments. Iterables those built-ins would walk are read in the prelude first,
+  so a replaced array iterator or a hand-written `next()` can't feed them unchecked values.
+- Compound assignments and updates of a member whose object or key isn't a plain name go
+  through a small accessor (`__zs_w(obj, key).v += x`), and `x += y` becomes `x = x + (y)`, so
+  the string cap applies before anything is stored. Each inline check counts as 16 syntax
+  nodes of its function (for the size limit and the backtrace rate).
+- Exceptions that built-ins drop: closing an iterator after an exception ignores what its
+  `return()` throws, and `return()` can run code that does the same again, so exceptions piled up
+  before any `catch` charged them (1.1 s per tick). Every function body now charges an exception
+  on its way out (the backtrace once per error object, 1 000 units per frame after that), a
+  `for…of` body charges it before the loop closes its iterator, and a destructuring `for…of` head
+  is moved into that body.
+- Out of budget, the meter throws a sentinel that every instrumented `catch` rethrows, instead of
+  spinning until the next interrupt check: unwinding can still run bot code (a `finally`, an
+  iterator's `return()`), and each of those now stops at its first charge.
 - The header registers the counter with the prelude, which charges native built-ins against
   the same counter and deletes the global it used for the handshake. Bot code can't reach the
   counter: identifiers starting with `__zs` are rejected, the counter is a lexical binding, and
@@ -99,8 +138,12 @@ house bot, ~40 ms for 200 KB), and pays for its own code:
   line 1), so errors still point into the bundle.
 
 Measured on an M1 under load (other test suites running): every adversarial shape in
-`src/metering.test.ts` is stopped within ~5–20 ms per tick (it was up to seconds), the house bots
-use ≤ 3.6% of the budget, and their CPU per tick went up 4–11%.
+`src/metering.test.ts` is stopped within ~5–20 ms per tick (it was up to seconds; the string rows
+of the review of #62 took 29–156 s). On real game states the house bots use ≤ 9.2% of the budget
+and the template bot 4.4%. Their CPU per tick is ~2–11% over `main` for the code-shape metering
+and, on top of that, +7–21% (SDK example, easy), +37% (template) and +47–60% (medium, hard,
+chaos) for the string checks: member reads in arithmetic (`p.x - head.x`) can't be proven
+numeric, and each check costs about as much as the operation it guards.
 
 ## Hardening (`src/prelude.ts`)
 
@@ -148,18 +191,19 @@ The cap should cover bots × `memoryLimitBytes`, or honest bots can run the heap
 
 ## Known gaps
 
-The meter bounds what code costs by its shape. Two kinds of data can still make one cheap
-operation slow; both were verified, and both are left to the DO's CPU limit and the room
-backstop (replay the batch with bots isolated, ban the version):
+The meter bounds what code costs by its shape. Some data can still make one cheap operation
+slow; these were verified and are left to the DO's CPU limit and the room backstop (replay the
+batch with bots isolated, ban the version):
 
-- **Operators and conversions on huge strings** run in C uncharged, and nothing in JS can
-  intercept them: `===`, `<`, `+` and template literals, `Number(s)`/`+s`, `String(x)`, using a
-  string as a property key or a Map/Set key. Every built-in function that walks a string is
-  wrapped; these are syntax, charged per node. A bot can build strings of several MB within one
-  tick (`a = a + a`; the memory check only runs between ticks), and `for (;;) a === b` on two
-  16 MB strings runs for over a minute inside one tick. Closing it needs a QuickJS build with real
-  allocation accounting (so `setMemoryLimit` bounds strings). A smaller interrupt counter
-  wouldn't help: each comparison is one bytecode.
+- **Strings a built-in reads on its own.** Everything above charges strings where bot code hands
+  them over; a built-in that reads a string the bot stored earlier, by a path not listed there,
+  converts it uncharged. The string cap bounds one such read (16 384 chars: ~0.1–0.25 ms for a
+  number conversion). None is known; this is the residue of a list, not a proof.
+- **Exceptions dropped while destructuring an iterator** (`const [[a]] = it`, `[x = f()] = it`,
+  array-pattern parameters): as for `for…of`, the iterator's `return()` runs before the exception
+  reaches a charge. With `return()` recursing into the same pattern, 200 levels at half the stack
+  depth take ~100–150 ms per tick (for-of: ~7 ms). Closing it means moving those patterns into
+  code that charges first, as for `for…of` heads.
 - **Deep prototype chains**: a property lookup walks the chain in C. A bot can build a chain
   20 000 objects deep over a few ticks (`o = Object.create(o)`, ~2 M units per 2 000), and then
   each `o.missing` costs O(depth): ~4.6 s per tick until its three strikes. Closing it means
@@ -167,6 +211,9 @@ backstop (replay the batch with bots isolated, ban the version):
   `new` and the species/`this` constructors of built-ins).
 - One exception can overshoot a tick: it is charged right after QuickJS builds its backtrace,
   so a tick costs at most its budget plus one exception (≤ ~8 M units at the function size cap).
+- The inline checks add bytecode branches, so loops reach the interrupt limit sooner: a tight
+  loop over member reads now polls about twice as often as before. Honest bots stay at 1–2
+  interrupts per tick (limit 10).
 - Getters run as calls the meter can't see at the property access; their bodies are charged, the
   call itself is bounded by the interrupt budget.
 - Weights are calibrated on an M1 (≈ 1 unit per ns at worst). Cloudflare runs QuickJS ~1.5×

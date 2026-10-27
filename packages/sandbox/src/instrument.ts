@@ -1,5 +1,6 @@
 import { type Node, parse } from "acorn";
 import { checkSource } from "./source.ts";
+import { Types } from "./types.ts";
 
 /**
  * Load-time cost metering for bot bundles.
@@ -25,6 +26,22 @@ import { checkSource } from "./source.ts";
  *   to ~100 ms. Every `catch` (and every `finally` that can swallow an exception) charges by the
  *   length of the caught error's `stack` (`__zs_x`), at a per-char rate scaled by the largest
  *   function of this bundle; the prelude does the same for `new Error()`.
+ * - Strings: comparing, hashing or converting a string to a number runs in C in time linear in
+ *   its length (up to ~15 ns per char for `+"0.1111…"`), however cheap the operator looks. So
+ *   every place a string operand can reach such an operation charges its length at that op's
+ *   rate (`(typeof v === "string" && (__zs_g -= v.length * rate) < 0 && __zs_o(), v)`):
+ *   comparisons, arithmetic, `switch`, property keys, `in`, call arguments (a built-in may
+ *   convert them), return and yield values (`valueOf`, getters and iterators feed built-ins),
+ *   and values stored where a number is expected (`a[i] = v`, `a.length = v`). Every string is
+ *   also capped at {@link MAX_STRING_LENGTH}: `+` and `+=` results go through `__zs_n`, string
+ *   literals are rejected above it, and the prelude caps every built-in that builds a string.
+ *   Compound assignments and updates of a member whose object or key isn't a plain name go
+ *   through a small accessor object (`__zs_w(obj, key).v += x`), so the value can be checked
+ *   before it is stored. Spread arguments (`f(...xs)`) go through `__zs_a`, which charges them.
+ * - Built-ins can drop an exception without any `catch` seeing it: closing an iterator after an
+ *   exception (for-of, destructuring, Array.from) ignores what its `return()` throws. So every
+ *   function body is wrapped in a `catch` that charges the exception on its way out (`__zs_r`;
+ *   the backtrace part only once per error object) and rethrows it.
  *
  * The header registers the counter with the prelude (which charges native built-ins against the
  * same counter) and leaves nothing on `globalThis`. Bot code can't touch the counter: identifiers
@@ -52,6 +69,33 @@ export const MAX_FUNCTION_NODES = 3000;
 /** Brackets nested deeper than this are rejected before parsing (the parser recurses). */
 const MAX_NESTING = 200;
 
+/**
+ * Longest string bot code can build or embed (UTF-16 units). Operators that walk a string are
+ * charged by its length, but a few built-ins still read strings that the bot stored earlier
+ * (see the README's known gaps); this cap bounds what one such read can cost.
+ */
+export const MAX_STRING_LENGTH = 16_384;
+
+/**
+ * Units per char of a string operand, by the most a C operation on it can cost per char (M1):
+ * converting to a number (~15 ns for a long decimal like "0.1111…"), hashing it as a property or
+ * Map key (~1.4 ns; charged twice where a compound assignment reads and writes the same key) and
+ * strict equality (memcmp, ~0.5 ns).
+ */
+const K_NUMBER = 16;
+const K_KEY = 4;
+const K_EQUAL = 1;
+/** Weight of one inline string check. */
+const W_CHECK = 2;
+/**
+ * Syntax nodes one inline check adds to its function. They count toward the function size
+ * limit and the backtrace rate: a backtrace decodes each frame's function from its start, so a
+ * function full of checks costs that much more per frame.
+ */
+const CHECK_NODES = 16;
+/** `+` results up to this length skip the prelude's cap check (they can't be over it). */
+const SHORT_STRING = 64;
+
 /** Charged for each caught exception, plus the per-char backtrace cost below. */
 const EXCEPTION_UNITS = 4000;
 /**
@@ -70,6 +114,13 @@ const KEYS = "__zs_k";
 const FOR_IN = "__zs_f";
 const CAUGHT = "__zs_x";
 const CAUGHT_VAR = "__zs_e";
+const TEMP = "__zs_t";
+const NEW_STRING = "__zs_n";
+const NEW_KEY = "__zs_y";
+const MEMBER = "__zs_w";
+const SPREAD_ARGS = "__zs_a";
+const LEAVING = "__zs_r";
+const HEAD = "__zs_v";
 /** Global the prelude defines for the header (same name in prelude.ts); the call deletes it. */
 const METER_GLOBAL = "__zs_meter";
 
@@ -149,11 +200,19 @@ interface Edit {
   close: boolean;
   /** Size of the wrapped range: at one position, outer opens first and inner closes first. */
   span: number;
+  /** Source chars replaced by `text` (an operator or bracket; newlines in them are kept). */
+  del?: number;
+  /** Text inserted here is this source range, with the edits inside it (they move with it). */
+  move?: { from: number; to: number; before: string; after: string };
 }
 
 interface FunctionState {
   /** Syntax nodes of this function's own code (nested functions excluded). */
   nodes: number;
+  /** Its code uses the temporary: it gets a local one (twice as fast as the module's). */
+  temp?: boolean;
+  /** Its return values only reach bot code (see `Types.callOnly`), so they aren't checked. */
+  callOnly?: boolean;
 }
 
 type AnyNode = Node & Record<string, unknown>;
@@ -188,14 +247,23 @@ class Instrumenter {
   private fn: FunctionState = { nodes: 0 };
   private maxFunctionNodes = 0;
   private maxParamWeight = 0;
+  /**
+   * Starts of expression statements in a statement list. Text inserted there must not start
+   * with `(`: without a semicolon, the previous line would become a call (`a = b` + `(x)`).
+   */
+  private readonly statementStarts = new Set<number>();
+  /** Which names only ever hold numbers: their string checks are left out. */
+  private types!: Types;
 
   constructor(source: string) {
     this.source = source;
   }
 
   run(ast: Node): InstrumentResult {
+    this.types = new Types(ast);
     const top = this.region;
     const module = this.fn;
+    this.markStatements((ast as AnyNode).body as Node[]);
     for (const stmt of (ast as AnyNode).body as Node[]) this.visit(stmt);
 
     for (const c of this.charges) this.place(c);
@@ -206,7 +274,8 @@ class Instrumenter {
       BACKTRACE_UNITS_PER_CHAR_PER_NODE * Math.max(this.maxFunctionNodes, module.nodes);
     const exception = EXCEPTION_UNITS + this.maxParamWeight * UNITS_PER_WEIGHT;
     const header =
-      `var ${COUNTER}=0;const{o:${OVERRUN},k:${KEYS},f:${FOR_IN},x:${CAUGHT}}=` +
+      `var ${COUNTER}=0,${TEMP};const{o:${OVERRUN},k:${KEYS},f:${FOR_IN},x:${CAUGHT},` +
+      `n:${NEW_STRING},y:${NEW_KEY},w:${MEMBER},a:${SPREAD_ARGS},r:${LEAVING}}=` +
       `${METER_GLOBAL}(function(n){${COUNTER}=n},function(){return ${COUNTER}},` +
       `${Math.ceil(tick)},${Math.ceil(load)},${exception});` +
       chargeStatement(Math.ceil(top.weight * UNITS_PER_WEIGHT));
@@ -224,6 +293,11 @@ class Instrumenter {
 
   private add(weight: number): void {
     this.region.weight += weight;
+  }
+
+  private addCheck(): void {
+    this.add(W_CHECK);
+    this.fn.nodes += CHECK_NODES;
   }
 
   /** Visits `node` into a fresh region and returns that region's weight. */
@@ -287,8 +361,17 @@ class Instrumenter {
         this.add(1);
         return;
       case "Literal":
+        this.checkLiteral(n);
         this.add(n.regex ? W_REGEX : 1);
         return;
+      case "TemplateElement": {
+        const value = n.value as { cooked: string | null; raw: string };
+        if (Math.max(value.raw.length, value.cooked?.length ?? 0) > MAX_STRING_LENGTH) {
+          throw this.reject(n, `this template is longer than ${MAX_STRING_LENGTH} chars`);
+        }
+        this.add(1);
+        return;
+      }
       case "ImportDeclaration":
       case "ImportExpression":
       case "ExportAllDeclaration":
@@ -307,11 +390,18 @@ class Instrumenter {
       case "MemberExpression":
         this.add(1);
         this.visit(n.object as Node);
-        if (n.computed) this.visit(n.property as Node);
+        if (n.computed) {
+          this.visit(n.property as Node);
+          this.check(n.property as Node, K_KEY);
+        }
         return;
       case "Property":
         this.add(W_PROPERTY);
-        if (n.computed) this.visit(n.key as Node);
+        if (n.computed) {
+          this.visit(n.key as Node);
+          // A computed key can name a function (`{ get [k]() {} }` is "get " + k), so it is capped.
+          this.check(n.key as Node, K_KEY, NEW_KEY);
+        }
         // `{ a }` has the same Identifier as key and value.
         this.visit(n.value as Node);
         return;
@@ -333,10 +423,30 @@ class Instrumenter {
         return;
       case "CallExpression":
       case "NewExpression":
-      case "TaggedTemplateExpression":
         this.add(n.type === "NewExpression" ? W_NEW : W_CALL);
-        this.visitChildren(n);
+        this.visit(n.callee as Node);
+        // A built-in may convert or hash any argument; the bot's own functions check their uses.
+        if (this.types.ownFunction(n.callee as AnyNode)) {
+          this.visitChildren({ ...n, callee: null } as AnyNode);
+          return;
+        }
+        for (const a of n.arguments as AnyNode[]) {
+          if (a.type === "SpreadElement") {
+            this.add(2);
+            this.wrapCall(SPREAD_ARGS, a.argument as Node);
+            this.visit(a.argument as Node);
+          } else {
+            this.visit(a);
+            this.check(a, K_NUMBER);
+          }
+        }
         return;
+      case "TaggedTemplateExpression": {
+        this.add(W_CALL);
+        this.visitChildren(n);
+        for (const e of (n.quasi as AnyNode).expressions as Node[]) this.check(e, K_NUMBER);
+        return;
+      }
       case "ObjectExpression":
         this.add(W_ALLOC);
         for (const p of n.properties as AnyNode[]) {
@@ -362,16 +472,33 @@ class Instrumenter {
         if (n.init) this.visit(n.init as Node);
         return;
       case "AssignmentExpression":
-        this.add(n.operator === "+=" ? W_PLUS : 1);
-        if (n.left && (n.left as AnyNode).type === "ObjectPattern") {
-          if (this.restAtTop(n.left as AnyNode)) this.wrapCall(KEYS, n.right as Node);
-          this.visitPattern(n.left as Node, true);
-        } else if ((n.left as AnyNode).type === "ArrayPattern") {
-          this.visitPattern(n.left as Node, false);
-        } else {
-          this.visit(n.left as Node);
+        this.visitAssignment(n);
+        return;
+      case "UpdateExpression":
+        this.add(1);
+        this.visitReadModifyWrite(n, n.argument as AnyNode);
+        return;
+      case "UnaryExpression":
+        this.add(1);
+        this.visit(n.argument as Node);
+        if (n.operator === "+" || n.operator === "-" || n.operator === "~") {
+          this.check(n.argument as Node, K_NUMBER);
         }
-        this.visit(n.right as Node);
+        return;
+      case "ReturnStatement":
+        this.add(1);
+        // A returned string may go straight into a built-in (valueOf, a getter, a comparator).
+        if (n.argument) {
+          this.visit(n.argument as Node);
+          if (!this.fn.callOnly) this.check(n.argument as Node, K_NUMBER);
+        }
+        return;
+      case "YieldExpression":
+        this.add(1);
+        if (n.argument) {
+          this.visit(n.argument as Node);
+          if (!n.delegate) this.check(n.argument as Node, K_NUMBER);
+        }
         return;
       case "ForStatement":
         this.visitFor(n);
@@ -395,6 +522,9 @@ class Instrumenter {
         const left = this.measureHead(n.left as AnyNode);
         this.add(left + W_ITERATION);
         this.charged([n.body as Node], bodyPlacement(n.body as AnyNode), left + W_ITERATION);
+        // An exception in the body makes for-of call the iterator's return(), which is bot code
+        // that can throw and drop further exceptions: charge it first (see LEAVING).
+        if (n.type === "ForOfStatement") this.chargeBeforeClose(n);
         return;
       }
       case "IfStatement":
@@ -405,31 +535,38 @@ class Instrumenter {
           this.branch([n.alternate as Node], bodyPlacement(n.alternate as AnyNode));
         }
         return;
-      case "SwitchStatement":
+      case "SwitchStatement": {
         this.add(1);
         this.visit(n.discriminant as Node);
-        for (const c of n.cases as AnyNode[]) {
+        // Each case compares with ===.
+        const cases = n.cases as AnyNode[];
+        this.check(n.discriminant as Node, K_EQUAL * Math.max(1, cases.length));
+        for (const c of cases) {
           this.add(1);
           if (c.test) this.visit(c.test as Node);
           const body = c.consequent as Node[];
+          this.markStatements(body);
           if (body.length > 0) this.branch(body, { kind: "before", pos: (body[0] as Node).start });
         }
         return;
+      }
       case "TryStatement":
         this.visitTry(n);
         return;
       case "BlockStatement":
+      case "StaticBlock":
+        this.markStatements(n.body as Node[]);
+        this.visitChildren(n);
+        return;
       case "ExpressionStatement":
       case "EmptyStatement":
       case "VariableDeclaration":
       case "ChainExpression":
       case "ParenthesizedExpression":
-      case "StaticBlock":
         this.visitChildren(n);
         return;
       case "BinaryExpression":
-        this.add(n.operator === "+" ? W_PLUS : 1);
-        this.visitChildren(n);
+        this.visitBinary(n);
         return;
       case "TemplateLiteral":
         this.add((n.expressions as Node[]).length > 0 ? W_TEMPLATE : 1);
@@ -459,7 +596,7 @@ class Instrumenter {
     const savedFn = this.fn;
     const region: Region = { weight: 0 };
     this.region = region;
-    this.fn = { nodes: 0 };
+    this.fn = { nodes: 0, callOnly: this.types.callOnly(n) };
 
     // Parameters bind before the body's charge runs. Defaults get their own charge; the rest
     // is charged with the body, and if binding throws halfway, the catch that ends up with the
@@ -473,11 +610,27 @@ class Instrumenter {
     this.maxParamWeight = Math.max(this.maxParamWeight, paramWeight);
 
     const body = n.body as AnyNode;
+    const leave = `}catch(${CAUGHT_VAR}){${LEAVING}(${CAUGHT_VAR});throw ${CAUGHT_VAR}}`;
     if (body.type === "BlockStatement") {
+      this.markStatements(body.body as Node[]);
       for (const s of body.body as Node[]) this.visit(s);
+      if (this.fn.temp) {
+        this.edits.push({ pos: body.start + 1, text: `var ${TEMP};`, close: false, span: 0 });
+      }
+      if ((body.body as Node[]).length > 0) {
+        const span = body.end - body.start;
+        this.edits.push({ pos: body.start + 1, text: "try{", close: false, span: 0 });
+        this.edits.push({ pos: body.end - 1, text: leave, close: true, span });
+      }
       this.charges.push({ region, at: { kind: "block", pos: body.start + 1 } });
     } else {
       this.visit(body);
+      if (!this.fn.callOnly) this.check(body, K_NUMBER);
+      // `=> x` becomes `=> {try{return x}catch…}`.
+      const arrow = this.findArrow(n);
+      const span = n.end - arrow;
+      this.edits.push({ pos: arrow, text: "{try{return ", close: false, span });
+      this.edits.push({ pos: n.end, text: `${leave}}`, close: true, span });
       this.charges.push({ region, at: { kind: "expression", node: body } });
     }
     this.endFunction(n);
@@ -535,6 +688,8 @@ class Instrumenter {
       this.visit(n.right as Node);
       return;
     }
+    // A member target may convert what it stores (`[a[i]] = xs` into a typed array, `.length`).
+    if (n.type === "MemberExpression" && storesNumber(n)) this.viaAccessor(n);
     this.visit(n);
   }
 
@@ -549,7 +704,10 @@ class Instrumenter {
           continue;
         }
         this.add(1);
-        if (prop.computed) this.visit(prop.key as Node);
+        if (prop.computed) {
+          this.visit(prop.key as Node);
+          this.check(prop.key as Node, K_KEY);
+        }
         part(prop.value as AnyNode);
       }
     } else if (n.type === "ArrayPattern") {
@@ -626,6 +784,7 @@ class Instrumenter {
           "destructuring in a catch clause is not supported: use `catch (e)` and destructure inside",
         );
       }
+      this.markStatements(body.body as Node[]);
       this.charged(body.body as Node[], { kind: "block", pos: body.start + 1 }, 2, caught);
     }
     if (finalizer) this.visitFinally(n, finalizer);
@@ -664,8 +823,10 @@ class Instrumenter {
     let hasFields = false;
     for (const el of body.body as AnyNode[]) {
       this.add(2);
-      if (el.computed) this.visit(el.key as Node);
-      else if (el.key && (el.key as AnyNode).type === "PrivateIdentifier") {
+      if (el.computed) {
+        this.visit(el.key as Node);
+        this.check(el.key as Node, K_KEY, NEW_KEY);
+      } else if (el.key && (el.key as AnyNode).type === "PrivateIdentifier") {
         this.checkName((el.key as AnyNode).name as string, el.key as Node);
       }
       if (el.type === "PropertyDefinition" && !el.static) {
@@ -679,6 +840,7 @@ class Instrumenter {
         this.region = saved;
         this.fn = savedFn;
       } else if (el.type === "StaticBlock") {
+        this.markStatements(el.body as Node[]);
         for (const s of el.body as Node[]) this.visit(s);
       } else if (el.value) {
         // Methods, accessors and static field initialisers.
@@ -691,6 +853,314 @@ class Instrumenter {
       this.fn = savedFn;
       this.charges.push({ region: fields, at: { kind: "field", pos: body.start + 1 } });
     }
+  }
+
+  // ---- strings ----
+
+  private visitBinary(n: AnyNode): void {
+    const op = n.operator as string;
+    const left = n.left as AnyNode;
+    const right = n.right as AnyNode;
+    this.add(op === "+" ? W_PLUS : 1);
+    this.visit(left);
+    this.visit(right);
+    switch (op) {
+      case "+":
+        // Objects can convert to strings here, so both sides must be numeric to skip the cap.
+        if (!this.types.numeric(left) || !this.types.numeric(right)) {
+          this.addCheck();
+          const span = n.end - n.start;
+          this.fn.temp = true;
+          this.edits.push({ pos: n.start, text: `(${TEMP}=`, close: false, span });
+          this.edits.push({ pos: n.end, text: plusTail(false), close: true, span });
+        }
+        return;
+      case "===":
+      case "!==":
+        // memcmp runs only when both are strings of the same length, so one side is enough.
+        if (this.nonString(left) || this.nonString(right)) return;
+        this.check(staticLength(right) !== undefined ? right : left, K_EQUAL);
+        return;
+      case "==":
+      case "!=":
+        if (isNull(left) || isNull(right)) return;
+        this.check(left, K_NUMBER);
+        this.check(right, K_NUMBER);
+        return;
+      case "in":
+        if (left.type !== "PrivateIdentifier") this.check(left, K_KEY);
+        return;
+      case "instanceof":
+        return;
+      default:
+        // Relational and arithmetic operators convert strings to numbers.
+        this.check(left, K_NUMBER);
+        this.check(right, K_NUMBER);
+    }
+  }
+
+  private visitAssignment(n: AnyNode): void {
+    const op = n.operator as string;
+    const left = n.left as AnyNode;
+    const right = n.right as Node;
+    this.add(op === "+=" ? W_PLUS : 1);
+    if (left.type === "ObjectPattern") {
+      if (this.restAtTop(left)) this.wrapCall(KEYS, right);
+      this.visitPattern(left, true);
+      this.visit(right);
+    } else if (left.type === "ArrayPattern") {
+      this.visitPattern(left, false);
+      this.visit(right);
+    } else if (op === "=" || op === "&&=" || op === "||=" || op === "??=") {
+      this.visit(left);
+      this.visit(right);
+      if (left.type === "MemberExpression" && storesNumber(left)) this.check(right, K_NUMBER);
+    } else {
+      this.visitReadModifyWrite(n, left);
+    }
+  }
+
+  /**
+   * `x++`, `x -= y`, `x += y`: the target's value is converted to a number (or concatenated),
+   * so it is checked first. A name or a member of names (`a.b[i]`) is read twice for that;
+   * any other member goes through the prelude's accessor (`__zs_w(obj, key).v`), which
+   * evaluates the object and key once. `x += y` becomes `x = x + (y)`, so the cap applies
+   * before the result is stored.
+   */
+  private visitReadModifyWrite(n: AnyNode, target: AnyNode): void {
+    const simple = isSimple(target);
+    if (!simple) this.viaAccessor(target);
+    this.visit(target);
+    const right = n.type === "AssignmentExpression" ? (n.right as AnyNode) : null;
+    if (right) this.visit(right);
+    if (
+      this.types.numeric(target) &&
+      (!right || n.operator !== "+=" || this.types.numeric(right))
+    ) {
+      if (right && n.operator !== "+=") this.check(right, K_NUMBER);
+      return;
+    }
+    this.addCheck();
+    if (!simple) return;
+    const text = this.simpleText(target);
+    if (n.operator === "+=" && right) {
+      const op = this.findToken(target.end, "+=");
+      const numeric = target.type === "MemberExpression" && storesNumber(target);
+      const span = n.end - (op + 2);
+      this.edits.push({ pos: op, text: "=", close: true, span: 0, del: 2 });
+      this.fn.temp = true;
+      this.edits.push({ pos: op + 2, text: `(${TEMP}=${text}+(`, close: false, span });
+      this.edits.push({ pos: n.end, text: `)${plusTail(numeric)}`, close: true, span });
+      return;
+    }
+    const span = n.end - n.start;
+    this.edits.push({
+      pos: n.start,
+      text: `(typeof ${text}==="string"&&${chargeText(text, K_NUMBER)},`,
+      close: false,
+      span,
+    });
+    this.edits.push({ pos: n.end, text: ")", close: true, span });
+    if (right) this.check(right, K_NUMBER);
+  }
+
+  /** `obj[key]` → `__zs_w(obj,key).v`, `obj.name` → `__zs_w(obj,"name").v`. */
+  private viaAccessor(m: AnyNode): void {
+    const object = m.object as AnyNode;
+    const property = m.property as AnyNode;
+    if (object.type === "Super" || property.type === "PrivateIdentifier") {
+      throw this.reject(
+        m,
+        "this assignment target is not supported here: read it into a variable and assign it in a separate statement",
+      );
+    }
+    const span = m.end - m.start;
+    this.edits.push({ pos: m.start, text: `${MEMBER}(`, close: false, span });
+    if (m.computed) {
+      const open = this.findToken(object.end, "[");
+      this.edits.push({ pos: open, text: ",", close: true, span: Infinity, del: 1 });
+      const close = this.findToken(property.end, "]");
+      this.edits.push({ pos: close, text: ").v", close: true, span, del: 1 });
+    } else {
+      const dot = this.findToken(object.end, ".");
+      const name = JSON.stringify(property.name);
+      this.edits.push({
+        pos: dot,
+        text: `,${name}).v`,
+        close: true,
+        span,
+        del: property.end - dot,
+      });
+    }
+  }
+
+  /**
+   * Charges a string operand by its length (`rate` units per char), or caps and charges it
+   * through `helper`. Values that can't be strings are skipped and literals are charged
+   * statically.
+   */
+  private check(node: Node, rate: number, helper?: string): void {
+    const n = node as AnyNode;
+    if (this.nonString(n)) return;
+    const length = staticLength(n);
+    if (length !== undefined) {
+      this.add(Math.ceil((length * rate) / UNITS_PER_WEIGHT));
+      return;
+    }
+    this.addCheck();
+    const tail = (v: string) => (helper ? `${helper}(${v})` : chargeText(v, rate));
+    const span = n.end - n.start;
+    if (n.type === "Identifier" || n.type === "ThisExpression") {
+      // Reading a name twice has no side effects (a global getter would be a checked function).
+      const v = n.type === "ThisExpression" ? "this" : this.source.slice(n.start, n.end);
+      this.edits.push({
+        pos: n.start,
+        text: `(typeof ${v}==="string"&&${tail(v)},`,
+        close: false,
+        span,
+      });
+      this.edits.push({ pos: n.end, text: ")", close: true, span });
+      return;
+    }
+    const seq = n.type === "SequenceExpression";
+    this.fn.temp = true;
+    this.edits.push({ pos: n.start, text: `(${TEMP}=${seq ? "(" : ""}`, close: false, span });
+    this.edits.push({
+      pos: n.end,
+      text: `${seq ? ")" : ""},typeof ${TEMP}==="string"&&${tail(TEMP)},${TEMP})`,
+      close: true,
+      span,
+    });
+  }
+
+  private checkLiteral(n: AnyNode): void {
+    const regex = n.regex as { pattern: string } | undefined;
+    const length = regex ? regex.pattern.length : typeof n.value === "string" ? n.value.length : 0;
+    if (length > MAX_STRING_LENGTH) {
+      throw this.reject(
+        n,
+        `this literal is longer than ${MAX_STRING_LENGTH} chars, the longest string the sandbox allows: split it into an array of shorter strings`,
+      );
+    }
+  }
+
+  /** Source text for a node that {@link isSimple} accepts, without comments or line breaks. */
+  private simpleText(n: AnyNode): string {
+    switch (n.type) {
+      case "ThisExpression":
+        return "this";
+      case "Super":
+        return "super";
+      case "Literal":
+        return n.raw as string;
+      case "MemberExpression": {
+        const object = n.object as AnyNode;
+        const prefix =
+          object.type === "Literal" ? `(${this.simpleText(object)})` : this.simpleText(object);
+        const property = n.property as AnyNode;
+        if (n.computed) return `${prefix}[${this.simpleText(property)}]`;
+        if (property.type === "PrivateIdentifier") return `${prefix}.#${property.name}`;
+        return `${prefix}.${this.source.slice(property.start, property.end)}`;
+      }
+      default:
+        return this.source.slice(n.start, n.end);
+    }
+  }
+
+  /**
+   * Wraps a for-of body in `try{…}catch(e){charge e; throw e}`. A head that destructures (or
+   * stores into a member) can throw too, so it moves into that try: `for (const [a] of it) s` →
+   * `for (const __zs_v of it) try{ const [a] = __zs_v; s }catch…`.
+   */
+  private chargeBeforeClose(n: AnyNode): void {
+    const body = n.body as AnyNode;
+    const head = n.left as AnyNode;
+    const declared = head.type === "VariableDeclaration";
+    const target = (declared ? (head.declarations as AnyNode[])[0]?.id : head) as AnyNode;
+    const moves = target.type !== "Identifier";
+    const block = body.type === "BlockStatement";
+    if (!moves && block && (body.body as Node[]).length === 0) return;
+    const start = block ? body.start + 1 : body.start;
+    const end = block ? body.end - 1 : body.end;
+    const span = end - start;
+    // Opens at `start`: try, then the moved head, then (made later) the body's charge.
+    this.edits.push({ pos: start, text: "try{", close: false, span: block ? 0 : span + 2 });
+    if (moves) {
+      const from = declared ? head.start : target.start;
+      const kind = declared ? `${head.kind} ` : "";
+      this.edits.push({
+        pos: from,
+        text: `const ${HEAD}`,
+        close: true,
+        span: Infinity,
+        del: head.end - from,
+      });
+      const assign = !declared && target.type === "ObjectPattern";
+      this.edits.push({
+        pos: start,
+        text: "",
+        close: false,
+        span: block ? 0 : span + 1,
+        move: {
+          from: declared ? target.start : head.start,
+          to: declared ? target.end : head.end,
+          before: assign ? "(" : kind,
+          after: assign ? `=${HEAD});` : `=${HEAD};`,
+        },
+      });
+    }
+    // In an empty block the end is the start: closing after every opening there.
+    const empty = start === end;
+    this.edits.push({
+      pos: end,
+      text: `}catch(${CAUGHT_VAR}){${CAUGHT}(${CAUGHT_VAR});throw ${CAUGHT_VAR}}`,
+      close: !empty,
+      span: empty ? -1 : span + 2,
+    });
+  }
+
+  /** Position right after the `=>` of an arrow function. */
+  private findArrow(n: AnyNode): number {
+    const params = n.params as Node[];
+    let i = params.length > 0 ? (params[params.length - 1] as Node).end : n.start;
+    while (i < n.end && this.source[i] !== "=") {
+      if (this.source.startsWith("/*", i)) i = this.source.indexOf("*/", i) + 2;
+      else if (this.source.startsWith("//", i)) i = this.source.indexOf("\n", i);
+      else i++;
+    }
+    if (!this.source.startsWith("=>", i))
+      throw new Error(`instrument: expected "=>" at offset ${i}`);
+    return i + 2;
+  }
+
+  /** Position of `token` after `from`, skipping whitespace, comments and closing parens. */
+  private findToken(from: number, token: string): number {
+    const src = this.source;
+    let i = from;
+    while (i < src.length) {
+      if (src.startsWith(token, i)) return i;
+      if (src.startsWith("//", i)) {
+        const end = src.indexOf("\n", i);
+        i = end < 0 ? src.length : end;
+      } else if (src.startsWith("/*", i)) {
+        i = src.indexOf("*/", i) + 2;
+      } else if (src[i] === ")" || /\s/.test(src[i] ?? "")) {
+        i++;
+      } else {
+        break;
+      }
+    }
+    throw new Error(`instrument: expected "${token}" at offset ${i}`);
+  }
+
+  /** Never a string primitive: numeric, or an object (objects convert through checked code). */
+  private nonString(n: AnyNode): boolean {
+    return this.types.numeric(n) || OBJECT_EXPRESSIONS.has(n.type);
+  }
+
+  private markStatements(list: Node[]): void {
+    for (const stmt of list)
+      if (stmt.type === "ExpressionStatement") this.statementStarts.add(stmt.start);
   }
 
   // ---- edits ----
@@ -757,7 +1227,9 @@ class Instrumenter {
 
   /**
    * Applies the edits. At one position: closings before openings; closings inner (smaller span)
-   * first; openings outer (larger span) first; otherwise in the order they were made.
+   * first; openings outer (larger span) first; otherwise openings in the order they were made
+   * and closings in reverse (the first wrap made around a node is the outermost). An opening `(`
+   * at the start of an expression statement gets a `;` first (see `statementStarts`).
    */
   private apply(): string {
     const order = this.edits.map((e, i) => ({ e, i }));
@@ -765,20 +1237,70 @@ class Instrumenter {
       if (a.e.pos !== b.e.pos) return a.e.pos - b.e.pos;
       if (a.e.close !== b.e.close) return a.e.close ? -1 : 1;
       if (a.e.span !== b.e.span) return a.e.close ? a.e.span - b.e.span : b.e.span - a.e.span;
-      return a.i - b.i;
+      return a.e.close ? b.i - a.i : a.i - b.i;
     });
-    let out = "";
-    let last = 0;
-    for (const { e } of order) {
-      out += this.source.slice(last, e.pos) + e.text;
-      last = e.pos;
+    const edits = order.map(({ e }) => e);
+    // Edits inside a moved range go with it.
+    const moved = new Set<Edit>();
+    for (const m of edits) {
+      if (!m.move) continue;
+      const { from, to } = m.move;
+      for (const e of edits) {
+        if (e.pos > from && e.pos < to) moved.add(e);
+        else if (e.pos === from && !e.close) moved.add(e);
+        else if (e.pos === to && e.close && !e.del) moved.add(e);
+      }
     }
-    return out + this.source.slice(last);
+    const main = edits.filter((e) => !moved.has(e));
+    return this.render(main, 0, this.source.length, edits);
+  }
+
+  /** The source from `from` to `to` with `list` applied (sorted, all inside the range). */
+  private render(list: Edit[], from: number, to: number, all: Edit[]): string {
+    let out = "";
+    let last = from;
+    let guarded = -1;
+    for (const e of list) {
+      if (e.pos > last) {
+        out += this.source.slice(last, e.pos);
+        last = e.pos;
+      }
+      if (
+        !e.close &&
+        e.text.startsWith("(") &&
+        guarded !== e.pos &&
+        this.statementStarts.has(e.pos)
+      ) {
+        out += ";";
+        guarded = e.pos;
+      }
+      if (e.move) {
+        const { from: a, to: b, before, after } = e.move;
+        const inner = all.filter(
+          (x) =>
+            x !== e &&
+            ((x.pos > a && x.pos < b) ||
+              (x.pos === a && !x.close) ||
+              (x.pos === b && x.close && !x.del)),
+        );
+        const text = this.render(inner, a, b, all).replace(/\n/g, " ");
+        out += before + text + after;
+      }
+      out += e.text;
+      if (e.del) {
+        out += this.source.slice(e.pos, e.pos + e.del).replace(/[^\n]/g, "");
+        last = e.pos + e.del;
+      }
+    }
+    return out + this.source.slice(last, to);
   }
 
   // ---- checks ----
 
   private checkName(name: string, node: Node): void {
+    if (name.length > MAX_STRING_LENGTH) {
+      throw this.reject(node, `this name is longer than ${MAX_STRING_LENGTH} chars`);
+    }
     if (name.startsWith(RESERVED)) {
       throw this.reject(
         node,
@@ -794,6 +1316,73 @@ class Instrumenter {
 
 const OBJECT_REST_MESSAGE =
   "object rest (`{ a, ...rest }`) is only supported as `const { a, ...rest } = value` or `({ a, ...rest } = value)`; destructure in a separate statement";
+
+/** Charges `v.length * rate` units: `v` is a string here. */
+function chargeText(v: string, rate: number): string {
+  return `(${COUNTER}-=${v}.length*${rate})<0&&${OVERRUN}()`;
+}
+
+/**
+ * The end of `(__zs_t=a+b` …: long results go through the prelude's cap. `numeric`: the result
+ * is stored where a string becomes a number (`a[i] += s`), so it is charged for that too.
+ */
+function plusTail(numeric: boolean): string {
+  const cap = `${TEMP}.length>${SHORT_STRING}&&${NEW_STRING}(${TEMP})`;
+  const check = numeric ? `(${cap},${chargeText(TEMP, K_NUMBER)})` : cap;
+  return `,typeof ${TEMP}==="string"&&${check},${TEMP})`;
+}
+
+/** Whether a store to this member may convert the value to a number (typed array, length). */
+function storesNumber(m: AnyNode): boolean {
+  const p = m.property as AnyNode;
+  return m.computed === true || (p.type === "Identifier" && p.name === "length");
+}
+
+/**
+ * Whether an expression can be read again without side effects (except getters, whose results
+ * are checked anyway): names, `this`, literals and non-optional members of those.
+ */
+function isSimple(n: AnyNode): boolean {
+  switch (n.type) {
+    case "Identifier":
+    case "ThisExpression":
+      return true;
+    case "Literal":
+      return !/[\n\r\u2028\u2029]/.test(n.raw as string);
+    case "MemberExpression": {
+      if (n.optional) return false;
+      const object = n.object as AnyNode;
+      if (object.type !== "Super" && !isSimple(object)) return false;
+      return !n.computed || isSimple(n.property as AnyNode);
+    }
+    default:
+      return false;
+  }
+}
+
+/** Expressions that evaluate to an object. */
+const OBJECT_EXPRESSIONS = new Set([
+  "ArrowFunctionExpression",
+  "FunctionExpression",
+  "ClassExpression",
+  "ObjectExpression",
+  "ArrayExpression",
+  "NewExpression",
+]);
+
+/** Length of a string literal or a template without substitutions. */
+function staticLength(n: AnyNode): number | undefined {
+  if (n.type === "Literal") return typeof n.value === "string" ? n.value.length : undefined;
+  if (n.type === "TemplateLiteral" && (n.expressions as Node[]).length === 0) {
+    const q = (n.quasis as AnyNode[])[0]?.value as { cooked: string | null } | undefined;
+    return q?.cooked?.length ?? 0;
+  }
+  return undefined;
+}
+
+function isNull(n: AnyNode): boolean {
+  return n.type === "Literal" && n.value === null && !n.regex;
+}
 
 function chargeStatement(units: number): string {
   return `if((${COUNTER}-=${units})<0)${OVERRUN}();`;

@@ -153,9 +153,8 @@ describe("native work budget", () => {
   const loops = {
     "sparse slice": "const a = []; a.length = 1e5; for (;;) a.slice();",
     "caught errors": "const a = []; a.length = 1e8; for (;;) { try { a.indexOf(1); } catch {} }",
-    "string search": "const s = 'a'.repeat(1e5); for (;;) s.indexOf('b');",
-    "big string": "'x'.repeat(5e7);",
-    "naive search": "const s = 'a'.repeat(1e5); s.indexOf('a'.repeat(1000) + 'b');",
+    "string search": "const s = 'a'.repeat(1.6e4); for (;;) s.indexOf('b');",
+    "naive search": "const s = 'a'.repeat(1.6e4); for (;;) s.indexOf('a'.repeat(1000) + 'b');",
     "typed array alloc": "for (;;) new Uint8Array(1e6);",
     "buffer alloc": "for (;;) new ArrayBuffer(1e6);",
     "typed copy": "const t = new Uint8Array(1e5); for (;;) new Uint8Array(t);",
@@ -168,44 +167,46 @@ describe("native work budget", () => {
     "valueOf size":
       "let n = 0; const size = { valueOf: () => (n++ % 2 ? 1e7 : 1) }; for (;;) new ArrayBuffer(size);",
     // Review of #49: natives that walk every key or char of their input.
-    descriptors: "const s = 'x'.repeat(2e5); for (;;) Object.getOwnPropertyDescriptors(s);",
-    assign: "const s = 'x'.repeat(2e5); for (;;) Object.assign({}, s);",
+    descriptors: "const s = 'x'.repeat(1.6e4); for (;;) Object.getOwnPropertyDescriptors(s);",
+    assign: "const s = 'x'.repeat(1.6e4); for (;;) Object.assign({}, s);",
     "String.raw": "const raw = new Uint8Array(1e5); for (;;) String.raw({ raw });",
-    "Object.values": "const s = 'x'.repeat(2e5); for (;;) Object.values(s);",
+    "Object.values": "const s = 'x'.repeat(1.6e4); for (;;) Object.values(s);",
     "Object.entries": "const a = new Array(5e4).fill(0); for (;;) Object.entries(a);",
     isFrozen: "const a = new Array(5e4).fill(0); for (;;) Object.isFrozen(a);",
-    parseFloat: "const s = '1'.repeat(1e6); for (;;) parseFloat(s);",
-    RegExp: "const p = 'a'.repeat(1e5); for (;;) new RegExp(p);",
+    parseFloat: "const s = '1'.repeat(1.6e4); for (;;) parseFloat(s);",
+    RegExp: "const p = 'a'.repeat(1.6e4); for (;;) new RegExp(p);",
     "join separator":
-      "const a = new Array(100).fill(1); const sep = 'x'.repeat(1e5); for (;;) a.join(sep);",
+      "const a = new Array(10).fill(1); const sep = 'x'.repeat(1500); for (;;) a.join(sep).length;",
     "string indexOf in array":
-      "const s = 'x'.repeat(1e6); const a = new Array(100).fill(s + 'y'); for (;;) a.indexOf(s + 'z');",
+      "const s = 'x'.repeat(1.6e4); const a = new Array(100).fill(s + 'y'); for (;;) a.indexOf(s + 'z');",
     bind: "const args = new Array(6e4).fill(0); for (;;) Math.max.bind(null, ...args);",
     // Follow-up review of #49: built-ins that copy, convert or quote a whole string.
-    "JSON.stringify string": "const s = 'x'.repeat(1e5); for (;;) JSON.stringify(s);",
-    "JSON.stringify key": "const o = { ['k'.repeat(1e5)]: 1 }; for (;;) JSON.stringify(o);",
+    "JSON.stringify string": "const s = 'x'.repeat(1.6e4); for (;;) JSON.stringify(s);",
+    "JSON.stringify key": "const o = { ['k'.repeat(1.6e4)]: 1 }; for (;;) JSON.stringify(o);",
     "JSON.stringify escapes":
-      "const s = String.fromCharCode(1).repeat(1e4); for (;;) JSON.stringify(s);",
+      "const s = String.fromCharCode(1).repeat(2e3); for (;;) JSON.stringify(s);",
     "JSON.stringify String object":
-      "const s = new String('x'.repeat(1e5)); for (;;) JSON.stringify(s);",
+      "const s = new String('x'.repeat(1.6e4)); for (;;) JSON.stringify(s);",
     normalize: "const s = String.fromCharCode(101, 769).repeat(5e3); for (;;) s.normalize('NFC');",
-    toUpperCase: "const s = 'x'.repeat(1e5); for (;;) s.toUpperCase();",
-    toLowerCase: "const s = 'X'.repeat(1e5); for (;;) s.toLowerCase();",
-    localeCompare: "const s = 'x'.repeat(1e5); for (;;) s.localeCompare(s);",
+    toUpperCase: "const s = 'x'.repeat(1.6e4); for (;;) s.toUpperCase();",
+    toLowerCase: "const s = 'X'.repeat(1.6e4); for (;;) s.toLowerCase();",
+    localeCompare: "const s = 'x'.repeat(1.6e4); for (;;) s.localeCompare(s);",
     encodeURIComponent:
-      "const s = String.fromCharCode(233).repeat(1e4); for (;;) encodeURIComponent(s);",
-    escape: "const s = String.fromCharCode(233).repeat(1e4); for (;;) escape(s);",
-    decodeURIComponent: "const s = '%C3%A9'.repeat(1e4); for (;;) decodeURIComponent(s);",
+      "const s = String.fromCharCode(233).repeat(2e3); for (;;) encodeURIComponent(s);",
+    escape: "const s = String.fromCharCode(233).repeat(2e3); for (;;) escape(s);",
+    decodeURIComponent: "const s = '%C3%A9'.repeat(2e3); for (;;) decodeURIComponent(s);",
     "split into chars": "const s = 'x'.repeat(1e4); for (;;) s.split('');",
     "string spread": "const s = 'x'.repeat(1e4); for (;;) [...s];",
     "Array.from string": "const s = 'x'.repeat(1e4); for (;;) Array.from(s);",
     "global match": "const s = 'x'.repeat(1e4); for (;;) s.match(/x/g);",
     "matchAll spread": "const s = 'x'.repeat(1e4); for (;;) [...s.matchAll(/x/g)];",
-    "regex split": "const s = 'x,'.repeat(1e4); for (;;) s.split(/,/);",
-    "long replacement": "const r = 'y'.repeat(1e5); for (;;) 'xxxxxxxxxx'.replaceAll('x', r);",
-    "replacement prefix": "const s = 'x'.repeat(1000); for (;;) s.replaceAll('x', '$`');",
-    "replacer function": "const r = 'y'.repeat(1e5); for (;;) 'xxxxxxxxxx'.replace(/x/g, () => r);",
-    "Symbol.replace": "const r = 'y'.repeat(1e5); for (;;) /x/g[Symbol.replace]('xxxxxxxxxx', r);",
+    "regex split": "const s = 'x,'.repeat(8e3); for (;;) s.split(/,/);",
+    "long replacement": "const r = 'y'.repeat(1.6e3); for (;;) 'xxxxxxxxxx'.replaceAll('x', r);",
+    "replacement prefix": "const s = 'x'.repeat(100); for (;;) s.replaceAll('x', '$`');",
+    "replacer function":
+      "const r = 'y'.repeat(1.6e3); for (;;) 'xxxxxxxxxx'.replace(/x/g, () => r);",
+    "Symbol.replace":
+      "const r = 'y'.repeat(1.6e3); for (;;) /x/g[Symbol.replace]('xxxxxxxxxx', r);",
     "fake global":
       "const s = 'x'.repeat(1e4); const rx = /x/; Object.defineProperty(rx, 'global', { value: true }); for (;;) s.match(rx);",
   };
@@ -213,7 +214,6 @@ describe("native work budget", () => {
   const byWork = new Set([
     "sparse slice",
     "string search",
-    "big string",
     "naive search",
     "typed array alloc",
     "buffer alloc",
@@ -257,23 +257,14 @@ describe("native work budget", () => {
     });
   }
 
-  it("stops set algebra within one tick", () => {
+  it("stops the review repro: JSON.stringify of a long string 50 times per loop", () => {
+    // Strings are capped (16 384 chars), so the 4 MB string of the original repro can't exist.
     const report = tickOnce(
-      "for (;;) a.union(b); return { turn: 0 };",
-      "const a = new Set(), b = new Set(); for (let i = 0; i < 5e4; i++) { a.add(i); b.add(-i); }",
-    );
-    expect(report.ms).toBeLessThan(FAST_MS);
-    expect(report.error).toMatch(/cost units/);
-  });
-
-  it("stops the review repro: JSON.stringify of a 4 MB string 50 times", () => {
-    const report = tickOnce(
-      "for (let j = 0; j < 50; j++) JSON.stringify(s); return { turn: 0.5 };",
-      "const s = 'x'.repeat(4e6);",
+      "for (;;) for (let j = 0; j < 50; j++) JSON.stringify(s); return { turn: 0.5 };",
+      "const s = 'x'.repeat(1.6e4);",
     );
     expect(report.ms).toBeLessThan(FAST_MS);
     expect(report.outcome).toBe("timeout");
-    expect(report.error).toMatch(/cost units/);
     expect(report.action.turn).not.toBe(0.5);
   });
 
@@ -345,18 +336,32 @@ describe("wrapped built-ins still behave", () => {
     ["JSON.stringify(Object.assign({ a: 1 }, 'xy', [3]))", '{"0":3,"1":"y","a":1}'],
     ["Object.keys(Object.getOwnPropertyDescriptors('ab')).join()", "0,1,length"],
     ["String.raw({ raw: ['a', 'b', 'c'] }, 1, 2)", "a1b2c"],
-    ["[...new Set([1, 2]).union(new Set([2, 3]))].join()", "1,2,3"],
-    ["new Set([1]).isSubsetOf(new Set([1, 2]))", "true"],
+    ["typeof new Set().union + typeof Set.prototype.isSubsetOf", "undefinedundefined"],
+    ["[...new Set('abca')].join() + new Map([[1, 2]]).get(1) + new Set().size", "a,b,c20"],
+    ["new (class S extends Set {})([1]).has(1) && new Map(new Map([['a', 1]])).get('a')", "1"],
+    ["JSON.stringify(Object.fromEntries([['a', 1], ['b', [2]]]))", '{"a":1,"b":[2]}'],
+    ["JSON.stringify(Object.fromEntries(new Map([['k', 'v']])))", '{"k":"v"}'],
+    [
+      "Symbol('d').description + Symbol.for('f').toString() + String(Symbol.iterator)",
+      "dSymbol(f)Symbol(Symbol.iterator)",
+    ],
+    ["typeof Symbol() + (Symbol.prototype.constructor === Symbol)", "symboltrue"],
+    [
+      "[1, 2].map(String).join() + ['1', '2'].map(Number)[1] + ['b', 'a'].sort().join('')",
+      "1,22ab",
+    ],
+    ["Uint8Array.from(new Set([1, 2])).join() + new Uint8Array(new Set([3])).join()", "1,23"],
+    ["new Uint8Array({ length: 2, 0: '7' }).join() + Math.max(...new Set([4, 5]))", "7,05"],
+    ["Array.prototype.push.call({ length: 1 }, 'x') + [1].at(-1)", "3"],
+    ["/a/g.test('a') + '' + /b/.exec('ab').index + [1, [2]].toString()", "true11,2"],
+    ["Math.max.bind(null, 1).name + (function f() {}).bind().name", "bound maxbound f"],
     ["parseInt('ff', 16) + parseFloat('1.5') + Number(isNaN('x'))", "257.5"],
     ["encodeURIComponent('a b') + decodeURI('%41')", "a%20bA"],
     ["new RegExp('a+', 'g').test('caa') && RegExp('b').source", "b"],
     ["Object.isFrozen(Object.freeze([1])) && Object.entries({ a: 1 }).length", "1"],
     ["Math.max.bind(null, 1, 2)(3)", "3"],
     ["Array.of(1, 2).length + String.fromCharCode(65)", "2A"],
-    ["new Promise((resolve) => resolve(1)) instanceof Promise", "true"],
-    ["new (class P extends Promise {})(() => {}) instanceof Promise", "true"],
-    ["Promise.resolve(1).constructor === Promise", "true"],
-    ["typeof Promise.try", "undefined"],
+    ["typeof Promise + typeof globalThis.Promise", "undefinedundefined"],
     ["JSON.stringify(new String('a\\u0001'))", '"a\\u0001"'],
     ["JSON.stringify({ ['k' + String.fromCharCode(10)]: 'x'.repeat(100) }).length", "110"],
     ["JSON.stringify(String.fromCharCode(0xd800))", '"\\ud800"'],
@@ -383,10 +388,6 @@ describe("wrapped built-ins still behave", () => {
     ["[...new Map([[1, 2]])].join() + [...new Set([3]).entries()].join()", "1,23,3"],
     ["(() => { let n = 0; new Map([[1, 2]]).forEach((v) => { n += v; }); return n; })()", "2"],
     ["escape('é') + unescape('%E9') + decodeURIComponent('%C3%A9')", "%E9éé"],
-    [
-      "(() => { let e; new Promise(() => { throw 7; }).catch((x) => { e = x; }); return typeof e; })()",
-      "undefined",
-    ],
   ];
   for (const [expr, expected] of cases) {
     it(expr, () => {

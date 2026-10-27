@@ -1,5 +1,12 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { createSandbox, DEFAULT_OP_BUDGET, type Sandbox, WORK_PER_OP } from "./index.ts";
+import {
+  createSandbox,
+  DEFAULT_OP_BUDGET,
+  instrument,
+  type Sandbox,
+  WORK_PER_OP,
+} from "./index.ts";
+import { MAX_STRING_LENGTH } from "./instrument.ts";
 import {
   botWithTick,
   bundleExampleBot,
@@ -33,18 +40,44 @@ function tickOnce(body: string, prefix = "") {
   return { ...report, ms };
 }
 
-/** A big function at the size limit, recursing to full stack depth before `then` runs. */
+/**
+ * Finds the recursion depth that fills the stack. It runs at module load: its one exception at
+ * full depth costs more than a tick's budget, so probing inside the tick (as the first version
+ * of these tests did) timed out before the code under test ever ran (review of #62).
+ */
+const PROBE =
+  "let depth = 0; function probe(n) { depth = n; probe(n + 1); } try { probe(0); } catch {}";
+
+/**
+ * A big function at the size limit, recursing to 90% of the stack depth before `then` runs (in
+ * a small function of its own, so every body gets the same depth). It logs "deep" first, so a
+ * test can tell the code under test was reached.
+ */
 function deepInBigFunction(then: string): string {
   return `
-    let depth = 0; function probe(n) { depth = n; probe(n + 1); }
-    try { probe(0); } catch {}
     const max = Math.floor(depth * 0.9);
-    function down(n, y) {
-      if (n < 0) { ${repeat(360, (i) => `y = (y + ${i}) | 0;`)} }
-      if (n > 0) return down(n - 1, y);
+    function bottom() {
+      log("deep");
       ${then}
     }
-    down(max, 0);`;
+    function down(n) {
+      let y = 0;
+      if (n < 0) { ${repeat(360, (i) => `y = (y + ${i}) | 0;`)} }
+      if (n > 0) return down(n - 1);
+      return bottom();
+    }
+    down(max);`;
+}
+
+/** Expects a tick stopped by the cost meter within one tick, with at most one charge past it. */
+function expectStopped(report: ReturnType<typeof tickOnce>, what: string): void {
+  expect(report.outcome, what).toBe("timeout");
+  expect(report.error, what).toMatch(/cost units/);
+  expect(report.action.turn, what).toBe(0);
+  expect(report.work, what).toBeGreaterThan(LIMIT);
+  // An exception at full depth in a function at the size limit is the largest single charge.
+  expect(report.work, what).toBeLessThan(LIMIT + 10_000_000);
+  expect(report.ms, what).toBeLessThan(CEILING_MS);
 }
 
 describe("cost meter: adversarial code shapes", () => {
@@ -77,9 +110,7 @@ describe("cost meter: adversarial code shapes", () => {
     "for-of that breaks at once": `const a = new Array(5e4).fill(0); for (;;) { for (const x of a) break; }`,
     "default parameters that recurse": `function f(a = f()) {} for (;;) { try { f(); } catch {} }`,
     "parameter pattern that throws": `function f({ ${repeat(200, (i) => `a${i}`, ", ")}, z: { q } }) {} for (;;) { try { f({}); } catch {} }`,
-    "exceptions at full stack depth": deepInBigFunction("for (;;) { try { null.x; } catch {} }"),
-    "new Error at full stack depth": deepInBigFunction("for (;;) new Error('x');"),
-    "stack overflows in a big function": `function down(n, y) { if (n < 0) { ${repeat(360, (i) => `y = (y + ${i}) | 0;`)} } return down(n + 1, y); } for (;;) { try { down(0, 0); } catch {} }`,
+    "stack overflows in a big function": `function down(n) { let y = 0; if (n < 0) { ${repeat(360, (i) => `y = (y + ${i}) | 0;`)} } return down(n + 1); } for (;;) { try { down(0); } catch {} }`,
     "finally that swallows exceptions": `function down(n) { return down(n + 1); } for (;;) { try { down(0); } finally { continue; } }`,
     getters: `const o = { get g() { return ${repeat(100, (i) => `${i}`, " + ")}; } }; let x; for (;;) x = o.g;`,
     generators: `function* g() { for (;;) { ${repeat(300, (i) => `yield ${i};`)} } } const it = g(); for (;;) it.next();`,
@@ -98,6 +129,72 @@ describe("cost meter: adversarial code shapes", () => {
       } else {
         expect(report.error).toMatch(/interrupts/);
       }
+    });
+  }
+
+  it("probes the stack depth at load", () => {
+    const report = tickOnce("log(String(depth)); return { turn: 0 };", PROBE);
+    expect(report.outcome).toBe("ok");
+    expect(Number(report.log.lines[0])).toBeGreaterThan(300);
+  });
+
+  // Review of #62: these never reached their loop (the probe ran in the tick), so all three
+  // reported the same work. Each must now reach full depth and then be stopped by its charges.
+  const deep: Record<string, string> = {
+    "caught exceptions": "for (;;) { try { null.x; } catch {} }",
+    "new Error": "for (;;) new Error('x');",
+    "a finally that swallows": "for (;;) { try { null.x; } finally { continue; } }",
+  };
+  for (const [name, then] of Object.entries(deep)) {
+    it(`stops ${name} at full stack depth in a big function`, () => {
+      const report = tickOnce(`${deepInBigFunction(then)}\nreturn { turn: 0.5 };`, PROBE);
+      expect(report.log.lines, name).toEqual(["deep"]);
+      expectStopped(report, name);
+    });
+  }
+
+  // Review of #62: Promise code caught these exceptions in C, so they were never charged
+  // (23 s and 20 s per tick). Promise is gone: the same code now fails at once.
+  const promises: Record<string, string> = {
+    "a throwing thenable given to Promise.resolve":
+      "const t = { get then() { null.x; } }; for (;;) Promise.resolve(t);",
+    "a throwing iterator given to Promise.all":
+      "for (;;) Promise.all({ [Symbol.iterator]() { return { next() { null.x; } }; } });",
+  };
+  for (const [name, then] of Object.entries(promises)) {
+    it(`has no Promise to swallow ${name}`, () => {
+      const report = tickOnce(`${deepInBigFunction(then)}\nreturn { turn: 0.5 };`, PROBE);
+      expect(report.log.lines, name).toEqual(["deep"]);
+      expect(report.outcome, name).toBe("error");
+      expect(report.error, name).toMatch(/^ReferenceError: .*Promise/);
+      expect(report.ms, name).toBeLessThan(CEILING_MS);
+    });
+  }
+
+  // Found while fixing the review of #62: after an exception, for-of closes the iterator and
+  // ignores what its return() throws; return() can run code that does the same again, so one
+  // exception per level was built before any was charged (1.1 s per tick for 200 levels).
+  const closes: Record<string, string> = {
+    "an exception in a for-of body": "for (const x of it) { x.y; }",
+    "an exception in a for-of head": "for (const [a] of it) {}",
+    "an exception storing a for-of value": "for ([o.a] of it);",
+  };
+  for (const [name, loop] of Object.entries(closes)) {
+    it(`charges ${name} before the iterator is closed`, () => {
+      const report = tickOnce(
+        `const o = {}; const max = Math.floor(depth * 0.5);
+        function nest(k) {
+          const it = { [Symbol.iterator]() { return this; }, next() { return { value: null, done: false }; },
+            return() { if (k > 0) nest(k - 1); null.y; } };
+          ${loop}
+        }
+        function down(n) { if (n > 0) return down(n - 1); log("deep"); for (;;) { try { nest(200); } catch {} } }
+        down(max);
+        return { turn: 0.5 };`,
+        PROBE,
+      );
+      expect(report.log.lines, name).toEqual(["deep"]);
+      expectStopped(report, name);
     });
   }
 
@@ -132,6 +229,132 @@ describe("cost meter: adversarial code shapes", () => {
     });
     expect(runs[0]).toEqual(runs[1]);
     expect(runs[0]?.every((r) => r.outcome === "ok" && r.work > 1_000_000)).toBe(true);
+  });
+});
+
+describe("cost meter: strings (review of #62)", () => {
+  // Comparing, hashing or converting a string runs in C in time linear in its length (up to ~15 ns
+  // per char), as one bytecode. The review's repros used strings of 2 M chars and ran for 29–156 s
+  // per tick; strings are now capped, and each of these operations is charged by length.
+  const N = MAX_STRING_LENGTH;
+  const max = `const X = 'x'.repeat(${N - 1}); const B = X + 'y', C = X + 'z'; const K = X + 'x';`;
+  const spaces = `const S = ' '.repeat(${N - 1}) + '1'; const D = '0.' + '1'.repeat(${N - 2});`;
+  const many = "const strs = new Array(100).fill(S); const keys = new Array(100).fill(K);";
+  const prefix = `${max} ${spaces} ${many}`;
+  const rows: Record<string, string> = {
+    // The review's table.
+    "=== on two strings that differ at the end": "for (;;) B === C;",
+    "switch on a long string": "for (;;) switch (B) { case C: break; }",
+    "Map.get with a long key": "const m = new Map([['y', 1]]); for (;;) m.get(K);",
+    "Set.has with a long key": "const s = new Set(['y']); for (;;) s.has(K);",
+    "+s on spaces and a digit": "for (;;) +S;",
+    // The same costs through other syntax.
+    "+s on a long decimal": "for (;;) +D;",
+    arithmetic: "for (;;) D * 1;",
+    relational: "for (;;) D < 1;",
+    "loose equality": "for (;;) D == 1;",
+    updates: "let v; for (;;) { v = D; v++; }",
+    "compound assignment to a member": "const o = {}; for (;;) { o.v = D; o.v -= 1; }",
+    "a key equal to an existing one": "const o = { [K]: 1 }; const k = X + 'x'; for (;;) o[k];",
+    in: "const o = { [K]: 1 }; const k = X + 'x'; for (;;) k in o;",
+    "a built-in argument": "for (;;) Math.floor(D);",
+    "a returned string": "const f = () => D; for (;;) Math.floor(f());",
+    valueOf: "const v = { valueOf() { return D; } }; for (;;) v * 1;",
+    "a String object": "const v = new String(D); for (;;) v * 1;",
+    "an array": "const v = [D]; for (;;) v * 1;",
+    "a typed array store": "const t = new Float64Array(1); for (;;) t[0] = D;",
+    "a length store": "const a = []; for (;;) a.length = S;",
+    "a store through destructuring": "const t = new Float64Array(1); for (;;) [t[0]] = strs;",
+    "a built-in as a callback": "for (;;) strs.map(Number);",
+    "a spread into a built-in": "for (;;) Math.max(...strs);",
+    apply: "for (;;) Math.max.apply(null, strs);",
+    "a typed array built from strings": "for (;;) new Float64Array(strs);",
+    "an iterator with its own next()":
+      "const it = { [Symbol.iterator]() { let i = 0; return { next: () => ({ value: D, done: i++ > 100 }) }; } }; for (;;) new Float64Array(it);",
+    "a replaced array iterator":
+      "Array.prototype[Symbol.iterator] = function* () { for (let i = 0; i < 100; i++) yield D; }; for (;;) new Float64Array([0]);",
+    "a Set built from strings": "for (;;) new Set(keys);",
+    "Object.fromEntries": "const e = [[K, 1]]; for (;;) Object.fromEntries(e);",
+    sort: "const a = new Array(100).fill(K); for (;;) a.sort();",
+    "a regex lastIndex": "const re = /x/g; for (;;) { re.lastIndex = S; re.test(''); }",
+    "a bound built-in": "const f = Math.floor.bind(null, D); for (;;) f();",
+    "Object.assign into a typed array":
+      "const t = new Float64Array(1); const src = { 0: D }; for (;;) Object.assign(t, src);",
+  };
+  for (const [name, body] of Object.entries(rows)) {
+    it(`stops ${name} within one tick`, () => {
+      const report = tickOnce(`${body}\nreturn { turn: 0.5 };`, prefix);
+      expectStopped(report, name);
+    });
+  }
+
+  it("hands built-ins a copy of what it charged", () => {
+    // A getter runs while the prelude checks the arguments of apply, and swaps the elements it
+    // already checked for long strings (through the prototype): 0.5 s per tick before the copy.
+    const report = tickOnce(
+      `const a = new Array(51).fill(1);
+      Object.defineProperty(a, 50, { get() { for (let i = 0; i < 50; i++) delete a[i]; Object.setPrototypeOf(a, p); return 1; } });
+      for (;;) { for (let i = 0; i < 50; i++) a[i] = 1; Object.setPrototypeOf(a, Array.prototype); Math.max.apply(null, a); }
+      return { turn: 0.5 };`,
+      `${prefix} const p = {}; for (let i = 0; i < 50; i++) p[i] = D;`,
+    );
+    expect(report.outcome).toBe("timeout");
+    expect(report.ms).toBeLessThan(CEILING_MS);
+  });
+
+  const tooLong: Record<string, string> = {
+    "+": "let s = 'x'; for (;;) s = s + s;",
+    "+=": "let s = 'x'; for (;;) s += s;",
+    "+= on a member": "const o = { s: 'x' }; for (;;) o.s += o.s;",
+    "+= on a computed member": "const o = { s: 'x' }; const k = 's'; for (;;) o[k] += o[k];",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: bot code with a template literal
+    "a template": "let s = 'x'; for (;;) s = `${s}${s}`;",
+    repeat: "'x'.repeat(N + 1);",
+    padStart: "'x'.padStart(N + 1);",
+    concat: "const s = 'x'.repeat(N); s.concat('y');",
+    join: "new Array(N + 2).join('x');",
+    "JSON.stringify": "JSON.stringify('x'.repeat(N));",
+    "String.fromCharCode": "String.fromCharCode(...new Array(N + 1).fill(65));",
+    "a Symbol description": "Symbol('x'.repeat(N));",
+  };
+  for (const [name, body] of Object.entries(tooLong)) {
+    it(`caps strings built by ${name}`, () => {
+      const report = tickOnce(`const N = ${N}; ${body}\nreturn { turn: 0.5 };`);
+      expect(report.outcome, name).toBe("error");
+      expect(report.error, name).toMatch(/^RangeError: .*over the sandbox limit of 16384/);
+      expect(report.ms, name).toBeLessThan(CEILING_MS);
+    });
+  }
+
+  it("never stores a string over the cap", () => {
+    const report = tickOnce(`
+      let s = 'x'.repeat(10000);
+      const o = { s }, a = [s], k = 's';
+      for (const f of [() => { s += s; }, () => { o.s += s; }, () => { o[k] += s; }, () => { a[0] += s; }]) {
+        try { f(); } catch {}
+      }
+      return { turn: (s.length + o.s.length + a[0].length) / 1e5 };`);
+    expect(report.outcome).toBe("ok");
+    expect(report.action.turn).toBeCloseTo(0.3);
+  });
+
+  it("rejects longer literals and names", () => {
+    for (const source of [
+      `const s = "${"x".repeat(N + 1)}";`,
+      `const s = \`${"x".repeat(N + 1)}\`;`,
+      `const ${"x".repeat(N + 1)} = 1;`,
+    ]) {
+      const result = instrument(`${source} export default { tick() {} };`);
+      expect(result.ok).toBe(false);
+    }
+  });
+
+  it("cuts long stacks to the cap", () => {
+    const report = tickOnce(
+      "let len = 0; try { probe(0); } catch (e) { len = e.stack.length; } return { turn: len / 1e5 };",
+      PROBE,
+    );
+    expect(report.action.turn).toBeCloseTo(N / 1e5);
   });
 });
 

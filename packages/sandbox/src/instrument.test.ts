@@ -108,6 +108,43 @@ describe("instrument keeps the semantics", () => {
       else b = 4
       // trailing comment
       return [a, b]`,
+    "compound assignments, updates and destructuring targets": `
+      const o = { a: 1, s: 'x', n: [1, 2] }; const k = 'a'; let i = 0;
+      o.a += 2; o[k] *= 3; o.n[i++] += 10; o.s += 'y'; o[k]++; --o.n[1];
+      const get = () => o; get().a -= 1; get()[k] += 5; get().s += 'z'; get().n[0]++;
+      let s = 'ab'; s += s; let t = 1; t += 2; t **= 2; t %= 7;
+      const arr = [0, 0]; [arr[0], arr[1]] = [5, 6]; ({ p: o.q } = { p: 7 }); [o.len] = [3];
+      const out = [];
+      for ([o.x, o.y] of [[1, 2]]) out.push(o.x + o.y);
+      for (const [a, b = a * 2] of [[1], [2, 3]]) out.push(a + b);
+      for (const { a, b: [c] } of [{ a: 1, b: [2] }]) out.push(a, c);
+      for (const x of [1, 2]) {}
+      for (o.i of [9]);
+      const m = Math.max(...[1, 5, 3], ...new Set([7]));
+      let u = 'x'
+      ;[u] = ['y']
+      const v = u
+      i++
+      ;(function () { out.push('iife'); })()
+      return [o, s, t, arr, out, m, u, v, i, typeof Math.random];`,
+    "strings and conversions": `
+      const big = 'n'.repeat(100);
+      return [5 == '5', '10' < 9, -'3', +'0x10', '7' * '6', big < 'o', big === 'n'.repeat(100), \`\${big}\`.length,
+        ['b', 'a'].sort().join(''), [' 2', '1'].map(Number), new Map([[big, 1]]).get(big), Object.fromEntries([['k', big.length]]),
+        String(Symbol('d')), [1, 2] + '', { valueOf() { return '4'; } } * 2, new String('5') * 2, Math.floor.bind(null, '2.5')()];`,
+    "exceptions through functions and loops": `
+      const out = [];
+      function thrower() { throw new Error('boom'); }
+      function rethrow() { try { thrower(); } catch (e) { out.push(e.message); throw e; } }
+      try { rethrow(); } catch (e) { out.push(e.stack.includes('thrower'), e instanceof Error); }
+      const it = { [Symbol.iterator]() { return this; }, i: 0, next() { return { value: this.i++, done: this.i > 3 }; }, return() { out.push('closed'); return {}; } };
+      for (const x of it) { if (x === 1) break; out.push(x); }
+      try { for (const x of [1]) { throw 'p'; } } catch (e) { out.push(e); }
+      try { for (const [a] of [null]) {} } catch (e) { out.push(e instanceof TypeError); }
+      const f = (x) => x * 2; const g = () => ({ a: 1 }); const h = () => {};
+      function* gen() { try { yield 1; yield 2; } finally { out.push('gen done'); } }
+      for (const y of gen()) { out.push(y); break; }
+      return [out, f(3), g(), h()];`,
     "errors and their messages": `
       const out = [];
       try { undefined.x; } catch (e) { out.push(e.constructor === TypeError, e instanceof Error); }
@@ -241,5 +278,58 @@ describe("the meter is out of the bot's reach", () => {
     );
     expect(life.death).toBeNull(); // instrumented by startLife itself
     life.dispose();
+  });
+});
+
+describe("string checks", () => {
+  /** How many inline string checks the instrumented `code` has. */
+  function checks(code: string): number {
+    const result = instrument(`${code}\nexport default {};`);
+    if (!result.ok) throw new Error(result.error);
+    return result.source.split('==="string"').length - 1;
+  }
+
+  it("leaves out names that only ever hold numbers", () => {
+    expect(
+      checks(
+        "function f(p) { const dx = p - 1; let s = 0; for (let i = 0; i < 9; i++) s += dx * dx; return s; }",
+      ),
+    ).toBe(1);
+    expect(checks("let best = Infinity; const d = Math.hypot(3, 4); if (d < best) best = d;")).toBe(
+      0,
+    );
+    expect(checks("let a = 1, b = 2; a = b; b = a; const c = a * b;")).toBe(0);
+  });
+
+  it("keeps them wherever a name may hold a string", () => {
+    for (const code of [
+      // Parameters, destructuring, catch, for-in/of, globals.
+      "function f(x) { return x - 1; }",
+      "const [x] = [1]; x - 1;",
+      "try {} catch (x) { x - 1; }",
+      "for (const x in {}) x - 1;",
+      "x - 1;",
+      // A write of something else anywhere, also in a closure or through +=.
+      "let x = 1; const f = () => { x = 's'; }; x - 1;",
+      "let x = 1; x += ''; x - 1;",
+      "let x = 1; x += {}; x - 1;",
+      // var repeating a parameter starts with the argument.
+      "function f(x) { var x; return x - 1; }",
+      // A default can't see the body's bindings; a shadowed Math is not the global.
+      "let x = 's'; function f(a = x - 1) { let x = 1; return a; }",
+      "const Math = { f: () => 's' }; Math.f() - 1;",
+      // A shadowed read-only global.
+      "function f(NaN) { return NaN - 1; }",
+    ]) {
+      expect(checks(code), code).toBeGreaterThan(0);
+    }
+  });
+
+  it("skips arguments and return values only for the bot's own functions", () => {
+    expect(checks("function f(a) { return a; } let s = 's'; f(s);")).toBe(0);
+    // f escapes: its return value and the argument `f` itself are checked.
+    expect(checks("function f(a) { return a; } let s = 's'; [s].map(f);")).toBe(2);
+    expect(checks("let f = (a) => a; f = Math.floor; let s = 's'; f(s);")).toBeGreaterThan(0);
+    expect(checks("class N extends Number {} let s = 's'; new N(s);")).toBe(1);
   });
 });

@@ -13,14 +13,20 @@
  * built-in whose cost grows with its input is wrapped to:
  *   1. throw a RangeError when an array or typed array is longer than `maxArrayLength`;
  *   2. charge its input size to the per-tick cost meter, the same one the instrumented bot code
- *      charges for its own bytecode. When it runs out, the wrapper asks the host to fail the next
- *      interrupt check and spins until it comes: an uncatchable "interrupted" error that the host
- *      reports as a timeout.
+ *      charges for its own bytecode. When it runs out, the host fails every later interrupt check
+ *      (an uncatchable "interrupted" error, reported as a timeout) and a sentinel is thrown that
+ *      no catch in bot code can keep (see `overrun`).
  * Weights (units per element / char) are rough calibrations: 1 unit ≈ 1 ns of CPU on an M1, and
  * a tick gets opBudget × 1e6 units.
  *
  * `concat`, `flat` and `flatMap` read several arrays in one native call, so a getter on one could
  * grow another after it was checked; they are re-implemented in JS here, where every step counts.
+ *
+ * Strings: every built-in that builds a string throws a RangeError above `maxStringLength`, and
+ * every built-in that converts, hashes or compares strings the bot stored earlier (a native used
+ * as a callback, the elements of an iterable or array it reads, `valueOf` of a String object, a
+ * regex's `lastIndex`) charges their length here; the instrumented code charges the rest (see
+ * `instrument.ts`).
  *
  * Written as plain JS in a string (not a function's `.toString()`) so no TS transform, bundler or
  * coverage tool can rewrite it. Keep it free of backticks and `${`.
@@ -32,6 +38,7 @@ export const PRELUDE = String.raw`
   const emit = host.emit;
   const exhaust = host.exhaust;
   const maxArrayLength = options.maxArrayLength;
+  const maxString = options.maxStringLength;
   const logLimit = options.logLimitBytes;
 
   const { apply, construct, defineProperty, deleteProperty, getOwnPropertyDescriptor,
@@ -43,6 +50,9 @@ export const PRELUDE = String.raw`
   const StringCtor = String;
   const NumberCtor = Number;
   const SetCtor = Set;
+  const WeakSetCtor = WeakSet;
+  const weakSetAdd = WeakSet.prototype.add;
+  const weakSetHas = WeakSet.prototype.has;
   const iteratorKey = Symbol.iterator;
   const RangeErrorCtor = RangeError;
   const TypeErrorCtor = TypeError;
@@ -56,6 +66,7 @@ export const PRELUDE = String.raw`
   const indexOfString = String.prototype.indexOf;
   const stringValueOf = String.prototype.valueOf;
   const regexpExec = RegExp.prototype.exec;
+  const bindNative = Function.prototype.bind;
   const regexpGlobal = getOwnPropertyDescriptor(RegExp.prototype, "global").get;
   const regexpFlags = getOwnPropertyDescriptor(RegExp.prototype, "flags").get;
   const TypedArray = getPrototypeOf(Uint8Array);
@@ -92,10 +103,19 @@ export const PRELUDE = String.raw`
   // Per entry of a Set or Map walked by an iterator (spreading a Map: 192 ns).
   const ENTRY = 250;
 
+  // Per char of a string a native converts to a number (up to ~15 ns for "0.1111…"), hashes
+  // (~1.4 ns, Map and Set keys, property keys) or compares (~0.5 ns); per char of a new string.
+  const NUM = 16;
+  const HASH = 4;
+  const COMPARE = 1;
+  const CREATE = 1;
+
   // Copying one own property (object spread and rest, for-in: 50–130 ns).
   const KEY = 150;
   // Every call through one of the wrappers below runs ~0.5–1 µs of JS before the native.
   const WRAP = 800;
+  // Unwinding an exception out of one function (catch, rethrow).
+  const LEAVE = 1000;
 
   // ---- cost meter ----
 
@@ -119,18 +139,40 @@ export const PRELUDE = String.raw`
     setLeft(left);
     if (left < 0) overrun();
   }
+  // Out of budget: the host fails every later interrupt check (an uncatchable error), and until
+  // the next one comes this sentinel is thrown. Every catch in bot code starts with a charge
+  // (chargeCaught / chargeLeaving), which rethrows it, so no catch body runs again this phase;
+  // bot code that still runs (a finally, an iterator's return() called while unwinding) stops at
+  // its next charge.
+  let exhausted = false;
+  const OUT_OF_BUDGET = ObjectCtor.freeze({});
   function overrun() {
+    exhausted = true;
     exhaust();
-    for (;;) {}
+    throw OUT_OF_BUDGET;
   }
 
   // An exception was caught (or created): QuickJS wrote a backtrace for it, which costs about
-  // its length times the size of the functions on the stack.
+  // its length times the size of the functions on the stack. The backtrace is written once, so
+  // that part is charged once per error object.
+  const backtraced = new WeakSetCtor();
   function chargeCaught(e) {
+    if (exhausted) throw OUT_OF_BUDGET;
     let units = exceptionUnits;
     if ((typeof e === "object" || typeof e === "function") && e !== null) {
+      if (apply(weakSetHas, backtraced, [e])) return charge(units);
+      apply(weakSetAdd, backtraced, [e]);
       const d = getOwnPropertyDescriptor(e, "stack");
-      if (d !== undefined && typeof d.value === "string") units += d.value.length * perChar;
+      if (d !== undefined && typeof d.value === "string") {
+        units += d.value.length * perChar;
+        charge(units);
+        // A deep stack is long; the bot may keep it, so it is cut to the string cap.
+        if (d.value.length > maxString && d.configurable) {
+          defineProperty(e, "stack", { value: apply(sliceString, d.value, [0, maxString]),
+            writable: true, configurable: true });
+        }
+        return;
+      }
     }
     charge(units);
   }
@@ -153,6 +195,14 @@ export const PRELUDE = String.raw`
     }
     return v;
   }
+  // An exception leaving a bot function (instrument.ts wraps every body): built-ins can drop it
+  // later without a catch in bot code ever seeing it.
+  function chargeLeaving(e) {
+    if (exhausted) throw OUT_OF_BUDGET;
+    const object = (typeof e === "object" || typeof e === "function") && e !== null;
+    if (object && !apply(weakSetHas, backtraced, [e])) chargeCaught(e);
+    else charge(LEAVE);
+  }
   function register(set, get, charTick, charLoad, exception) {
     deleteProperty(g, "__zs_meter");
     if (registered) throw new TypeErrorCtor("sandbox: the meter is already registered");
@@ -164,7 +214,128 @@ export const PRELUDE = String.raw`
     perCharTick = charTick;
     perChar = charLoad;
     exceptionUnits = exception;
-    return { o: overrun, k: chargeSpread, f: chargeForIn, x: chargeCaught };
+    return { o: overrun, k: chargeSpread, f: chargeForIn, x: chargeCaught, n: newString,
+      y: newKey, w: member, a: spreadArgs, r: chargeLeaving };
+  }
+
+  // ---- strings ----
+
+  function tooLongString(len) {
+    throw new RangeErrorCtor("string length " + len + " is over the sandbox limit of " + maxString);
+  }
+  function capString(v) {
+    if (typeof v === "string" && v.length > maxString) tooLongString(v.length);
+    return v;
+  }
+  // A string the bot code built with + (only called above a short length).
+  function newString(s) {
+    if (s.length > maxString) tooLongString(s.length);
+    charge(s.length * CREATE);
+  }
+  // A computed key in an object literal or class: it may become a function's name.
+  function newKey(s) {
+    if (s.length > maxString) tooLongString(s.length);
+    charge(s.length * HASH);
+  }
+  function chargeNumber(v) {
+    if (typeof v === "string") charge(v.length * NUM);
+  }
+  function chargeList(list, weight) {
+    for (let i = 0; i < list.length; i++) {
+      const v = list[i];
+      if (typeof v === "string") charge(v.length * weight);
+    }
+  }
+  // A member the instrumented code updates when its object or key isn't a plain name
+  // (obj[f()] += s, [a[i]] = list): the value is checked on the way in and out.
+  function member(obj, key) {
+    return {
+      get v() {
+        const v = obj[key];
+        chargeNumber(v);
+        return v;
+      },
+      set v(v) {
+        capString(v);
+        chargeNumber(v);
+        obj[key] = v;
+      },
+    };
+  }
+
+  // Built-ins that take an iterable call its next() and use what it yields without the bot code
+  // seeing it again; bot code can also replace the array iterator. So iterables are read here
+  // first, the way the built-in would (snapshot: all next() calls before the built-in runs).
+  let arrayValues;
+  let arrayNext;
+  const ArrayIteratorProto = getPrototypeOf([][iteratorKey]());
+  function nativeArrayIteration(v) {
+    if (!isArray(v) || hasOwn(v, iteratorKey)) return false;
+    const d = getOwnPropertyDescriptor(ArrayProto, iteratorKey);
+    const n = getOwnPropertyDescriptor(ArrayIteratorProto, "next");
+    return d !== undefined && d.value === arrayValues && n !== undefined && n.value === arrayNext &&
+      getPrototypeOf(v) === ArrayProto;
+  }
+  // The values of an iterable, as a plain array (the same array for one the native iterator walks).
+  function listOf(iterable) {
+    if (nativeArrayIteration(iterable)) {
+      checked("iterable", iterable.length, 0);
+      return iterable;
+    }
+    const out = [];
+    let n = 0;
+    for (const v of iterable) {
+      if (n >= maxArrayLength) tooLong("iterable", n + 1);
+      define(out, n++, v);
+    }
+    return out;
+  }
+  // The values a built-in is about to read, read once here and charged as strings it may convert.
+  // The built-in gets this copy: an element getter could change the original after the check.
+  function snapshot(list, len) {
+    const out = [];
+    for (let i = 0; i < len; i++) {
+      const v = list[i];
+      chargeNumber(v);
+      define(out, i, v);
+    }
+    return out;
+  }
+  // An array-like with no prototype (so no iterator) holding the same values.
+  function arrayLike(list) {
+    const out = {};
+    setPrototypeOf(out, null);
+    for (let i = 0; i < list.length; i++) define(out, i, list[i]);
+    define(out, "length", list.length);
+    return out;
+  }
+  // f(...xs) in bot code: the values reach f (maybe a built-in) unchecked otherwise.
+  function spreadArgs(v) {
+    const iterated = listOf(v);
+    charge(iterated.length * ARRAY);
+    const list = snapshot(iterated, iterated.length);
+    if (nativeArrayIteration(list)) return list;
+    let i = 0;
+    const it = { next: () => (i < list.length ? { value: list[i++], done: false }
+      : { value: undefined, done: true }) };
+    const out = {};
+    define(out, iteratorKey, () => it);
+    return out;
+  }
+
+  // Native functions (filled in at the end of setup). Given one as a callback, a built-in calls
+  // it with values the bot code never checked, so it is wrapped to charge its string arguments.
+  const natives = new WeakSetCtor();
+  function isNative(f) {
+    return (typeof f === "function" || typeof f === "object") && f !== null &&
+      apply(weakSetHas, natives, [f]);
+  }
+  function checkedCallback(f) {
+    if (!isNative(f)) return f;
+    return function (...args) {
+      chargeList(args, NUM);
+      return apply(f, this, args);
+    };
   }
 
   function tooLong(name, len) {
@@ -184,6 +355,12 @@ export const PRELUDE = String.raw`
       chargeCaught(e);
       return false;
     }
+  }
+
+  // The prelude's own conversions of bot values.
+  function num(v) {
+    chargeNumber(v);
+    return +v;
   }
 
   function toLength(v) {
@@ -255,15 +432,23 @@ export const PRELUDE = String.raw`
   }
 
   // Charges cost(this, args) before calling the native with the same this and arguments.
+  // Every string it returns is capped at maxStringLength.
   function guard(obj, name, cost) {
     replaceMethod(obj, name, (native) => ({
       m(...args) {
         charge(WRAP);
         cost(this, args, name);
-        return apply(native, this, args);
+        return capString(apply(native, this, args));
       },
     }).m);
   }
+  // Built-ins that take a callback: a native one is wrapped (see checkedCallback).
+  const CALLBACK_METHODS = new SetCtor(["every", "filter", "find", "findIndex", "findLast",
+    "findLastIndex", "forEach", "map", "reduce", "reduceRight", "some", "sort", "toSorted"]);
+  const withCallback = (index, cost) => (self, args, name) => {
+    args[index] = checkedCallback(args[index]);
+    cost(self, args, name);
+  };
 
   const linear = (lengthOf, weight) => (self, _args, name) =>
     checked(name, lengthOf(self), weight);
@@ -289,11 +474,41 @@ export const PRELUDE = String.raw`
   // they are how spread, for-of and destructuring walk an array.
   const ARRAY_CHEAP = new SetCtor(["constructor", "push", "pop", "at", "concat", "flat",
     "flatMap"]);
+  // Sorting without a comparator compares strings: each one about log2(n) times.
+  const sortCost = (self, args, name) => {
+    const len = arrayLength(self);
+    nlogn(arrayLength, ARRAY)(self, args, name);
+    if (args[0] === undefined && isArray(self)) {
+      let chars = 0;
+      for (let i = 0; i < len; i++) {
+        const v = self[i];
+        if (typeof v === "string") chars += v.length;
+      }
+      charge(chars * COMPARE * (len > 2 ? log2(len) : 1));
+    }
+  };
+  // join copies its elements into one string: refuse before the copy if that is over the cap.
+  const joinCost = (self, args, name) => {
+    linearWithStrings(arrayLength, ARRAY)(self, args, name);
+    if (!isArray(self)) return;
+    const sep = args[0] === undefined ? 1 : typeof args[0] === "string" ? args[0].length : 0;
+    let chars = self.length > 0 ? (self.length - 1) * sep : 0;
+    for (let i = 0; i < self.length; i++) {
+      const v = self[i];
+      if (typeof v === "string") chars += v.length;
+    }
+    if (chars > maxString) tooLongString(chars);
+  };
   for (const name of Reflect.ownKeys(ArrayProto)) {
     if (ARRAY_CHEAP.has(name)) continue;
-    const sorting = name === "sort" || name === "toSorted";
-    guard(ArrayProto, name, (sorting ? nlogn : linearWithStrings)(arrayLength, ARRAY));
+    let cost;
+    if (name === "sort" || name === "toSorted") cost = sortCost;
+    else if (name === "join" || name === "toString" || name === "toLocaleString") cost = joinCost;
+    else cost = linearWithStrings(arrayLength, ARRAY);
+    guard(ArrayProto, name, CALLBACK_METHODS.has(name) ? withCallback(0, cost) : cost);
   }
+  arrayValues = ArrayProto[iteratorKey];
+  arrayNext = ArrayIteratorProto.next;
 
   function define(a, i, v) {
     defineProperty(a, i, { value: v, writable: true, enumerable: true, configurable: true });
@@ -340,9 +555,22 @@ export const PRELUDE = String.raw`
   function flatMap(mapper, thisArg) {
     charge(WRAP);
     if (typeof mapper !== "function") throw new TypeErrorCtor("flatMap: mapper is not a function");
-    return flatten([], ObjectCtor(this), 1, mapper, thisArg);
+    return flatten([], ObjectCtor(this), 1, checkedCallback(mapper), thisArg);
   }
   replaceMethod(ArrayProto, "concat", () => ({ concat }).concat);
+  // push, pop and at read the length of a non-array and convert it on every call: refuse
+  // anything but a plain number there, as the other array methods do.
+  for (const name of ["push", "pop", "at"]) {
+    replaceMethod(ArrayProto, name, (native) => ({
+      m(...args) {
+        if (!isArray(this)) {
+          charge(WRAP);
+          arrayLength(this);
+        }
+        return apply(native, this, args);
+      },
+    }).m);
+  }
   replaceMethod(ArrayProto, "flat", () => ({ flat }).flat);
   replaceMethod(ArrayProto, "flatMap", () => ({ flatMap }).flatMap);
 
@@ -353,7 +581,24 @@ export const PRELUDE = String.raw`
     } else if (typeof src === "string") charge(src.length * CHAR); // + the string iterator
   }
   const arrayLikeArg = (weight) => (_self, args, name) => arrayLikeCost(name, args[0], weight);
-  guard(Array, "from", arrayLikeArg(ARRAY));
+  guard(Array, "from", withCallback(1, arrayLikeArg(ARRAY)));
+
+  // A typed array converts every value it is built from to a number. An iterable source is read
+  // here first (see listOf) and handed over as an array-like.
+  function typedSource(name, args, i) {
+    const src = args[i];
+    if (typeof src !== "object" || src === null) return;
+    if (isTypedArray(src)) {
+      checked(name, typedLength(src), TYPED);
+      return;
+    }
+    noIteratorGetter(src);
+    let list = src;
+    if (src[iteratorKey] !== undefined && src[iteratorKey] !== null) list = listOf(src);
+    const len = arrayLength(list);
+    checked(name, len, TYPED);
+    args[i] = arrayLike(snapshot(list, len));
+  }
 
   // ---- typed arrays and buffers ----
 
@@ -361,12 +606,20 @@ export const PRELUDE = String.raw`
   for (const name of Reflect.ownKeys(TypedArrayProto)) {
     if (TYPED_CHEAP.has(name)) continue;
     const sorting = name === "sort" || name === "toSorted";
-    guard(TypedArrayProto, name, (sorting ? nlogn : linear)(typedLength, TYPED));
+    const cost = (sorting ? nlogn : linear)(typedLength, TYPED);
+    guard(TypedArrayProto, name, CALLBACK_METHODS.has(name) ? withCallback(0, cost) : cost);
   }
-  guard(TypedArray, "from", arrayLikeArg(TYPED));
+  guard(TypedArray, "from", (_self, args, name) => {
+    args[1] = checkedCallback(args[1]);
+    typedSource(name, args, 0);
+  });
+  guard(TypedArrayProto, "set", (self, args, name) => {
+    checked(name, typedLength(self), TYPED);
+    typedSource(name, args, 0);
+  });
   guard(TypedArray, "of", (_self, args) => charge(args.length * TYPED));
   guard(ArrayBuffer.prototype, "slice", (self) => charge(apply(abByteLength, self, []) * BYTE));
-  guard(ArrayBuffer.prototype, "resize", (_self, args) => charge(toLength(args[0] = +args[0]) * BYTE));
+  guard(ArrayBuffer.prototype, "resize", (_self, args) => charge(toLength(args[0] = num(args[0])) * BYTE));
   guard(ArrayBuffer.prototype, "transfer", (self) => charge(apply(abByteLength, self, []) * BYTE));
 
   // Allocation is zero-filled (and copying an array-like walks it), so constructors are charged
@@ -410,21 +663,22 @@ export const PRELUDE = String.raw`
             chargeCaught(e);
           }
         }
-        arrayLikeCost(name, a, TYPED);
+        typedSource(name, args, 0);
       } else if (args.length > 0) {
         // Convert once, so a valueOf cannot report a different size to the native.
-        charge(toLength(args[0] = +a) * TYPED);
+        charge(toLength(args[0] = num(a)) * TYPED);
       }
     });
   }
   guardConstructor("ArrayBuffer", (args) => {
-    let size = args.length > 0 ? toLength(args[0] = +args[0]) : 0;
+    let size = args.length > 0 ? toLength(args[0] = num(args[0])) : 0;
     const opts = args[1];
     if (typeof opts === "object" && opts !== null) {
       const max = opts.maxByteLength;
       if (max !== undefined) {
-        args[1] = { maxByteLength: +max };
-        if (toLength(+max) > size) size = toLength(+max);
+        const m = num(max);
+        args[1] = { maxByteLength: m };
+        if (toLength(m) > size) size = toLength(m);
       }
     }
     charge(size * BYTE);
@@ -436,8 +690,7 @@ export const PRELUDE = String.raw`
   // Longest string QuickJS can build; asking for more throws a RangeError natively, so it is not
   // charged (charging would turn that error into a timeout).
   const MAX_STRING = 1073741823;
-  const STRING_CHEAP = new SetCtor(["constructor", "at", "charAt", "charCodeAt", "codePointAt",
-    "toString", "valueOf"]);
+  const STRING_CHEAP = new SetCtor(["constructor", "at", "charAt", "charCodeAt", "codePointAt"]);
   const SEARCH = new SetCtor(["indexOf", "lastIndexOf", "includes", "startsWith", "endsWith",
     "split", "replace", "replaceAll", "match", "matchAll", "search"]);
   // These treat an undefined argument differently from the string "undefined".
@@ -452,13 +705,23 @@ export const PRELUDE = String.raw`
         // toString returning a different string) after we measured it.
         const s = this === null || this === undefined ? this : StringCtor(this);
         if (typeof s === "string") cost(s, args);
-        return apply(native, s, args);
+        return capString(apply(native, s, args));
       },
     }).m);
   }
   for (const name of Reflect.ownKeys(StringProto)) {
     if (STRING_CHEAP.has(name)) continue;
-    if (SEARCH.has(name)) {
+    if (name === "toString" || name === "valueOf") {
+      // What a String object converts to (+new String(s)): the result may become a number.
+      replaceMethod(StringProto, name, (native) => ({
+        m() {
+          charge(WRAP);
+          const s = apply(native, this, []);
+          charge(s.length * NUM);
+          return s;
+        },
+      }).m);
+    } else if (SEARCH.has(name)) {
       guardString(name, (s, args) => {
         // Naive search is O(haystack × needle).
         let needle = args[0];
@@ -473,7 +736,7 @@ export const PRELUDE = String.raw`
         if (typeof needle !== "string") return;
         const most = floor(s.length / (needle.length || 1)) + 1;
         if (name === "split") {
-          const limit = args[1] === undefined ? most : (args[1] = +args[1]) >>> 0;
+          const limit = args[1] === undefined ? most : (args[1] = num(args[1])) >>> 0;
           charge((limit < most ? limit : most) * PIECE);
         } else if (name === "replace" || name === "replaceAll") {
           chargeReplacement(s, args, name === "replace" ? 1 : most);
@@ -492,21 +755,26 @@ export const PRELUDE = String.raw`
       guardString(name, (s) => charge(s.length * weight));
     } else if (name === "repeat") {
       guardString(name, (s, args) => {
-        const n = s.length * (args[0] = +args[0]);
+        const n = s.length * (args[0] = num(args[0]));
+        // Over QuickJS's own limit (or negative) the native throws its RangeError.
+        if (n > maxString && n <= MAX_STRING) tooLongString(n);
         if (n <= MAX_STRING) charge(n * CHAR);
       });
     } else if (name === "padStart" || name === "padEnd") {
       guardString(name, (s, args) => {
-        const n = toLength(args[0] = +args[0]);
+        const n = toLength(args[0] = num(args[0]));
+        if (n > maxString && n <= MAX_STRING) tooLongString(n);
         if (n <= MAX_STRING) charge((s.length + n) * CHAR);
       });
     } else if (name === "concat") {
+      // Also what template literals call.
       guardString(name, (s, args) => {
         let n = s.length;
         for (let i = 0; i < args.length; i++) {
           args[i] = StringCtor(args[i]);
           n += args[i].length;
         }
+        if (n > maxString) tooLongString(n);
         charge(n * CHAR);
       });
     } else {
@@ -563,6 +831,14 @@ export const PRELUDE = String.raw`
     }
     return true;
   }
+  // exec (and test, and the Symbol methods through exec) converts lastIndex to a number.
+  const lastIndexCost = (self) => {
+    if (typeof self !== "object" || self === null) return;
+    const d = getOwnPropertyDescriptor(self, "lastIndex");
+    if (d !== undefined) chargeNumber(d.value);
+  };
+  guard(RegExpProto, "exec", lastIndexCost);
+  guard(RegExpProto, "test", lastIndexCost);
   for (const key of [Symbol.match, Symbol.matchAll, Symbol.split, Symbol.replace]) {
     const once = key === Symbol.match || key === Symbol.replace;
     replaceMethod(RegExpProto, key, (native) => ({
@@ -572,7 +848,7 @@ export const PRELUDE = String.raw`
         const many = !once || isGlobal(this);
         if (many) charge(s.length * MATCH);
         if (key === Symbol.replace) chargeReplacement(s, args, many ? s.length + 1 : 1);
-        return apply(native, this, args);
+        return capString(apply(native, this, args));
       },
     }).m);
   }
@@ -580,14 +856,21 @@ export const PRELUDE = String.raw`
 
   // ---- calls, JSON, object enumeration ----
 
-  const argsLength = (i) => (_self, args, name) => {
+  // A native target gets the list's values unchecked: charge its strings.
+  const argsLength = (i, target) => (self, args, name) => {
     const list = args[i];
-    if (typeof list === "object" && list !== null) checked(name, arrayLength(list), ARRAY);
+    if (typeof list !== "object" || list === null) return;
+    const len = arrayLength(list);
+    checked(name, len, ARRAY);
+    if (isNative(target(self, args))) args[i] = snapshot(list, len);
   };
-  guard(Function.prototype, "apply", argsLength(1));
-  guard(Reflect, "apply", argsLength(2));
-  guard(Reflect, "construct", argsLength(1));
-  guard(JSON, "parse", (_self, args) => charge((args[0] = StringCtor(args[0])).length * PARSE));
+  guard(Function.prototype, "apply", argsLength(1, (self) => self));
+  guard(Reflect, "apply", argsLength(2, (_self, args) => args[0]));
+  guard(Reflect, "construct", argsLength(1, (_self, args) => args[0]));
+  guard(JSON, "parse", (_self, args) => {
+    charge((args[0] = StringCtor(args[0])).length * PARSE);
+    args[1] = checkedCallback(args[1]);
+  });
 
   // Control chars and lone surrogates are written as \uXXXX, which is ~20 times slower to quote.
   // Short strings are charged as if they had them; scanning costs about as much as the quoting.
@@ -617,6 +900,9 @@ export const PRELUDE = String.raw`
   // allow-list) is turned into a function: same output, except keys come out in object order,
   // not list order.
   function stringify(value, replacer, space) {
+    return capString(stringifyAny(value, replacer, space));
+  }
+  function stringifyAny(value, replacer, space) {
     charge(WRAP);
     let keep;
     if (isArray(replacer)) {
@@ -628,7 +914,7 @@ export const PRELUDE = String.raw`
       }
       replacer = undefined;
     }
-    const user = typeof replacer === "function" ? replacer : undefined;
+    const user = typeof replacer === "function" ? checkedCallback(replacer) : undefined;
     return nativeStringify(value, function (key, v) {
       if (keep !== undefined && key !== "" && !isArray(this) && !keep.has(key)) return undefined;
       if (user !== undefined) v = apply(user, this, [key, v]);
@@ -677,9 +963,71 @@ export const PRELUDE = String.raw`
   chargeKeys(Object, "create", 1, OBJECT);
   chargeKeys(Object, "defineProperties", 1, OBJECT);
   chargeKeys(Reflect, "ownKeys", 0, ARRAY);
+  // Assigning into a typed array or a length converts each string; defining a property may too.
+  function ownStringValues(o) {
+    if (typeof o !== "object" || o === null) return;
+    const keys = ownKeysNative(o);
+    for (let i = 0; i < keys.length; i++) {
+      const d = getOwnPropertyDescriptor(o, keys[i]);
+      if (d !== undefined) chargeNumber(d.value);
+    }
+  }
+  function descriptorValues(descs) {
+    if (typeof descs !== "object" || descs === null) return;
+    const keys = ownKeysNative(descs);
+    for (let i = 0; i < keys.length; i++) {
+      const d = getOwnPropertyDescriptor(descs, keys[i]);
+      if (d !== undefined && typeof d.value === "object" && d.value !== null) {
+        ownStringValues(d.value);
+      }
+    }
+  }
+  // Each source is read here (own enumerable keys, in order) and handed over as a copy.
   guard(Object, "assign", (_self, args) => {
-    for (let i = 1; i < args.length; i++) charge(sizeHint(args[i]) * ARRAY);
+    for (let i = 1; i < args.length; i++) {
+      const src = args[i];
+      charge(sizeHint(src) * ARRAY);
+      if ((typeof src !== "object" && typeof src !== "function") || src === null) continue;
+      const keys = ownKeysNative(src);
+      charge(keys.length * KEY);
+      const copy = {};
+      for (let k = 0; k < keys.length; k++) {
+        const d = getOwnPropertyDescriptor(src, keys[k]);
+        if (d === undefined || !d.enumerable) continue;
+        const v = src[keys[k]];
+        chargeNumber(v);
+        define(copy, keys[k], v);
+      }
+      args[i] = copy;
+    }
   });
+  guard(Object, "defineProperty", (_self, args) => ownStringValues(args[2]));
+  guard(Reflect, "defineProperty", (_self, args) => ownStringValues(args[2]));
+  guard(Object, "defineProperties", (_self, args) => descriptorValues(args[1]));
+  guard(Object, "create", (_self, args) => descriptorValues(args[1]));
+  // Reimplemented: the native reads the iterable and hashes every key.
+  function fromEntries(iterable) {
+    charge(WRAP);
+    const list = listOf(iterable);
+    charge(list.length * OBJECT);
+    const out = {};
+    for (let i = 0; i < list.length; i++) {
+      const e = list[i];
+      if ((typeof e !== "object" && typeof e !== "function") || e === null) {
+        throw new TypeErrorCtor("Object.fromEntries: each entry must be an object");
+      }
+      const k = e[0];
+      const v = e[1];
+      if (typeof k === "string") charge(k.length * HASH);
+      define(out, k, v);
+    }
+    return out;
+  }
+  defineProperty(Object, "fromEntries", { value: ({ fromEntries }).fromEntries, writable: true,
+    configurable: true });
+  for (const target of [Object, Map]) {
+    if (typeof target.groupBy === "function") guard(target, "groupBy", withCallback(1, () => {}));
+  }
   guard(String, "raw", (_self, args) => {
     const strings = args[0];
     if (typeof strings === "object" && strings !== null) {
@@ -695,7 +1043,36 @@ export const PRELUDE = String.raw`
     guard(String, name, (_self, args) => charge(args.length * ARRAY));
   }
   guard(Array, "of", (_self, args) => charge(args.length * ARRAY));
-  guard(Function.prototype, "bind", (_self, args) => charge(args.length * ARRAY));
+  // Function names: "bound " + name, capped. A bound native stays a native; bound to strings,
+  // it would convert them on every call, so it charges them on every call.
+  replaceMethod(Function.prototype, "bind", () => ({
+    bind(...args) {
+      charge(WRAP + args.length * ARRAY);
+      const target = this;
+      let out = apply(bindNative, target, args);
+      if (isNative(target)) {
+        let strings = false;
+        for (let i = 1; i < args.length; i++) if (typeof args[i] === "string") strings = true;
+        if (strings) {
+          const bound = out;
+          out = function (...rest) {
+            chargeList(args, NUM);
+            if (new.target === undefined) return apply(bound, this, rest);
+            return construct(bound, rest, new.target === out ? bound : new.target);
+          };
+          defineProperty(out, "name", { value: bound.name, configurable: true });
+          defineProperty(out, "length", { value: bound.length, configurable: true });
+        }
+        apply(weakSetAdd, natives, [out]);
+      }
+      const d = getOwnPropertyDescriptor(out, "name");
+      if (d !== undefined && typeof d.value === "string" && d.value.length > maxString) {
+        defineProperty(out, "name", { value: apply(sliceString, d.value, [0, maxString]),
+          configurable: true });
+      }
+      return out;
+    },
+  }).bind);
 
   // Global string functions walk their whole input.
   const GLOBAL_PER_CHAR = { parseInt: NUMBER, parseFloat: NUMBER, isNaN: NUMBER, isFinite: NUMBER,
@@ -718,19 +1095,12 @@ export const PRELUDE = String.raw`
     if (typeof args[0] === "string") charge(args[0].length * CHAR);
   });
 
-  // Set algebra walks both sets in C.
   const setSize = getOwnPropertyDescriptor(Set.prototype, "size").get;
-  const sizeOf = (o) => {
-    try {
-      return apply(setSize, o, []);
-    } catch (e) {
-      chargeCaught(e);
-      return 0;
-    }
-  };
+  // Set algebra (union, …) reads the other set through its size, has and keys, which bot code
+  // can supply, and hashes what they return in C. Nothing in a bot needs it.
   for (const name of ["union", "intersection", "difference", "symmetricDifference", "isSubsetOf",
     "isSupersetOf", "isDisjointFrom"]) {
-    guard(Set.prototype, name, (self, args) => charge((sizeOf(self) + sizeOf(args[0])) * ARRAY));
+    deleteProperty(Set.prototype, name);
   }
 
   // Set and Map iterators are walked in a native loop by spread, Array.from, new Set(…) and
@@ -738,7 +1108,7 @@ export const PRELUDE = String.raw`
   const mapSize = getOwnPropertyDescriptor(Map.prototype, "size").get;
   for (const [proto, size] of [[Set.prototype, setSize], [Map.prototype, mapSize]]) {
     for (const name of ["values", "keys", "entries", "forEach", iteratorKey]) {
-      guard(proto, name, (self) => {
+      const cost = (self) => {
         let n = 0;
         try {
           n = apply(size, self, []);
@@ -746,9 +1116,95 @@ export const PRELUDE = String.raw`
           chargeCaught(e);
         }
         charge(n * ENTRY);
-      });
+      };
+      guard(proto, name, name === "forEach" ? withCallback(0, cost) : cost);
     }
   }
+
+  // new Set(iterable) / new Map(iterable) hash every key in C: read the iterable here (see
+  // listOf), charge the keys and add them one by one through "add" / "set", as the spec does.
+  for (const [name, adderName, pairs] of [["Set", "add", false], ["Map", "set", true]]) {
+    const Native = g[name];
+    installConstructor(name, Native, function (iterable) {
+      if (new.target === undefined) throw new TypeErrorCtor(name + " must be called with 'new'");
+      charge(WRAP);
+      const out = construct(Native, [], new.target);
+      if (iterable === undefined || iterable === null) return out;
+      const adder = out[adderName];
+      if (typeof adder !== "function") throw new TypeErrorCtor(name + ": '" + adderName + "' is not a function");
+      const list = listOf(iterable);
+      charge(list.length * ENTRY);
+      for (let i = 0; i < list.length; i++) {
+        const e = list[i];
+        if (!pairs) {
+          if (typeof e === "string") charge(e.length * HASH);
+          apply(adder, out, [e]);
+          continue;
+        }
+        if ((typeof e !== "object" && typeof e !== "function") || e === null) {
+          throw new TypeErrorCtor("Map: each entry must be an object");
+        }
+        const k = e[0];
+        if (typeof k === "string") charge(k.length * HASH);
+        apply(adder, out, [k, e[1]]);
+      }
+      return out;
+    }, []);
+  }
+
+  // Iterator helpers call their callback with values from the underlying iterator.
+  const IteratorCtor = g.Iterator;
+  if (typeof IteratorCtor === "function") {
+    for (const name of ["map", "filter", "flatMap", "forEach", "some", "every", "find", "reduce"]) {
+      guard(IteratorCtor.prototype, name, withCallback(0, () => {}));
+    }
+  }
+
+  // What objects convert to (+obj, obj == 1, obj < s): the result may become a number in C.
+  function chargeResult(obj, name) {
+    replaceMethod(obj, name, (native) => ({
+      m(...args) {
+        charge(WRAP);
+        const out = capString(apply(native, this, args));
+        chargeNumber(out);
+        return out;
+      },
+    }).m);
+  }
+  chargeResult(Function.prototype, "toString");
+  chargeResult(Object.prototype, "toString");
+  chargeResult(Object.prototype, "toLocaleString");
+  chargeResult(Error.prototype, "toString");
+  chargeResult(RegExpProto, "toString");
+  chargeResult(Symbol.prototype, "toString");
+  for (const name of ["toString", "toLocaleString"]) {
+    const join = ArrayProto[name];
+    replaceMethod(ArrayProto, name, () => ({
+      m(...args) {
+        const out = apply(join, this, args);
+        chargeNumber(out);
+        return out;
+      },
+    }).m);
+  }
+  // Descriptions end up in function names ("[desc]") and strings ("Symbol(desc)").
+  const NativeSymbol = Symbol;
+  const symbolDescription = (d) => {
+    if (d === undefined) return d;
+    const s = StringCtor(d);
+    if (s.length > maxString - 8) tooLongString(s.length);
+    return s;
+  };
+  installConstructor("Symbol", NativeSymbol, function (description) {
+    if (new.target !== undefined) throw new TypeErrorCtor("Symbol is not a constructor");
+    charge(WRAP);
+    return NativeSymbol(symbolDescription(description));
+  }, []);
+  guard(g.Symbol, "for", (_self, args) => {
+    args[0] = symbolDescription(args[0]);
+    chargeNumber(args[0]);
+  });
+
 
   // new Error() writes a backtrace (see chargeCaught). Subclasses get the wrapped Error as their
   // prototype, so the native one stays out of reach.
@@ -759,8 +1215,8 @@ export const PRELUDE = String.raw`
     const first = apply(indexOfString, d.value, ["\n"]);
     const second = first < 0 ? -1 : apply(indexOfString, d.value, ["\n", first + 1]);
     if (second < 0) return;
-    defineProperty(e, "stack", { value: apply(sliceString, d.value, [second + 1]), writable: true,
-      configurable: true });
+    const stack = apply(sliceString, d.value, [second + 1, second + 1 + maxString]);
+    defineProperty(e, "stack", { value: stack, writable: true, configurable: true });
   }
   const ERROR_NAMES = ["Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError",
     "TypeError", "URIError", "AggregateError", "InternalError", "SuppressedError"];
@@ -781,40 +1237,18 @@ export const PRELUDE = String.raw`
   guard(Reflect, "apply", (_self, args) => checked("apply", arrayLength(args[2]), ARRAY));
   guard(Reflect, "construct", (_self, args) => checked("construct", arrayLength(args[1]), ARRAY));
 
-  // An exception inside a Promise executor or an async function becomes a rejection, and that
-  // includes the interrupt that ends an over-budget tick: the bot could catch it and run on.
-  // Promise jobs never run in the sandbox, so neither is useful to a bot: async functions are
-  // rejected by the host's source check, and the executor is called from JS here, where the
-  // interrupt cannot be caught.
-  // Promise.try has the same problem and is removed.
-  const NativePromise = Promise;
-  installConstructor("Promise", NativePromise, function (executor) {
-    if (new.target === undefined) throw new TypeErrorCtor("Promise must be called with 'new'");
-    if (typeof executor !== "function") {
-      throw new TypeErrorCtor("Promise executor is not a function");
-    }
-    charge(WRAP);
-    let resolve;
-    let reject;
-    const p = construct(NativePromise, [(a, b) => {
-      resolve = a;
-      reject = b;
-    }], new.target);
-    try {
-      apply(executor, undefined, [resolve, reject]);
-    } catch (e) {
-      chargeCaught(e);
-      apply(reject, undefined, [e]);
-    }
-    return p;
-  }, ["try"]);
+  // Promise code catches exceptions in C and turns them into rejections: the resolve functions
+  // when a thenable's "then" getter throws, Promise.all/race/any/allSettled when iterating
+  // throws. Those exceptions never reach a catch that charges them, and one at full stack depth
+  // costs milliseconds. Promise jobs never run in the sandbox (async functions are rejected by
+  // the host's source check), so promises are no use to a bot: Promise is removed.
 
   // ---- determinism and unavailable features ----
 
   // BigInt arithmetic runs in C with no interrupt checks (7n ** 300000n takes ~0.5 s), and
   // nothing in a bot needs it. Literals are rejected by the host before evaluation.
   for (const name of ["BigInt", "BigInt64Array", "BigUint64Array", "eval", "WeakRef",
-    "FinalizationRegistry", "SharedArrayBuffer", "Atomics"]) {
+    "FinalizationRegistry", "SharedArrayBuffer", "Atomics", "Promise"]) {
     deleteProperty(g, name);
   }
   for (const name of ["getBigInt64", "getBigUint64", "setBigInt64", "setBigUint64"]) {
@@ -846,6 +1280,9 @@ export const PRELUDE = String.raw`
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   }
   defineProperty(Math, "random", { value: random, writable: true, configurable: true });
+  // Read-only, so the instrumentation can rely on Math.f(...) returning a number.
+  ObjectCtor.freeze(Math);
+  defineProperty(g, "Math", { value: Math, writable: false, enumerable: false, configurable: false });
 
   // ---- log ----
 
@@ -855,7 +1292,7 @@ export const PRELUDE = String.raw`
   function formatArg(arg) {
     if (typeof arg === "string") return arg;
     try {
-      const json = stringify(arg);
+      const json = stringifyAny(arg);
       if (json !== undefined) return json;
     } catch (e) {
       chargeCaught(e);
@@ -875,6 +1312,34 @@ export const PRELUDE = String.raw`
   }
   const console = { log, info: log, warn: log, error: log, debug: log };
   defineProperty(g, "console", { value: console, writable: true, configurable: true });
+
+  // ---- natives ----
+
+  // Every function reachable now from the globals, and from the iterator prototypes QuickJS only
+  // exposes through instances, is a built-in or one of the wrappers above: never bot code.
+  const roots = [g, [][iteratorKey](), new g.Set()[iteratorKey](), new g.Map()[iteratorKey](),
+    ""[iteratorKey](), apply(RegExpProto[Symbol.matchAll], /a/g, [""]), function* () {}];
+  if (typeof IteratorCtor === "function") {
+    roots[roots.length] = apply(IteratorCtor.prototype.map, [][iteratorKey](), [(x) => x]);
+    roots[roots.length] = IteratorCtor.from({ next: () => ({ done: true }) });
+  }
+  const seen = new SetCtor();
+  while (roots.length > 0) {
+    const o = roots[roots.length - 1];
+    roots.length--;
+    if (seen.has(o)) continue;
+    seen.add(o);
+    if (typeof o === "function") apply(weakSetAdd, natives, [o]);
+    const keys = ownKeysNative(o);
+    for (let i = 0; i < keys.length; i++) {
+      const d = getOwnPropertyDescriptor(o, keys[i]);
+      for (const v of [d.value, d.get, d.set]) {
+        if ((typeof v === "object" && v !== null) || typeof v === "function") roots[roots.length] = v;
+      }
+    }
+    const p = getPrototypeOf(o);
+    if (p !== null) roots[roots.length] = p;
+  }
 
   // ---- driver ----
 
@@ -898,6 +1363,7 @@ export const PRELUDE = String.raw`
     begin(limit) {
       phaseLimit = limit;
       setLeft(limit);
+      exhausted = false;
       logOpen = true;
       defineProperty(g, "__zs_meter", { value: register, writable: true, configurable: true });
     },
@@ -929,6 +1395,7 @@ export const PRELUDE = String.raw`
     tick(stateJson, limit) {
       phaseLimit = limit;
       setLeft(limit);
+      exhausted = false;
       perChar = perCharTick;
       logOpen = true;
       const action = apply(tickFn, bot, [parse(stateJson), mem, log]);

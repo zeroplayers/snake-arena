@@ -158,18 +158,17 @@ describe("budget", () => {
     expect(report?.outcome).toBe("timeout");
   });
 
-  it("cannot be swallowed by a Promise executor (review of #49)", () => {
+  it("has no Promise, which could swallow the interrupt (reviews of #49 and #62)", () => {
     for (const body of [
       "for (let j = 0; j < 3000; j++) new Promise(() => { for (let i = 0; i < 1e6; i++); }); return { turn: 0.5 };",
-      "for (;;) new Promise(() => { const a = []; a.length = 1e5; for (;;) a.slice(); }); return { turn: 0.5 };",
-      "for (;;) { try { new Promise(() => { for (;;); }); } catch (e) {} } return { turn: 0.5 };",
       "for (;;) Promise.resolve().then(() => {}, () => {}); return { turn: 0.5 };",
     ]) {
       const life = sandbox.startLife(botWithTick(body), makeInfo());
       const start = performance.now();
       const report = life.tick(oneState());
       expect(performance.now() - start, body).toBeLessThan(1000);
-      expect(report, body).toMatchObject({ outcome: "timeout", action: { turn: 0 }, strikes: 1 });
+      expect(report, body).toMatchObject({ outcome: "error", action: { turn: 0 } });
+      expect(report.error).toMatch(/^ReferenceError: .*Promise/);
       life.dispose();
     }
   });

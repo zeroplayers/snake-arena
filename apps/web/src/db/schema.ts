@@ -315,11 +315,21 @@ export const lives = sqliteTable(
     traceKey: text("trace_key"),
     startedAt: integer("started_at", { mode: "timestamp_ms" }).notNull().default(now),
     endedAt: integer("ended_at", { mode: "timestamp_ms" }),
+    /**
+     * Position in the order lives finished (were written with an `end_tick`), for the rating
+     * job's cursor (`src/server/ratings.ts`). Set by triggers from `rating_progress` (migration
+     * `0007_rating_job`); writers need do nothing. `null` while the snake is alive. Unlike
+     * `rowid`, never reused after a delete and never renumbered.
+     */
+    seq: integer("seq"),
   },
   (t) => [
-    // Bot page and rating: a version's lives, latest first (last 200, daily quota).
+    // Bot page: a version's lives, latest first (last 200, daily quota).
     index("lives_version_ended_idx").on(t.versionId, t.endedAt),
     index("lives_room_idx").on(t.room, t.startTick),
+    // Rating job: lives finished after its cursor, and a version's lives when it rebuilds one.
+    uniqueIndex("lives_seq_idx").on(t.seq),
+    index("lives_version_seq_idx").on(t.versionId, t.seq),
     check("lives_death_cause_check", oneOf(t.deathCause, deathCauses)),
   ],
 );
@@ -348,6 +358,18 @@ export const ratings = sqliteTable(
      * nothing writes it.
      */
     lowerBound: real("lower_bound").generatedAlwaysAs(sql`mean - ci`, { mode: "virtual" }),
+    /**
+     * `encodeWindow()` of `@zerosnake/rating`: the scores of the last 200 counted lives, oldest
+     * first, which the next update starts from. `null` on rows written before migration
+     * `0007_rating_job`.
+     */
+    recentScores: text("recent_scores"),
+    /**
+     * The rating covers the stint's counted lives with `lives.seq` up to this. `null` means
+     * "rebuild me from `lives`": the rating job does so within a few runs (how to rebuild a
+     * rating by hand, see `src/server/ratings.ts`).
+     */
+    lifeSeq: integer("life_seq"),
     updatedAt: updatedAt(),
   },
   // Leaderboard: highest lower bound first (`ratings_rank_idx`), filtered by `n_lives >= 30`.
@@ -361,7 +383,27 @@ export const ratings = sqliteTable(
       t.nLives,
       sql`${t.versionId} DESC`,
     ),
+    // Rating job: rows waiting for a rebuild.
+    index("ratings_rebuild_idx").on(t.versionId).where(sql`life_seq IS NULL`),
   ],
+);
+
+/**
+ * The rating job's progress, a single row (`id = 1`, made by the migration). Triggers on `lives`
+ * number each finished life with `assigned_seq + 1` (`lives.seq`); the job has applied every
+ * life up to `rated_seq` to `ratings`. `assigned_seq - rated_seq` is its backlog.
+ */
+export const ratingProgress = sqliteTable(
+  "rating_progress",
+  {
+    id: integer("id").primaryKey(),
+    assignedSeq: integer("assigned_seq").notNull().default(0),
+    ratedSeq: integer("rated_seq").notNull().default(0),
+    /** One more on every commit of the job; its writes are guarded by it, so runs never interleave. */
+    rev: integer("rev").notNull().default(0),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(now),
+  },
+  (t) => [check("rating_progress_singleton", sql`${t.id} = 1`)],
 );
 
 // ─── Operations ─────────────────────────────────────────────────────────────────────────────────

@@ -17,8 +17,11 @@ export interface TestD1 {
   dispose(): Promise<void>;
 }
 
-export async function createTestD1({ seed = false } = {}): Promise<TestD1> {
-  const { env, dispose } = await createTestPlatform({ seed });
+export async function createTestD1({
+  seed = false,
+  migrateBefore,
+}: Pick<TestPlatformOptions, "seed" | "migrateBefore"> = {}): Promise<TestD1> {
+  const { env, dispose } = await createTestPlatform({ seed, migrateBefore });
   return { db: env.DB, dispose };
 }
 
@@ -39,6 +42,8 @@ export interface TestPlatformEnv {
 
 export interface TestPlatformOptions {
   seed?: boolean;
+  /** Applies only the migrations sorting before this file name (to test a migration on data). */
+  migrateBefore?: string | undefined;
   /** Overrides the `limit` of rate limit rules (the defaults are `RATE_LIMITS`). */
   rateLimits?: Partial<Record<RateLimitRule, number>>;
 }
@@ -47,6 +52,7 @@ export interface TestPlatformOptions {
 export async function createTestPlatform({
   seed = false,
   rateLimits = {},
+  migrateBefore,
 }: TestPlatformOptions = {}) {
   // A config with nothing but these bindings, so the proxy doesn't look for apps/arena.
   const dir = mkdtempSync(join(tmpdir(), "zerosnake-d1-"));
@@ -75,7 +81,7 @@ export async function createTestPlatform({
     envFiles: [],
     remoteBindings: false,
   });
-  await applyMigrations(proxy.env.DB);
+  await applyMigrations(proxy.env.DB, migrateBefore);
   if (seed) await execFile(proxy.env.DB, seedFile);
   return {
     env: proxy.env,
@@ -86,9 +92,10 @@ export async function createTestPlatform({
   };
 }
 
-export async function applyMigrations(db: D1Database) {
+/** Applies the migrations in order: all of them, or those sorting before `before`. */
+export async function applyMigrations(db: D1Database, before?: string, from?: string) {
   const files = readdirSync(migrationsDir)
-    .filter((f) => f.endsWith(".sql"))
+    .filter((f) => f.endsWith(".sql") && (!before || f < before) && (!from || f >= from))
     .sort();
   for (const file of files) await execFile(db, join(migrationsDir, file));
 }

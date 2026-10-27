@@ -2,30 +2,11 @@
 
 From an empty folder to your own snake in the arena.
 
-> **Status.** Steps 1–3 work today inside a checkout of the monorepo
-> ([see below](#before-the-packages-are-published)); the rest is being built:
->
-> - `zerosnake init` and `sim` are merged
->   ([#57](https://github.com/zeroplayers/snake-arena/pull/57)), and so is the project template they
->   copy ([#53](https://github.com/zeroplayers/snake-arena/pull/53)). `test` is merged too but only
->   bundles the bot and loads it in the sandbox; running the full check suite waits for
->   [#54](https://github.com/zeroplayers/snake-arena/pull/54) (in review).
-> - `zerosnake login`, `deploy`, `status` and `logs` are in progress
->   ([#21](https://github.com/zeroplayers/snake-arena/issues/21), in review as
->   [#64](https://github.com/zeroplayers/snake-arena/pull/64)); today they print "isn't available
->   yet". The server side of deploy is merged
->   ([#52](https://github.com/zeroplayers/snake-arena/pull/52)).
-> - Bots don't play in the arena yet: rooms
->   ([#56](https://github.com/zeroplayers/snake-arena/pull/56)) are in review and the matchmaker
->   ([#23](https://github.com/zeroplayers/snake-arena/issues/23)) isn't built, so no lives are
->   recorded and the leaderboard is empty.
-> - The `zerosnake` package and the `@zerosnake/*` packages are not on npm yet, so `npx zerosnake`
->   doesn't work outside the monorepo, and in a project made by `init` the template's own tests
->   (`npm test`, `npm run bench`) can't run, because they need the engine, sandbox and house bots.
->   See [Before the packages are published](#before-the-packages-are-published).
-
-You need Node.js 24 or newer. [Claude Code](https://claude.com/claude-code) is optional but the
-template is set up for it.
+**What you need:** Node.js 24 or newer (`node -v`) and a terminal. Steps 1–4 run on your machine,
+offline and with no account; step 5 needs a GitHub account to sign in. It's free.
+[Claude Code](https://claude.com/claude-code) is optional: the template is set up for it, its
+`AGENTS.md` points other coding agents (Cursor, Codex, …) to the same instructions, and you can
+write the bot by hand.
 
 ## 1. Create a project
 
@@ -44,7 +25,13 @@ npm install
 | `.claude/skills/` | `new-strategy`, `debug-death`, `compare-with-previous`                       |
 | `test/`           | a smoke test in the real sandbox and a bench against the house bots          |
 
-The starter bot beats the weakest house bot (`easy`) and loses to the others.
+The starter bot beats the weakest house bot (`easy`), which is the bar for entering the arena, so
+you can deploy it before changing a line. It loses to the others.
+
+The template's own tests (`npm test`, `npm run bench`) need the engine, sandbox and house-bot
+packages, which aren't on npm; until they are, use `npx zerosnake sim` and `npx zerosnake test`,
+which bring everything they need. See
+[Before the packages are published](#before-the-packages-are-published).
 
 ## 2. Write a strategy
 
@@ -97,18 +84,10 @@ npx zerosnake test
 
 The same checks the server runs before accepting a version: limits, does it load, 5 matches without
 a sandbox death, and qualification (score at least as high as the `easy` house bot). It prints what
-to fix when a check fails. (Not yet: until [#54](https://github.com/zeroplayers/snake-arena/pull/54)
-lands, `test` only bundles your bot and loads it in the sandbox, says so and exits with 1.) See
+to fix when a check fails. See
 [Limits: check suite](limits.md#check-suite-and-qualification).
 
 ## 5. Sign in and deploy
-
-> The CLI side is in progress ([#21](https://github.com/zeroplayers/snake-arena/issues/21), PR
-> [#64](https://github.com/zeroplayers/snake-arena/pull/64)). What
-> follows is how the merged server side ([#52](https://github.com/zeroplayers/snake-arena/pull/52),
-> [`apps/web/src/shared/deploy.ts`](../apps/web/src/shared/deploy.ts)) works. Until the check
-> consumer ([#22](https://github.com/zeroplayers/snake-arena/issues/22)) is built, a new version
-> stays `validating`.
 
 ```bash
 npx zerosnake login
@@ -126,19 +105,16 @@ npx zerosnake deploy
 
 ## 6. Follow your bot
 
-> Not yet: no lives are played or recorded until rooms
-> ([#56](https://github.com/zeroplayers/snake-arena/pull/56)) and the matchmaker
-> ([#23](https://github.com/zeroplayers/snake-arena/issues/23)) land.
-
 Once ready, the version is queued for lives in the arena's rooms, at most one snake per author per
 room. After 30 lives it appears on the leaderboard (see [Rating](rating.md)). Your profile at
 `/@<username>` lists your bots and their ratings, and each bot's page `/@<username>/<slug>` has its
-versions, their sources and replays of recent lives (site pages merged in
-[#55](https://github.com/zeroplayers/snake-arena/pull/55),
-[`apps/web/src/routes`](../apps/web/src/routes)).
+versions, their sources and replays of recent lives. From the terminal, `npx zerosnake status`
+shows your bots' active versions, ratings and lives, and `npx zerosnake logs` a version's check
+report and recent lives.
 
-When it dies in ways you don't understand, the template's `debug-death` skill has Claude replay
-the last ticks before local deaths (`npm run bench -- --deaths 5`) and fix the cause;
+When it dies in ways you don't understand, open that life's replay from the bot page: its trace shows what
+your bot saw and returned in its last ticks. Locally, the template's `debug-death` skill has Claude
+replay the last ticks before local deaths (`npm run bench -- --deaths 5`) and fix the cause;
 [FAQ](faq.md) lists the common causes.
 
 ## Before the packages are published

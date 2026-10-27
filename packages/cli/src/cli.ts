@@ -9,6 +9,7 @@ import { CliError, EXIT } from "./errors.ts";
 import { type Io, processIo } from "./io.ts";
 import { packageRoot, readJson } from "./paths.ts";
 import { defaultRemote, type Remote } from "./remote/api.ts";
+import { DEFAULT_URL } from "./remote/config.ts";
 import { red } from "./term.ts";
 
 export const HELP = `Usage: zerosnake <command> [options]
@@ -23,10 +24,10 @@ Commands:
   status       Your bots: active version, rating, lives, deploys left today
   logs         A version's check report and recent lives
 
-Coming soon: replays.
+Replays and death traces of arena lives are on your bot's page on the site.
 
 Run \`zerosnake <command> --help\` for a command's options.
-Docs: https://github.com/zeroplayers/snake-arena`;
+Docs: ${DEFAULT_URL}/docs`;
 
 const LATER = new Set(["replays"]);
 
@@ -70,7 +71,7 @@ export async function main(
         return await logsCommand(rest, io, remote);
       default:
         if (LATER.has(command)) {
-          io.err(`\`zerosnake ${command}\` isn't available yet (zeroplayers/snake-arena#21).`);
+          io.err(`\`zerosnake ${command}\` isn't available yet: watch replays on your bot's page.`);
           return EXIT.failure;
         }
         io.err(`Unknown command "${command}".\n\n${HELP}`);

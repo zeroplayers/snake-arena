@@ -51,7 +51,8 @@ uploaded, so it costs no deploy. A bot whose checks pass here but are slow (see
 Options:
   --bot <slug>          Which of your bots to deploy to (default: "zerosnake": { "bot" } in
                         package.json, else the package name)
-  --create              Create the bot if you don't have it yet
+  --create              Create the bot if you don't have it yet (your first bot is created
+                        without it)
   --entry <file>        Your bot's entry file (default: src/bot.ts)
   -m, --message <text>  A note for this version, like a commit message
   --skip-local-checks   Upload without running the check suite here (the deploy limits are
@@ -107,7 +108,9 @@ export async function deployCommand(
     throw explain(e, server);
   });
   const existing = me.bots.find((b) => b.slug === slug);
-  if (!existing && !values.create) throw noSuchBot(me, slug, server);
+  // An author's first deploy creates the bot; after that, a new one takes --create, so a typo in
+  // a project name doesn't quietly start a fourth bot.
+  if (!existing && !values.create && me.bots.length > 0) throw noSuchBot(me, slug, server);
   if (me.quota.deploysToday >= me.quota.deploysPerDay) {
     throw new CliError(
       `You've used all ${me.quota.deploysPerDay} deploys for today. More at ${localTime(me.quota.resetsAt)} (00:00 UTC).`,

@@ -24,7 +24,9 @@ type Step =
 export const Route = createFileRoute("/device")({
   validateSearch: (search: Record<string, unknown>): DeviceSearch =>
     typeof search.user_code === "string" ? { user_code: search.user_code } : {},
-  head: () => ({ meta: [{ title: "Sign in the CLI · ZeroSnake Arena" }] }),
+  head: () => ({
+    meta: [{ title: "Sign in the CLI · ZeroSnake Arena" }, { name: "robots", content: "noindex" }],
+  }),
   component: Device,
 });
 

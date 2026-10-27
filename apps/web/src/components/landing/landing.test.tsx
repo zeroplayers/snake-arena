@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { REPO } from "../../site";
 import { DocArticle } from "../docs/DocArticle";
 import { Landing } from "./Landing";
-import { QUICKSTART, quickstartScript } from "./quickstart";
+import { QUICKSTART_COMMANDS, quickstartScript } from "./quickstart";
 
 const ROOT = new URL("../../../../../", import.meta.url);
 const read = (path: string) => readFileSync(new URL(path, ROOT), "utf8");
@@ -56,13 +56,13 @@ async function resolves(href: string): Promise<boolean> {
 describe("landing page", () => {
   it("renders the pitch, the arena stage and the quick start", async () => {
     const html = await renderAt("/", () => <Landing signedIn={false} onSignIn={() => {}} />);
-    expect(html).toContain("Vibe-code a snake bot with Claude.");
-    expect(html).toContain("Watch it fight 24/7.");
+    expect(html).toContain("Your snake bot vs.");
+    expect(html).toContain("every snake is a program");
     expect(html).toContain('class="hero-stage"');
     expect(html).toContain("Loading the arena");
-    for (const { cmd } of QUICKSTART) expect(html).toContain(cmd);
+    expect(html).toContain("Your bot is one function");
+    for (const { cmd } of QUICKSTART_COMMANDS) expect(html).toContain(cmd);
     expect(html).toContain("Sign in with GitHub");
-    expect(html).toContain("Before launch");
   });
 
   it("offers the bots page instead of sign-in when signed in", async () => {
@@ -90,12 +90,14 @@ describe("landing page", () => {
   it("lists commands the CLI has and the getting-started page documents", () => {
     const cli = read("packages/cli/src/cli.ts");
     const guide = read("docs/getting-started.md");
-    for (const { cmd } of QUICKSTART) {
+    for (const { cmd } of QUICKSTART_COMMANDS) {
       const sub = cmd.match(/^npx zerosnake (\w+)/)?.[1];
       if (sub) expect(cli, cmd).toContain(`case "${sub}":`);
       if (sub) expect(guide, cmd).toContain(`npx zerosnake ${sub}`);
     }
-    expect(quickstartScript().split("\n")).toHaveLength(QUICKSTART.length);
+    expect(quickstartScript()).toBe(
+      "npx zerosnake init my-snake && cd my-snake && npx zerosnake sim",
+    );
   });
 });
 
@@ -124,10 +126,11 @@ describe.each([
     cli ? "offers the commands to copy" : "shows the commands as coming at launch, with no copy",
     async () => {
       const html = await render();
-      for (const { cmd } of QUICKSTART) expect(html).toContain(cmd);
-      expect(html.includes(">Copy</button>")).toBe(cli);
+      for (const { cmd } of QUICKSTART_COMMANDS) expect(html).toContain(cmd);
+      expect(html.includes(">Copy first steps</button>")).toBe(cli);
       expect(html.includes("Coming at launch")).toBe(!cli);
-      expect(html.includes("<code>npx</code>")).toBe(!cli);
+      // On launch day nothing is left in the "not yet" box, so it's gone.
+      expect(html.includes("Not on npm yet")).toBe(!cli);
     },
   );
 

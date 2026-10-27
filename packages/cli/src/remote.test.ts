@@ -199,12 +199,9 @@ describe("zerosnake deploy", () => {
     expect(arena.calls("POST", /versions/)).toHaveLength(0);
   });
 
-  it("creates the bot, uploads bundle and sources, and waits for the checks", async () => {
+  it("creates your first bot, uploads bundle and sources, and waits for the checks", async () => {
     const { arena, run } = setUp();
-    const r = await run(
-      ["deploy", "--create", "-m", "first try"],
-      botProject({ "src/bot.ts": PASSING_BOT }),
-    );
+    const r = await run(["deploy", "-m", "first try"], botProject({ "src/bot.ts": PASSING_BOT }));
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain("within the deploy limits");
     expect(r.out).toMatch(

@@ -139,13 +139,11 @@ Passed to every `tick`. Plain JSON data.
 Treat bodies as circles of `radius` around each point; the spacing between listed points is not
 guaranteed.
 
-**Authors.** The SDK's doc comment calls `author` a username and says house bots use `"house"`. The
-rooms in review pass the owner's user id (a 32-character Better Auth id), and the check suite uses
-ids in the same format. For house bots both
-the rooms ([#56](https://github.com/zeroplayers/snake-arena/pull/56)) and the check suite
-([#54](https://github.com/zeroplayers/snake-arena/pull/54)) use `house:<kind>` (`house:medium`,
-`house:easy#2`), and the check suite deliberately shows some house opponents under made-up author
-ids. Don't build strategy on recognising authors or house bots.
+**Authors.** `author` is an opaque id, the same for every snake of one account: for a real bot, its
+owner's user id (a 32-character Better Auth id). House bots appear as `house:<kind>`
+(`house:medium`, `house:easy#2`) in arena rooms, but the check suite shows some house opponents
+under made-up ids in the same format as user ids. (The SDK's doc comment still calls `author` a
+username.) Don't build strategy on recognising authors or house bots.
 
 ## Vision
 

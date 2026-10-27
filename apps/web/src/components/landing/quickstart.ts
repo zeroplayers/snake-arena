@@ -1,47 +1,62 @@
 import { CLI_PUBLISHED, REPO } from "../../site";
 
-/**
- * The "Start in a minute" commands, as `docs/getting-started.md` lists them and `packages/cli`
- * implements them (`zerosnake --help`). `landing.test.ts` checks each command exists in the CLI.
- */
-export const QUICKSTART: readonly { cmd: string; note?: string }[] = [
-  { cmd: "npx zerosnake init my-bot", note: "starter bot, SDK, CLAUDE.md and Claude skills" },
-  { cmd: "cd my-bot" },
-  { cmd: "npm install", note: "SDK types for your editor" },
-  { cmd: "npx zerosnake sim", note: "a local match vs the house bots, in your browser" },
-  { cmd: "npx zerosnake test", note: "the checks the server runs on deploy" },
-  { cmd: "npx zerosnake login", note: "sign the CLI in with GitHub" },
-  { cmd: "npx zerosnake deploy", note: "your bot joins the arena" },
-];
+export interface QuickstartCommand {
+  cmd: string;
+  note?: string;
+}
 
 /**
- * What doesn't work yet, as of `main`. Drop an entry when its piece lands; the list disappears
- * when it's empty. The npx entry goes by itself once `CLI_PUBLISHED` is set.
+ * The quick start in two parts: what runs on your machine with no account, then what puts the
+ * bot in the arena. The commands are those `docs/getting-started.md` lists and `packages/cli`
+ * implements (`zerosnake --help`); `landing.test.ts` checks each `npx zerosnake` one exists.
  */
-export const NOT_YET: readonly { what: string; detail: string }[] = [
-  ...(CLI_PUBLISHED
-    ? []
-    : [
-        {
-          what: "npx",
-          detail: REPO.public
-            ? "The zerosnake package goes on npm at launch. Until then the CLI runs from a checkout of the repository."
-            : "The zerosnake package goes on npm at launch, and the repository opens with it. Until then these commands don't work yet.",
-        },
-      ]),
+export const QUICKSTART: readonly { title: string; commands: readonly QuickstartCommand[] }[] = [
   {
-    what: "test",
-    detail:
-      "Checks the size limits and loads your bot in the sandbox; the full check suite is being wired in.",
+    title: "Try it on your machine (no account)",
+    commands: [
+      { cmd: "npx zerosnake init my-snake", note: "starter bot, CLAUDE.md, AGENTS.md and skills" },
+      { cmd: "cd my-snake" },
+      { cmd: "npx zerosnake sim", note: "your snake vs the house bots, in your browser" },
+      { cmd: "claude", note: 'then: "make my snake hunt smaller snakes"' },
+    ],
   },
   {
-    what: "deploy",
-    detail:
-      "Uploads your bot, but the arena's rooms aren't open yet, so new versions wait in validation.",
+    title: "Put it in the arena",
+    commands: [
+      { cmd: "npx zerosnake test", note: "the same checks the server runs" },
+      { cmd: "npx zerosnake login", note: "once, with GitHub" },
+      { cmd: "npx zerosnake deploy", note: "it joins the arena when the checks pass" },
+    ],
   },
 ];
 
-/** The commands as one shell snippet, for the copy button (shown once `CLI_PUBLISHED`). */
+/** Every quick-start command, in order. */
+export const QUICKSTART_COMMANDS: readonly QuickstartCommand[] = QUICKSTART.flatMap(
+  (part) => part.commands,
+);
+
+/**
+ * What doesn't work yet. Empty, and the box gone, once `CLI_PUBLISHED` is set on launch day.
+ */
+export const NOT_YET: readonly { what: string; detail: string }[] = CLI_PUBLISHED
+  ? []
+  : [
+      {
+        what: "npx zerosnake",
+        detail: REPO.public
+          ? "won't run until the package is on npm. Until then, run the CLI from a checkout of the repository."
+          : "won't run until launch day, when the package goes on npm and the repository opens.",
+      },
+    ];
+
+/**
+ * The first part's commands as one line, for the copy button (shown once `CLI_PUBLISHED`). One
+ * line, because pasted lines would answer npx's "Ok to proceed?" and `sim` runs until Ctrl+C; it
+ * leaves out `claude`, which is interactive and optional.
+ */
 export function quickstartScript(): string {
-  return QUICKSTART.map((c) => c.cmd).join("\n");
+  return (QUICKSTART[0]?.commands ?? [])
+    .filter((c) => c.cmd !== "claude")
+    .map((c) => c.cmd)
+    .join(" && ");
 }

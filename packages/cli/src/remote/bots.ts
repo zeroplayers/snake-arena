@@ -56,12 +56,13 @@ export function findBot(me: MeResponse, slug: string, server: string): MeBot {
 
 export function noSuchBot(me: MeResponse, slug: string, server: string): CliError {
   const who = me.user.username ? `@${me.user.username}` : "You";
-  const list =
-    me.bots.length === 0
-      ? `${who} has no bots on ${server} yet.`
-      : `${who} has: ${me.bots.map((b) => b.slug).join(", ")}.`;
+  if (me.bots.length === 0) {
+    return new CliError(
+      `No bot "${slug}". ${who} has no bots on ${server} yet: \`npx zerosnake deploy\` creates it.`,
+    );
+  }
   return new CliError(
-    `No bot "${slug}". ${list}\n` +
+    `No bot "${slug}". ${who} has: ${me.bots.map((b) => b.slug).join(", ")}.\n` +
       `Deploy to one of them with --bot <slug>, or create "${slug}" with \`zerosnake deploy --create\`.`,
   );
 }

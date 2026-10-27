@@ -16,7 +16,7 @@
  * `deploy_in_progress` while the first request is still going, and takes over a deploy stuck
  * unqueued for over a minute.
  */
-import { and, count, desc, eq, gte, isNull, or, type SQLWrapper, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import * as z from "zod";
 import { createDb, type Db } from "../db";
 import { bots, versions } from "../db/schema";
@@ -39,7 +39,10 @@ import {
   type QuotaInfo,
   type VersionInfo,
 } from "../shared/deploy";
+import { insertBot } from "./bot-admin";
+import { parseBotName } from "./bot-names";
 import { authenticateCli, type CliIdentity } from "./cli-auth";
+import { deployQuota, quotaUsedSql, utcDayStart } from "./quota";
 
 export interface CliApiEnv {
   DB: D1Database;
@@ -59,17 +62,11 @@ export interface CliApiOptions {
   limits?: Partial<DeployLimits>;
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9_-]{8,128}$/;
 const PATH_SEGMENT = /^[A-Za-z0-9._@+-]+$/;
-const BOT_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
 
 /** An unqueued `validating` deploy older than this is taken over by a retry with its key. */
 const STALE_DEPLOY_MS = 60_000;
-
-/** Versions that never got queued (`abandon`ed) don't use up the daily quota. */
-const countsAgainstQuota = (v: SQLWrapper) =>
-  sql`NOT (${v}.enqueued_at IS NULL AND ${v}.status = 'rejected')`;
 
 class HttpError extends Error {
   constructor(
@@ -106,10 +103,6 @@ const positiveInt = (value: string | undefined) => {
   const n = Number(value);
   return Number.isSafeInteger(n) && n > 0 ? n : undefined;
 };
-
-function utcDayStart(now: Date) {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-}
 
 // ─── Request bodies ──────────────────────────────────────────────────────────────────────────────
 
@@ -259,34 +252,10 @@ function formatBytes(n: number) {
   return `${n} bytes`;
 }
 
-/** Bot names are free text; the slug is the URL segment (`/@user/slug`) and the CLI handle. */
 function checkBotName(body: z.infer<typeof createBotBody>) {
-  const name = body.name.trim();
-  if (name.length === 0 || name.length > 40 || /\p{Cc}/u.test(name)) {
-    fail(422, {
-      error: "invalid_bot_name",
-      message: "A bot name is 1–40 characters, without control characters.",
-    });
-  }
-  const slug =
-    body.slug === undefined
-      ? name
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, "")
-          .slice(0, 32)
-          .replace(/-+$/, "")
-      : body.slug.toLowerCase();
-  if (!BOT_SLUG.test(slug)) {
-    fail(422, {
-      error: "invalid_bot_name",
-      message:
-        body.slug === undefined
-          ? `Can't make a slug from "${name}"; pass one: 1–32 of a-z, 0-9 and -, not starting or ending with -.`
-          : "A slug is 1–32 of a-z, 0-9 and -, not starting or ending with -.",
-    });
-  }
-  return { name, slug };
+  const result = parseBotName(body);
+  if (!result.ok) fail(422, { error: "invalid_bot_name", message: result.message });
+  return result;
 }
 
 function toMeta(meta: z.infer<typeof deployBody>["meta"]): DeployMeta | null {
@@ -380,31 +349,12 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
     });
   }
 
-  async function quota(ownerId: string): Promise<QuotaInfo> {
-    const dayStart = utcDayStart(now());
-    const [row] = await db
-      .select({ n: count() })
-      .from(versions)
-      .innerJoin(bots, eq(bots.id, versions.botId))
-      .where(
-        and(
-          eq(bots.ownerId, ownerId),
-          gte(versions.createdAt, dayStart),
-          countsAgainstQuota(versions),
-        ),
-      )
-      .limit(1);
-    return {
-      deploysToday: row?.n ?? 0,
-      deploysPerDay: limits.deploysPerDay,
-      resetsAt: new Date(dayStart.getTime() + DAY_MS).toISOString(),
-    };
-  }
+  const quota = (ownerId: string) => deployQuota(db, ownerId, now(), limits.deploysPerDay);
 
   const quotaExceeded = (q: QuotaInfo): never =>
     fail(429, {
       error: "quota_exceeded",
-      message: `You've used all ${q.deploysPerDay} deploys for today; more at ${q.resetsAt} (00:00 UTC).`,
+      message: `You've used all ${q.deploysPerDay} deploys (and rollbacks) for today; more at ${q.resetsAt} (00:00 UTC).`,
       limit: q.deploysPerDay,
       quota: q,
     });
@@ -427,7 +377,8 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
   /**
    * Makes the `validating` version, not yet queued. Next `n` and the daily quota in one
    * statement: D1 runs statements one at a time, so concurrent deploys can't take the same `n`
-   * or squeeze past the quota. `undefined` if the quota is used up or the key is taken.
+   * or squeeze past the quota. `undefined` if the quota is used up, the key is taken or the bot
+   * was archived meanwhile (the owner may archive it while the body is still uploading).
    */
   async function insertVersion(
     bot: BotRow,
@@ -446,11 +397,8 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
         coalesce((SELECT max(n) FROM ${versions} WHERE bot_id = ${bot.id}), 0) + 1,
         'validating', ${keys.bundleKey}, ${keys.sourceKey}, ${meta && JSON.stringify(meta)},
         ${idempotencyKey}, ${createdAt}, ${createdAt}
-      WHERE (
-        SELECT count(*) FROM ${versions} AS v JOIN ${bots} AS b ON b.id = v.bot_id
-        WHERE b.owner_id = ${ownerId} AND v.created_at >= ${utcDayStart(now()).getTime()}
-          AND ${countsAgainstQuota(sql`v`)}
-      ) < ${limits.deploysPerDay}
+      WHERE ${quotaUsedSql(ownerId, utcDayStart(now()))} < ${limits.deploysPerDay}
+        AND EXISTS (SELECT 1 FROM ${bots} WHERE id = ${bot.id} AND archived_at IS NULL)
       ON CONFLICT DO NOTHING
       RETURNING n`);
     const n = inserted[0]?.n;
@@ -582,6 +530,7 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
               .limit(1);
             return {
               ...botInfo(bot),
+              archived: bot.archivedAt !== null,
               activeVersion: active?.n ?? null,
               latestVersion: latest
                 ? { n: latest.n, status: latest.status, createdAt: latest.createdAt.toISOString() }
@@ -602,39 +551,45 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
         const { name, slug } = checkBotName(
           parse(createBotBody, await readJson(request, 16 * 1024)),
         );
-        // One statement, so concurrent creations can't overrun the limit.
-        const id = crypto.randomUUID();
-        const created = await db.all<{ id: string }>(sql`
-          INSERT INTO ${bots} (id, owner_id, name, slug, created_at)
-          SELECT ${id}, ${user.id}, ${name}, ${slug}, ${now().getTime()}
-          WHERE (SELECT count(*) FROM ${bots} WHERE owner_id = ${user.id}) < ${limits.botsPerAuthor}
-          ON CONFLICT DO NOTHING
-          RETURNING id`);
-        const [bot] = await db
-          .select()
-          .from(bots)
-          .where(and(eq(bots.ownerId, user.id), eq(bots.slug, slug)))
-          .limit(1);
-        if (created.length === 0 || !bot) {
-          if (bot) {
-            fail(409, {
-              error: "bot_exists",
-              message: `You already have a bot "${slug}".`,
-              bot: botInfo(bot),
-            });
-          }
+        const result = await insertBot(db, {
+          ownerId: user.id,
+          name,
+          slug,
+          limit: limits.botsPerAuthor,
+          now: now(),
+        });
+        if ("existing" in result) {
+          const bot = result.existing;
+          fail(409, {
+            error: "bot_exists",
+            message: bot.archivedAt
+              ? `You already have a bot "${slug}"; it's archived. Restore it on the site to use it again.`
+              : `You already have a bot "${slug}".`,
+            bot: botInfo(bot),
+          });
+        }
+        if ("limitReached" in result) {
           fail(403, {
             error: "bot_limit_reached",
-            message: `You already have ${limits.botsPerAuthor} bots, the most an author can have.`,
+            message: `You already have ${limits.botsPerAuthor} active bots, the most an author can have. Archive one on the site to free a slot.`,
             limit: limits.botsPerAuthor,
           });
         }
-        return json(botInfo(bot) satisfies BotInfo, 201);
+        return json(botInfo(result.created) satisfies BotInfo, 201);
       }),
 
     deploy: (request: Request, botParam: string) =>
       withCli(request, async ({ user }) => {
         const bot = await ownBot(user.id, botParam);
+        const refuseArchived = (row: BotRow) => {
+          if (!row.archivedAt) return;
+          fail(409, {
+            error: "bot_archived",
+            message: `Bot "${row.slug}" is archived. Restore it on the site before deploying.`,
+            bot: botInfo(row),
+          });
+        };
+        refuseArchived(bot);
         const idempotencyKey = request.headers.get("idempotency-key");
         if (idempotencyKey !== null && !IDEMPOTENCY_KEY.test(idempotencyKey)) {
           fail(400, {
@@ -684,7 +639,10 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
           if (settled) return settled;
           const version = await insertVersion(bot, user.id, keys, body.meta, idempotencyKey);
           if (version) return finishDeploy(bot, version, upload, idempotencyKey);
-          // Nothing inserted: the quota is used up, or a concurrent retry took the key.
+          // Nothing inserted: the bot was archived during the upload, the quota is used up, or
+          // a concurrent retry took the key.
+          const [current] = await db.select().from(bots).where(eq(bots.id, bot.id)).limit(1);
+          if (current) refuseArchived(current);
           if (!idempotencyKey || !(await versionByKey(bot.id, idempotencyKey))) {
             quotaExceeded(await quota(user.id));
           }

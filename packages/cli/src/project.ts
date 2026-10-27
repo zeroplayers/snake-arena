@@ -54,12 +54,13 @@ export interface SourceFile {
   bytes: number;
 }
 
-/** Everything under `src/` (what `deploy` uploads as the source archive). */
+/** Everything under `src/` but hidden files like `.DS_Store` (what `deploy` uploads). */
 export function collectSources(root: string): SourceFile[] {
   const out: SourceFile[] = [];
   const walk = (dir: string): void => {
     if (!existsSync(dir)) return;
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".")) continue;
       const file = join(dir, entry.name);
       if (entry.isDirectory()) walk(file);
       else if (entry.isFile()) {

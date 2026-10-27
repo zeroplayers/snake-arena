@@ -61,6 +61,7 @@ function RootLayout() {
                 <Link to="/@{$username}" params={{ username: viewer.username }}>
                   @{viewer.username}
                 </Link>
+                <Link to="/bots">Bots</Link>
                 <Link to="/settings">Settings</Link>
               </>
             ) : viewer ? null : (

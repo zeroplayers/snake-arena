@@ -32,6 +32,7 @@
     "@zerosnake/sandbox": "workspace:*",
     "@zerosnake/sdk": "workspace:*",
     "@zerosnake/viewer": "workspace:*",
+    "@zerosnake/web": "workspace:*",
     "vitest": "^5.0.5"
   }
 }

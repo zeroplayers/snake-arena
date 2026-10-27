@@ -79,9 +79,11 @@ SELECT
 FROM seq;
 
 -- Ratings over the last 200 lives, as the arena computes them: mean and 95% CI half-width.
-INSERT INTO ratings (version_id, mean, ci, n_lives, updated_at)
+-- `activated_at` names the version's current stint; a rating for any other one is ignored.
+INSERT INTO ratings (version_id, activated_at, mean, ci, n_lives, updated_at)
 SELECT
   version_id,
+  (SELECT activated_at FROM versions WHERE id = version_id),
   avg(score),
   1.96 * sqrt((avg(score * score) - avg(score) * avg(score)) / count(*)),
   count(*),

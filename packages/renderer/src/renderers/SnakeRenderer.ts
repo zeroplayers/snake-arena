@@ -7,7 +7,12 @@ import {
   PlaneGeometry,
   type Scene,
 } from "three";
-import { type InterpolatedSnake, interpolateSnake, resamplePolyline } from "../interpolate.ts";
+import {
+  type InterpolatedSnake,
+  interpolateSnake,
+  pointAlong,
+  resamplePolyline,
+} from "../interpolate.ts";
 import {
   resolveSkin,
   type SkinDefinition,
@@ -39,9 +44,9 @@ const RENDER_ORDER_STRIDE = 3;
 
 /**
  * Snakes as textured squares, ported from ZeroSnake's PlayerRenderer. Instead of one mesh per
- * segment, each snake gets an instanced body plus a head and a tail mesh. Engine segments are
- * blended between ticks and resampled at a fixed spacing, so the look doesn't depend on how
- * densely the engine samples the body.
+ * segment, each snake gets an instanced body plus a head and a tail mesh. The body is blended
+ * between ticks along its path and resampled at a fixed spacing from the head, with the tail at
+ * the body's exact end, so the look doesn't depend on how densely the engine samples the body.
  */
 export class SnakeRenderer {
   private readonly snakes = new Map<string, SnakeEntry>();
@@ -52,6 +57,7 @@ export class SnakeRenderer {
   private readonly resampled: number[] = [];
   private readonly heads: number[] = [];
   private readonly matrix = new Matrix4();
+  private readonly behindTail = { x: 0, y: 0 };
 
   constructor(
     private readonly scene: Scene,
@@ -110,7 +116,8 @@ export class SnakeRenderer {
   ): void {
     const { radius } = state;
     const side = radius * 2 * skin.planeScale;
-    const count = resamplePolyline(state.points, radius * this.segmentSpacing, this.resampled);
+    const spacing = radius * this.segmentSpacing;
+    const count = resamplePolyline(state.points, spacing, this.resampled, state.bodyLength);
     const pts = this.resampled;
     const hx = pts[0] as number;
     const hy = pts[1] as number;
@@ -122,16 +129,17 @@ export class SnakeRenderer {
     entry.head.scale.set(side, side, 1);
     entry.head.renderOrder = order + 2;
 
-    // Tail: last point, tip (-y in the SVG) pointing away from the body.
+    // Tail: last point, tip (-y in the SVG) pointing away from the body. Aimed from a point a
+    // spacing up the path rather than from the nearest body point, whose distance varies.
     const tailVisible = count > 1;
     entry.tail.visible = tailVisible;
     if (tailVisible) {
       const tx = pts[2 * count - 2] as number;
       const ty = pts[2 * count - 1] as number;
-      const px = pts[2 * count - 4] as number;
-      const py = pts[2 * count - 3] as number;
+      const behind = this.behindTail;
+      pointAlong(state.points, Math.max(0, state.bodyLength - spacing), behind);
       entry.tail.position.set(tx, ty, 0);
-      entry.tail.rotation.z = Math.atan2(ty - py, tx - px) + Math.PI / 2;
+      entry.tail.rotation.z = Math.atan2(ty - behind.y, tx - behind.x) + Math.PI / 2;
       entry.tail.scale.set(side, side, 1);
       entry.tail.renderOrder = order;
     }
@@ -163,7 +171,7 @@ export class SnakeRenderer {
     const head = new Mesh(this.geometry, this.material(skin.head.svg, color));
     const tail = new Mesh(this.geometry, this.material(skin.tail.svg, color));
     const body = this.createBody(this.material(skin.body.svg, color), INITIAL_BODY_CAPACITY);
-    const state = existing?.state ?? { points: [], angle: 0, radius: 1, length: 0 };
+    const state = existing?.state ?? { points: [], bodyLength: 0, angle: 0, radius: 1, length: 0 };
     if (existing) this.remove(snake.id);
 
     const entry: SnakeEntry = {

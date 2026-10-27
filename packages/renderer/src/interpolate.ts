@@ -1,4 +1,4 @@
-import type { RenderFrame, RenderSnake } from "./types.ts";
+import type { RenderFrame, RenderSnake, Vec2 } from "./types.ts";
 
 export const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
@@ -20,17 +20,26 @@ export function snakeRadius(snake: RenderSnake): number {
 }
 
 export interface InterpolatedSnake {
-  /** Flat `[x0, y0, x1, y1, ...]`, head first. */
+  /** Flat `[x0, y0, x1, y1, ...]`, head first: the path the body lies along. */
   readonly points: number[];
+  /** How far along `points` the body reaches; the path may run a little past it. */
+  bodyLength: number;
   angle: number;
   radius: number;
   length: number;
 }
 
 /**
- * Blends a snake between two ticks point by point. Point `i` of `prev` moves to point `i` of
- * `next`, which follows the body path when the engine shifts segments along it. If the head
- * jumped (respawn) or there is no previous state, `next` is used as is.
+ * Blends a snake between two ticks along its path rather than point by point. The engine lays
+ * a body out along the head's trail, so between ticks the head slides from `prev`'s head to
+ * `next`'s in a straight line and the body follows it down `prev`'s path, while the body's
+ * length blends from one tick's to the other's.
+ *
+ * Moving point `i` of `prev` to point `i` of `next` instead cuts every bend a little mid-tick
+ * and the body's spacing changes whenever the snake grows, so the error adds up along the body:
+ * a long, coiled snake's tail used to surge back and forth every tick.
+ *
+ * If the head jumped (respawn) or there is no previous state, `next` is used as is.
  */
 export function interpolateSnake(
   prev: RenderSnake | undefined,
@@ -41,69 +50,129 @@ export function interpolateSnake(
   const pts = out.points;
   pts.length = 0;
   const nextRadius = snakeRadius(next);
-  const n = next.segments.length;
   const prevHead = prev?.segments[0];
   const nextHead = next.segments[0];
-  const teleported =
-    !prevHead ||
-    !nextHead ||
-    Math.hypot(nextHead.x - prevHead.x, nextHead.y - prevHead.y) > nextRadius * 20;
+  const headStep = prevHead && nextHead ? distance(prevHead, nextHead) : 0;
+  const nextLength = pathLength(next.segments);
 
-  if (!prev || teleported) {
+  if (!prev || !prevHead || !nextHead || headStep > nextRadius * 20) {
     for (const s of next.segments) pts.push(s.x, s.y);
+    out.bodyLength = nextLength;
     out.angle = next.angle;
     out.radius = nextRadius;
     out.length = next.length;
     return out;
   }
 
-  const ps = prev.segments;
-  const last = ps[ps.length - 1];
-  for (let i = 0; i < n; i++) {
-    // biome-ignore lint/style/noNonNullAssertion: i < n
-    const b = next.segments[i]!;
-    const a = ps[i] ?? last ?? b;
-    pts.push(lerp(a.x, b.x, alpha), lerp(a.y, b.y, alpha));
+  const prevLength = pathLength(prev.segments);
+  pts.push(lerp(prevHead.x, nextHead.x, alpha), lerp(prevHead.y, nextHead.y, alpha));
+  for (const s of prev.segments) pts.push(s.x, s.y);
+  // A snake that grew reaches past `prev`'s tail: borrow the rest of the path from `next`.
+  const covered = headStep + prevLength;
+  let walked = 0;
+  for (let i = 1; i < next.segments.length; i++) {
+    const a = next.segments[i - 1] as Vec2;
+    const b = next.segments[i] as Vec2;
+    walked += distance(a, b);
+    if (walked > covered) pts.push(b.x, b.y);
   }
+
+  out.bodyLength = lerp(prevLength, nextLength, alpha);
   out.angle = lerpAngle(prev.angle, next.angle, alpha);
   out.radius = lerp(snakeRadius(prev), nextRadius, alpha);
   out.length = lerp(prev.length, next.length, alpha);
   return out;
 }
 
+const distance = (a: Vec2, b: Vec2): number => Math.hypot(b.x - a.x, b.y - a.y);
+
+function pathLength(points: readonly Vec2[]): number {
+  let length = 0;
+  for (let i = 1; i < points.length; i++)
+    length += distance(points[i - 1] as Vec2, points[i] as Vec2);
+  return length;
+}
+
+/** Spaced points closer than this many spacings to the end are left out. */
+const END_GAP = 0.25;
+
 /**
- * Walks a flat polyline from its first point and writes evenly spaced points into `out`
- * (flat, same layout). Always emits the first point; the remainder shorter than `spacing`
- * is dropped. Returns the number of points written.
+ * Lays points along a flat polyline (same layout as `out`): one every `spacing` from its first
+ * point, then the end point, exactly `length` along it (or at its end, if the polyline is
+ * shorter). A spaced point within `END_GAP` spacings of the end is left out, so the end never
+ * lands on top of one. Returns the number of points written.
  */
 export function resamplePolyline(
   points: readonly number[],
   spacing: number,
   out: number[],
+  length = Number.POSITIVE_INFINITY,
 ): number {
   out.length = 0;
   const n = points.length >> 1;
   if (n === 0) return 0;
   out.push(points[0] as number, points[1] as number);
-  if (n === 1 || spacing <= 0) return 1;
 
-  let carry = 0; // distance already walked since the last emitted point
+  let total = 0;
+  for (let i = 1; i < n; i++) total += segmentLength(points, i);
+  const end = Math.min(length, total);
+  if (!(end > 0)) return 1;
+
+  const last = spacing > 0 ? end - spacing * END_GAP : Number.NEGATIVE_INFINITY;
+  let next = spacing;
+  let walked = 0; // distance from the first point to the start of segment i
   for (let i = 1; i < n; i++) {
+    const len = segmentLength(points, i);
+    if (len === 0) continue;
     const ax = points[2 * i - 2] as number;
     const ay = points[2 * i - 1] as number;
     const bx = points[2 * i] as number;
     const by = points[2 * i + 1] as number;
-    const len = Math.hypot(bx - ax, by - ay);
-    if (len === 0) continue;
-    let d = spacing - carry;
-    while (d <= len) {
-      const t = d / len;
+    for (; next < last && next <= walked + len; next += spacing) {
+      const t = (next - walked) / len;
       out.push(ax + (bx - ax) * t, ay + (by - ay) * t);
-      d += spacing;
     }
-    carry = len - (d - spacing);
+    if (end <= walked + len) {
+      const t = (end - walked) / len;
+      out.push(ax + (bx - ax) * t, ay + (by - ay) * t);
+      break;
+    }
+    walked += len;
   }
   return out.length >> 1;
+}
+
+/** Writes the point `d` along a flat polyline into `out` (clamped to its ends). */
+export function pointAlong(
+  points: readonly number[],
+  d: number,
+  out: { x: number; y: number },
+): void {
+  const n = points.length >> 1;
+  out.x = points[0] ?? 0;
+  out.y = points[1] ?? 0;
+  let walked = 0;
+  for (let i = 1; i < n; i++) {
+    const len = segmentLength(points, i);
+    const bx = points[2 * i] as number;
+    const by = points[2 * i + 1] as number;
+    if (len > 0 && walked + len >= d) {
+      const t = Math.max(0, (d - walked) / len);
+      out.x += (bx - out.x) * t;
+      out.y += (by - out.y) * t;
+      return;
+    }
+    walked += len;
+    out.x = bx;
+    out.y = by;
+  }
+}
+
+function segmentLength(points: readonly number[], i: number): number {
+  return Math.hypot(
+    (points[2 * i] as number) - (points[2 * i - 2] as number),
+    (points[2 * i + 1] as number) - (points[2 * i - 1] as number),
+  );
 }
 
 export interface FrameSample {

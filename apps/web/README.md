@@ -20,6 +20,21 @@ the replay chunk, its lives and every seed version's sources to the local D1/R2.
 has something to show: `/leaderboard`, `/@ada`, `/@ada/greedy`, `/replay/seed-replay-greedy-1`,
 and the empty cases `/@newbie`, `/@linus/draft`, `/@grace/wip`.
 
+## Landing page and docs
+
+- `/` (`src/components/landing/`): the pitch, a live arena and the quick start. The arena is
+  `ArenaHero`: after the page has loaded and gone idle, and once it is near the viewport, it loads
+  the engine, house bots and three.js and plays `createHeroSource()` (`heroSource.ts`) on a bare
+  canvas, paused while off screen or in a background tab, paused from the start for
+  `prefers-reduced-motion`. Today that source is a house-bot match simulated in the page; for the
+  live showcase (#27) return a `MatchSource` over the showcase room there and flip `HERO_IS_LIVE`.
+  The quick-start commands and the "Before launch" notes are in `quickstart.ts`.
+- `/docs`, `/docs/<page>`: the repository's `docs/*.md`, rendered at build time by the Vite plugin
+  in `src/docs/plugin.ts` (markdown-it with raw HTML escaped; page links become site links, other
+  repository paths point at GitHub). The site ships the HTML only, one chunk per page.
+- `src/site.ts` has the repository URL; set `public: true` when it opens and the "GitHub soon"
+  placeholders become links.
+
 ## Public pages
 
 | Route                | Data                                                                                                                                                                |

@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as BotsRouteImport } from './routes/bots'
 import { Route as DeviceRouteImport } from './routes/device'
+import { Route as DocsRouteImport } from './routes/docs'
 import { Route as LeaderboardRouteImport } from './routes/leaderboard'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as WelcomeRouteImport } from './routes/welcome'
@@ -20,6 +21,8 @@ import { Route as AtChar123usernameChar125BotRouteImport } from './routes/@{$use
 import { Route as ApiBotsRouteImport } from './routes/api/bots'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiMeRouteImport } from './routes/api/me'
+import { Route as DocsIndexRouteImport } from './routes/docs.index'
+import { Route as DocsSlugRouteImport } from './routes/docs.$slug'
 import { Route as ReplayIdRouteImport } from './routes/replay.$id'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiUsersUsernameRouteImport } from './routes/api/users/$username'
@@ -39,6 +42,11 @@ const BotsRoute = BotsRouteImport.update({
 const DeviceRoute = DeviceRouteImport.update({
   id: '/device',
   path: '/device',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsRoute = DocsRouteImport.update({
+  id: '/docs',
+  path: '/docs',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LeaderboardRoute = LeaderboardRouteImport.update({
@@ -83,6 +91,16 @@ const ApiMeRoute = ApiMeRouteImport.update({
   path: '/api/me',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DocsIndexRoute = DocsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => DocsRoute,
+} as any)
+const DocsSlugRoute = DocsSlugRouteImport.update({
+  id: '/$slug',
+  path: '/$slug',
+  getParentRoute: () => DocsRoute,
+} as any)
 const ReplayIdRoute = ReplayIdRouteImport.update({
   id: '/replay/$id',
   path: '/replay/$id',
@@ -113,6 +131,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/bots': typeof BotsRoute
   '/device': typeof DeviceRoute
+  '/docs': typeof DocsRouteWithChildren
   '/leaderboard': typeof LeaderboardRoute
   '/settings': typeof SettingsRoute
   '/welcome': typeof WelcomeRoute
@@ -120,8 +139,10 @@ export interface FileRoutesByFullPath {
   '/api/bots': typeof ApiBotsRouteWithChildren
   '/api/health': typeof ApiHealthRoute
   '/api/me': typeof ApiMeRoute
+  '/docs/$slug': typeof DocsSlugRoute
   '/replay/$id': typeof ReplayIdRoute
   '/@{$username}/': typeof AtChar123usernameChar125IndexRoute
+  '/docs/': typeof DocsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
   '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
@@ -138,8 +159,10 @@ export interface FileRoutesByTo {
   '/api/bots': typeof ApiBotsRouteWithChildren
   '/api/health': typeof ApiHealthRoute
   '/api/me': typeof ApiMeRoute
+  '/docs/$slug': typeof DocsSlugRoute
   '/replay/$id': typeof ReplayIdRoute
   '/@{$username}': typeof AtChar123usernameChar125IndexRoute
+  '/docs': typeof DocsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
   '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
@@ -150,6 +173,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/bots': typeof BotsRoute
   '/device': typeof DeviceRoute
+  '/docs': typeof DocsRouteWithChildren
   '/leaderboard': typeof LeaderboardRoute
   '/settings': typeof SettingsRoute
   '/welcome': typeof WelcomeRoute
@@ -157,8 +181,10 @@ export interface FileRoutesById {
   '/api/bots': typeof ApiBotsRouteWithChildren
   '/api/health': typeof ApiHealthRoute
   '/api/me': typeof ApiMeRoute
+  '/docs/$slug': typeof DocsSlugRoute
   '/replay/$id': typeof ReplayIdRoute
   '/@{$username}/': typeof AtChar123usernameChar125IndexRoute
+  '/docs/': typeof DocsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
   '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
@@ -170,6 +196,7 @@ export interface FileRouteTypes {
     | '/'
     | '/bots'
     | '/device'
+    | '/docs'
     | '/leaderboard'
     | '/settings'
     | '/welcome'
@@ -177,8 +204,10 @@ export interface FileRouteTypes {
     | '/api/bots'
     | '/api/health'
     | '/api/me'
+    | '/docs/$slug'
     | '/replay/$id'
     | '/@{$username}/'
+    | '/docs/'
     | '/api/auth/$'
     | '/api/users/$username'
     | '/api/bots/$bot/versions'
@@ -195,8 +224,10 @@ export interface FileRouteTypes {
     | '/api/bots'
     | '/api/health'
     | '/api/me'
+    | '/docs/$slug'
     | '/replay/$id'
     | '/@{$username}'
+    | '/docs'
     | '/api/auth/$'
     | '/api/users/$username'
     | '/api/bots/$bot/versions'
@@ -206,6 +237,7 @@ export interface FileRouteTypes {
     | '/'
     | '/bots'
     | '/device'
+    | '/docs'
     | '/leaderboard'
     | '/settings'
     | '/welcome'
@@ -213,8 +245,10 @@ export interface FileRouteTypes {
     | '/api/bots'
     | '/api/health'
     | '/api/me'
+    | '/docs/$slug'
     | '/replay/$id'
     | '/@{$username}/'
+    | '/docs/'
     | '/api/auth/$'
     | '/api/users/$username'
     | '/api/bots/$bot/versions'
@@ -225,6 +259,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BotsRoute: typeof BotsRoute
   DeviceRoute: typeof DeviceRoute
+  DocsRoute: typeof DocsRouteWithChildren
   LeaderboardRoute: typeof LeaderboardRoute
   SettingsRoute: typeof SettingsRoute
   WelcomeRoute: typeof WelcomeRoute
@@ -259,6 +294,13 @@ declare module '@tanstack/react-router' {
       path: '/device'
       fullPath: '/device'
       preLoaderRoute: typeof DeviceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs': {
+      id: '/docs'
+      path: '/docs'
+      fullPath: '/docs'
+      preLoaderRoute: typeof DocsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/leaderboard': {
@@ -317,6 +359,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiMeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/docs/': {
+      id: '/docs/'
+      path: '/'
+      fullPath: '/docs/'
+      preLoaderRoute: typeof DocsIndexRouteImport
+      parentRoute: typeof DocsRoute
+    }
+    '/docs/$slug': {
+      id: '/docs/$slug'
+      path: '/$slug'
+      fullPath: '/docs/$slug'
+      preLoaderRoute: typeof DocsSlugRouteImport
+      parentRoute: typeof DocsRoute
+    }
     '/replay/$id': {
       id: '/replay/$id'
       path: '/replay/$id'
@@ -355,6 +411,18 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface DocsRouteChildren {
+  DocsSlugRoute: typeof DocsSlugRoute
+  DocsIndexRoute: typeof DocsIndexRoute
+}
+
+const DocsRouteChildren: DocsRouteChildren = {
+  DocsSlugRoute: DocsSlugRoute,
+  DocsIndexRoute: DocsIndexRoute,
+}
+
+const DocsRouteWithChildren = DocsRoute._addFileChildren(DocsRouteChildren)
+
 interface ApiBotsBotVersionsRouteChildren {
   ApiBotsBotVersionsNRoute: typeof ApiBotsBotVersionsNRoute
 }
@@ -381,6 +449,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BotsRoute: BotsRoute,
   DeviceRoute: DeviceRoute,
+  DocsRoute: DocsRouteWithChildren,
   LeaderboardRoute: LeaderboardRoute,
   SettingsRoute: SettingsRoute,
   WelcomeRoute: WelcomeRoute,

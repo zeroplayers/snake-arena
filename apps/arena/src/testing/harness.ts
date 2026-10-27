@@ -12,6 +12,7 @@ import { Miniflare } from "miniflare";
 import { unstable_splitSqlQuery as splitSqlQuery } from "wrangler";
 import { bundleHouseBots, houseBundlesModule, OUTPUT } from "../../scripts/house-bundles.ts";
 import type { LifeTicket } from "../protocol.ts";
+import { BURN_LINE, SPIN_PREFIX } from "./burn.ts";
 
 const appDir = join(import.meta.dirname, "../..");
 const migrationsDir = join(appDir, "../web/migrations");
@@ -148,12 +149,7 @@ export async function seedVersion(
   return { lifeId, versionId, author, source };
 }
 
-/** Compares two 4 MiB strings forever: uncharged by the sandbox's meter (its "Known gaps"). */
-const BURN = `
-  let a = "x", b = "x";
-  for (let i = 0; i < 22; i++) { a = a + a; b = b + b; }
-  let n = 0;
-  for (;;) if (a === b) n++;`;
+const BURN = JSON.stringify(BURN_LINE);
 
 /** Bots written as plain JS modules (they run in the sandbox as-is). */
 export const BOTS = {
@@ -162,12 +158,13 @@ export const BOTS = {
   /** Goes straight, then circles. */
   circler: `export default { tick(state) { return { turn: state.lifeTick > 20 ? 0.3 : 0 }; } };`,
   /**
-   * At life tick `at`, compares two 4 MiB strings forever. String operators run in C without
-   * interrupt checks, so nothing but the DO's CPU limit (here: a restart) stops it.
+   * At life tick `at`, burns CPU forever inside its tick (the test sandbox spins on `BURN`,
+   * standing in for an operation the meter can't charge). Only the DO's CPU limit (here: a
+   * restart) stops it.
    */
   hostile: (at: number) => `
     export default { tick(state) {
-      if (state.lifeTick === ${at}) {${BURN}}
+      if (state.lifeTick === ${at}) console.log(${BURN});
       return { turn: 1 };
     } };`,
   /**
@@ -178,7 +175,7 @@ export const BOTS = {
     export default {
       init() { return { seen: 0 }; },
       tick(state, mem) {
-        if (++mem.seen > ${after}) {${BURN}}
+        if (++mem.seen > ${after}) console.log(${BURN});
         return { turn: 1 };
       },
     };`,
@@ -199,20 +196,14 @@ export const BOTS = {
         }
         mem.angles = angles;
         mem.turning = turned ? mem.turning + 1 : 0;
-        if (mem.turning >= 2) {${BURN}}
+        if (mem.turning >= 2) console.log(${BURN});
         return { turn: 0 };
       },
     };`,
-  /**
-   * Honest about its result but slow every tick: `reps` comparisons of two 1 MiB strings
-   * (uncharged by the sandbox, like straight-line code in #60).
-   */
-  slow: (reps: number) => `
-    let a = "x", b = "x";
-    for (let i = 0; i < 20; i++) { a = a + a; b = b + b; }
+  /** Honest about its result but slow every tick: the host is kept busy ~`ms` per tick. */
+  slow: (ms: number) => `
     export default { tick(state) {
-      let n = 0;
-      for (let i = 0; i < ${reps}; i++) if (a === b) n++;
-      return { turn: n > 0 ? 1 : -1 };
+      console.log(${JSON.stringify(SPIN_PREFIX)} + ${ms});
+      return { turn: 1 };
     } };`,
 };

@@ -45,9 +45,17 @@ export interface BatchHooks {
   beforeBot?: (lifeId: string, kind: "init" | "tick", tick: number) => Promise<"go" | "abort">;
   /** Awaited after each bot call returned. */
   afterBot?: () => Promise<void>;
+  /**
+   * Restart resumed bots in random order (spawns keep theirs). Which bot starts first doesn't
+   * change the world; it only moves each bot's start to a different point of the batch.
+   */
+  shuffleStarts?: boolean;
   /** Asked between ticks; false ends the batch early. */
   continueBatch?: () => boolean;
 }
+
+/** The part of a `Sandbox` a room uses (tests wrap it). */
+export type LifeStarter = Pick<Sandbox, "startLife">;
 
 export interface BatchPlan {
   /** Lives to spawn before the first tick, in order. */
@@ -87,7 +95,7 @@ export class RoomSim {
     readonly roomId: string,
     readonly world: World,
     pending: ReplayChunk | null,
-    private readonly sandbox: Sandbox,
+    private readonly sandbox: LifeStarter,
     roster: RosterEntry[],
     chunkTicks?: number,
   ) {
@@ -132,7 +140,7 @@ export class RoomSim {
   /** Runs one batch: spawns, then up to `plan.ticks` engine steps, every bot's tick before each. */
   async run(plan: BatchPlan, hooks: BatchHooks = {}, now = Date.now()): Promise<BatchResult> {
     const world = this.world;
-    const { beforeBot, afterBot, continueBatch } = hooks;
+    const { beforeBot, afterBot, continueBatch, shuffleStarts } = hooks;
     const result: BatchResult = {
       spawned: [],
       ended: [],
@@ -148,8 +156,11 @@ export class RoomSim {
     };
 
     // Bots that lost their sandbox life (a resumed room) start again.
-    for (const r of this.running.values()) {
-      if (r.life || plan.faults.has(r.entry.lifeId)) continue;
+    const resumed = [...this.running.values()].filter(
+      (r) => !r.life && !plan.faults.has(r.entry.lifeId),
+    );
+    if (shuffleStarts) shuffle(resumed);
+    for (const r of resumed) {
       if (beforeBot) await beforeBot(r.entry.lifeId, "init", world.tick);
       r.life = this.startLife(r.entry);
       if (afterBot) await afterBot();
@@ -233,5 +244,12 @@ export class RoomSim {
       logLimitBytes: LOG_LIMIT_BYTES,
     });
     return this.sandbox.startLife(botSource(entry), info);
+  }
+}
+
+function shuffle<T>(items: T[]): void {
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [items[i], items[j]] = [items[j] as T, items[i] as T];
   }
 }

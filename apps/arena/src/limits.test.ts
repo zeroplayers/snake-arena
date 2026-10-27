@@ -54,6 +54,14 @@ describe("houseFill", () => {
     ]);
   });
 
+  it("never reuses the id of a life present (a second fill at the same tick)", () => {
+    const first = houseFill([{ author: "a" }], 20, 3, 0);
+    const second = houseFill([{ author: "b" }, ...first], 20, 4, 0);
+    // `house-medium-0-0` is taken by the first fill.
+    expect(second.map((e) => e.lifeId)).toEqual(["house-medium-0-1"]);
+    expect(new Set([...first, ...second].map((e) => e.lifeId)).size).toBe(3);
+  });
+
   it("adds nothing when authors are enough or the room is full", () => {
     expect(
       houseFill(

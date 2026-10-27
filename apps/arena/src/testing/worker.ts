@@ -1,11 +1,62 @@
 /**
- * Test entry for `room.test.ts`: the real `RoomDO`, a scriptable matchmaker in place of the stub,
- * and `POST /rpc` to call either from Node (`{ target, name, method, args }`).
+ * Test entry for `room.test.ts`: the real `RoomDO` (with a sandbox that can be told to burn CPU),
+ * a scriptable matchmaker in place of the stub, and `POST /rpc` to call either from Node
+ * (`{ target, name, method, args }`).
  */
 import { DurableObject } from "cloudflare:workers";
+import type { BotLife } from "@zerosnake/sandbox";
 import type { LifeResult, LifeTicket, MatchmakerRpc, QuarantineRecord } from "../protocol.ts";
+import type { LifeStarter } from "../room/sim.ts";
+import { RoomDO as BaseRoomDO } from "../room.ts";
+import { BURN_LINE, SPIN_PREFIX } from "./burn.ts";
 
-export { RoomDO } from "../room.ts";
+/**
+ * `spin` fills this with random bytes over and over: native work, so its speed doesn't depend on
+ * how far the JIT optimized the loop (a plain JS loop varied ~30× between runs).
+ */
+const SPIN_BUFFER = new Uint8Array(65_536);
+/** Fills per ms: 25–50 µs each in workerd under Miniflare (measured). */
+const SPIN_PER_MS = 35;
+
+/**
+ * Busy work for roughly `ms` (within ~2×; the clock doesn't move during CPU work in workerd, so
+ * it can't be timed).
+ */
+function spin(ms: number): void {
+  for (let i = 0; i < ms * SPIN_PER_MS; i++) crypto.getRandomValues(SPIN_BUFFER);
+}
+
+/**
+ * The real room, but each bot tick may ask the host to burn CPU through its log. That's what an
+ * operation the sandbox's meter can't charge looks like to the room: a call that doesn't return.
+ * The tests don't depend on which such holes the sandbox still has (#62 closed the string ones).
+ */
+export class RoomDO extends BaseRoomDO {
+  protected override async newSandbox(): Promise<LifeStarter> {
+    const sandbox = await super.newSandbox();
+    return {
+      startLife: (...args: Parameters<LifeStarter["startLife"]>) =>
+        burnOnRequest(sandbox.startLife(...args)),
+    };
+  }
+}
+
+function burnOnRequest(life: BotLife): BotLife {
+  return new Proxy(life, {
+    get(target, prop) {
+      const value = Reflect.get(target, prop, target);
+      if (prop !== "tick") return typeof value === "function" ? value.bind(target) : value;
+      return (...args: Parameters<BotLife["tick"]>) => {
+        const report = target.tick(...args);
+        for (const line of report.log.lines) {
+          if (line === BURN_LINE) for (;;) spin(1000);
+          if (line.startsWith(SPIN_PREFIX)) spin(Number(line.slice(SPIN_PREFIX.length)));
+        }
+        return report;
+      };
+    },
+  });
+}
 
 interface Call {
   target: "room" | "matchmaker";

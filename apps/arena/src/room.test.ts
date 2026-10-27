@@ -418,7 +418,7 @@ describe("RoomDO backstop", () => {
 
   it("counts nothing when the room is restarted twice in a row (no CPU-limit evidence)", async () => {
     // Default 30 s CPU limit; a slow but honest bot just makes the batch long enough to interrupt.
-    const slowpoke = await ticket("pia", BOTS.slow(100));
+    const slowpoke = await ticket("pia", BOTS.slow(30));
     const tom = await ticket("tom", house.hard as string);
     await startRoom("restarts", [slowpoke, tom], { limits: { batchTicks: 50 } });
     for (let i = 0; i < 2; i++) {
@@ -438,9 +438,9 @@ describe("RoomDO backstop", () => {
   }, 60_000);
 
   it("doesn't punish a bot for being slow: watch mode keeps the room going", async () => {
-    // Slow every tick (uncharged string compares), so a normal batch overruns in aggregate. Only
-    // the sandbox's meter may strike a bot; watch mode just keeps each invocation short.
-    const slow = await ticket("quentin", BOTS.slow(300));
+    // Slow every tick (~150 ms the meter doesn't see), so a normal batch overruns in aggregate.
+    // Only the sandbox's meter may strike a bot; watch mode just keeps each invocation short.
+    const slow = await ticket("quentin", BOTS.slow(150));
     const honest = await Promise.all([
       ticket("ruth", house.hard as string),
       ticket("sam", house.medium as string),

@@ -59,6 +59,7 @@ import {
   type BatchPlan,
   type BatchResult,
   chunkKey,
+  type LifeStarter,
   RoomSim,
 } from "./room/sim.ts";
 import {
@@ -307,6 +308,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       slept += ms;
     };
     return {
+      shuffleStarts: decorrelate,
       continueBatch: () =>
         busy() < WATCH_STOP_SHARE * limit &&
         Date.now() - marker.startedAt < WATCH_WALL_SHARE * limit,
@@ -661,7 +663,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     const world = this.store.getJson<World>("world");
     if (!world) throw new Error("room has no world");
     const chunk = this.store.getBlob("chunk");
-    const sandbox = await createSandbox({ wasmModule });
+    const sandbox = await this.newSandbox();
     this.sim = new RoomSim(
       meta.roomId,
       world,
@@ -671,6 +673,11 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       meta.limits.chunkTicks,
     );
     return this.sim;
+  }
+
+  /** The sandbox bots run in (one per loaded room). Tests wrap it. */
+  protected newSandbox(): Promise<LifeStarter> {
+    return createSandbox({ wasmModule });
   }
 
   private dropSim(): void {

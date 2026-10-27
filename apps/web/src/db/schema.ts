@@ -68,6 +68,8 @@ export const users = sqliteTable(
      * until the purge job erases it with everything it owns. `null` for a live account.
      */
     deletedAt: integer("deleted_at", { mode: "timestamp_ms" }),
+    /** Purge runs that failed on this tombstone; past a few it's left for a person. */
+    purgeFailures: integer("purge_failures").notNull().default(0),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

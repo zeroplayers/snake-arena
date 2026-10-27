@@ -68,14 +68,27 @@ export const DELETE_ACCOUNT_STOPPED = 1;
 const OWN_VERSIONS =
   "SELECT v.id FROM versions v JOIN bots b ON b.id = v.bot_id WHERE b.owner_id = ?1";
 
+function keysWhere(test: "EXISTS" | "NOT EXISTS", column: "bundle_key" | "source_key") {
+  return `SELECT DISTINCT k.value AS key FROM json_each(?1) k WHERE ${test} (
+    SELECT 1 FROM versions v JOIN bots b ON b.id = v.bot_id
+    WHERE v.${column} = k.value AND b.owner_id != ?2)`;
+}
+
 /**
  * Step 2's statements. Each `select*` returns a page (`?2` = page size) and the matching
  * `delete*` deletes the rows named in `?1` (a JSON array of ids) once their R2 objects are gone.
  */
 export const PURGE_SQL = {
-  /** Tombstones due for the purge: `?1` = latest `deleted_at` (Unix ms), `?2` = how many. */
+  /**
+   * Tombstones due for the purge: `?1` = latest `deleted_at` (Unix ms), `?2` = how many, `?3` =
+   * failed runs after which one is left to a person. The ones that failed least go first, so a
+   * stuck one can't hold up the others.
+   */
   dueUsers: `SELECT id FROM users WHERE deleted_at IS NOT NULL AND deleted_at <= ?1
-             ORDER BY deleted_at LIMIT ?2`,
+             AND purge_failures < ?3 ORDER BY purge_failures, deleted_at LIMIT ?2`,
+  /** A failed run for tombstone `?1`; returns the new count. */
+  purgeFailed: `UPDATE users SET purge_failures = purge_failures + 1 WHERE id = ?1
+                RETURNING purge_failures AS failures`,
   selectLives: `SELECT id, trace_key AS traceKey FROM lives WHERE version_id IN (${OWN_VERSIONS})
                 LIMIT ?2`,
   deleteLives: "DELETE FROM lives WHERE id IN (SELECT value FROM json_each(?1))",
@@ -84,13 +97,14 @@ export const PURGE_SQL = {
   deleteVersions: "DELETE FROM versions WHERE id IN (SELECT value FROM json_each(?1))",
   /**
    * Bundles and sources are content-addressed (`<sha256>.js`, `.json`), so another author's
-   * identical upload (the unchanged template, say) shares the object. Whether a version of
-   * someone other than `?2` still names key `?1` (`versions_bundle_key_idx`, `_source_key_idx`).
+   * identical upload (the unchanged template, say) shares the object. Of the keys in `?1` (a
+   * JSON array), those no version of anyone but `?2` names (`versions_bundle_key_idx`,
+   * `_source_key_idx`): safe to delete. `claimed*` is the opposite, to check again afterwards.
    */
-  bundleInUse: `SELECT 1 FROM versions v JOIN bots b ON b.id = v.bot_id
-                WHERE v.bundle_key = ?1 AND b.owner_id != ?2 LIMIT 1`,
-  sourceInUse: `SELECT 1 FROM versions v JOIN bots b ON b.id = v.bot_id
-                WHERE v.source_key = ?1 AND b.owner_id != ?2 LIMIT 1`,
+  unsharedBundles: keysWhere("NOT EXISTS", "bundle_key"),
+  unsharedSources: keysWhere("NOT EXISTS", "source_key"),
+  claimedBundles: keysWhere("EXISTS", "bundle_key"),
+  claimedSources: keysWhere("EXISTS", "source_key"),
   /** Last: the tombstone, and with it bots and whatever else still points at the user. */
   deleteUser: "DELETE FROM users WHERE id = ?1 AND deleted_at IS NOT NULL",
 } as const;

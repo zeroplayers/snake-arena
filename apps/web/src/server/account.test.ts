@@ -9,6 +9,7 @@ import {
   ACCOUNT_EXPORT_FORMAT,
   createAccount,
   deleteUnclaimedAccounts,
+  PURGE_MAX_FAILURES,
   pruneExpiredCredentials,
   purgeDeletedAccounts,
 } from "./account";
@@ -422,7 +423,7 @@ describe("purgeDeletedAccounts", () => {
 
     const later = new Date(clock.getTime() + ACCOUNT_PURGE_AFTER_MS);
     // A small budget takes several runs.
-    const budget = { users: 5, page: 2, pages: 3 };
+    const budget = { users: 5, livesPage: 2, versionsPage: 1, subrequests: 30 };
     const runs = [];
     for (let i = 0; i < 10; i++) {
       const run = await purgeDeletedAccounts(env, later, budget);
@@ -432,7 +433,8 @@ describe("purgeDeletedAccounts", () => {
     expect(runs.length).toBeGreaterThan(1);
     expect(runs.reduce((n, r) => n + r.lives, 0)).toBe(6);
     expect(runs.reduce((n, r) => n + r.versions, 0)).toBe(2);
-    expect(runs.at(-1)).toMatchObject({ users: 1, more: false });
+    expect(runs.at(-1)).toMatchObject({ users: 1, more: false, failed: 0 });
+    for (const run of runs) expect(run.subrequests).toBeLessThanOrEqual(budget.subrequests);
 
     expect(await count("SELECT count(*) AS n FROM users WHERE id = ?", ada.id)).toBe(0);
     expect(await count("SELECT count(*) AS n FROM bots WHERE owner_id = ?", ada.id)).toBe(0);
@@ -466,9 +468,9 @@ describe("purgeDeletedAccounts", () => {
     await account().deleteAccount(deleteRequest(ada, "ada"));
     // Bob's deploy of the same bundle writes its row right after the purge checked the key.
     const bundles: R2Bucket = Object.create(env.BUNDLES);
-    bundles.delete = async (key) => {
-      await env.BUNDLES.delete(key);
-      if (key === "bundles/viper-v2.js") {
+    bundles.delete = async (keys) => {
+      await env.BUNDLES.delete(keys);
+      if ([keys].flat().includes("bundles/viper-v2.js")) {
         await env.DB.prepare(
           `INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key)
            VALUES ('cobra-v3', 'cobra-bot', 3, 'validating', 'bundles/viper-v2.js', 's')`,
@@ -482,6 +484,81 @@ describe("purgeDeletedAccounts", () => {
     );
     expect(await env.BUNDLES.get("bundles/viper-v1.js")).toBeNull();
     expect(await count("SELECT count(*) AS n FROM users WHERE id = ?", ada.id)).toBe(0);
+  });
+});
+
+describe("purgeDeletedAccounts at scale", () => {
+  it("purges a big account over several runs, within the subrequest budget", async () => {
+    const ada = await signUp(auth, env.DB, BASE, "ada", 1);
+    await env.DB.prepare(
+      "INSERT INTO bots (id, owner_id, name, slug) VALUES ('big-bot', ?, 'big', 'big')",
+    )
+      .bind(ada.id)
+      .run();
+    // 300 versions with their own keys, and 3000 lives with traces.
+    await env.DB.prepare(
+      `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 300)
+       INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key)
+       SELECT 'big-v' || i, 'big-bot', i, 'archived', 'big/' || i || '.js', 'big/' || i || '.json'
+       FROM n`,
+    ).run();
+    await env.DB.prepare(
+      `WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 2999)
+       INSERT INTO lives (id, version_id, room, start_tick, end_tick, trace_key)
+       SELECT 'big-l' || i, 'big-v' || (i % 300 + 1), 'r', i, i + 1, 't/' || i FROM n`,
+    ).run();
+    for (let i = 1; i <= 300; i += 50) {
+      await Promise.all(
+        Array.from({ length: 50 }, (_, j) => env.BUNDLES.put(`big/${i + j}.js`, "x")),
+      );
+    }
+    await account().deleteAccount(deleteRequest(ada, "ada"));
+    const later = new Date(clock.getTime() + ACCOUNT_PURGE_AFTER_MS);
+    const budget = { users: 5, livesPage: 500, versionsPage: 25, subrequests: 200 };
+    let runs = 0;
+    for (; runs < 30; runs++) {
+      const run = await purgeDeletedAccounts(env, later, budget);
+      expect(run.subrequests).toBeLessThanOrEqual(budget.subrequests);
+      expect(run.failed).toBe(0);
+      if (!run.more) break;
+    }
+    expect(runs).toBeGreaterThan(1);
+    expect(runs).toBeLessThan(30);
+    expect(await count("SELECT count(*) AS n FROM users WHERE id = ?", ada.id)).toBe(0);
+    expect(await count("SELECT count(*) AS n FROM lives WHERE id LIKE 'big-%'")).toBe(0);
+    expect((await env.BUNDLES.list({ prefix: "big/" })).objects).toEqual([]);
+  }, 120_000);
+
+  it("a tombstone that keeps failing doesn't hold up the others", async () => {
+    const ada = await signUp(auth, env.DB, BASE, "ada", 1);
+    const bob = await signUp(auth, env.DB, BASE, "bob", 2);
+    await seedBot(ada.id, "viper", 1);
+    await seedBot(bob.id, "cobra", 1);
+    await account().deleteAccount(deleteRequest(ada, "ada"));
+    clock = new Date(clock.getTime() + 1000);
+    await account().deleteAccount(deleteRequest(bob, "bob"));
+    // Deleting ada's traces fails every time; bob's go through.
+    const traces: R2Bucket = Object.create(env.TRACES);
+    traces.delete = async (keys) => {
+      if ([keys].flat().some((k) => k.includes("viper"))) throw new Error("R2 is down for ada");
+      await env.TRACES.delete(keys);
+    };
+    const later = new Date(clock.getTime() + ACCOUNT_PURGE_AFTER_MS);
+    const first = await purgeDeletedAccounts({ ...env, TRACES: traces }, later);
+    expect(first).toMatchObject({ users: 1, failed: 1, more: true });
+    expect(await count("SELECT count(*) AS n FROM users WHERE id = ?", bob.id)).toBe(0);
+    for (let i = 1; i < PURGE_MAX_FAILURES; i++) {
+      await purgeDeletedAccounts({ ...env, TRACES: traces }, later);
+    }
+    const failures = await env.DB.prepare("SELECT purge_failures AS n FROM users WHERE id = ?")
+      .bind(ada.id)
+      .first<{ n: number }>();
+    expect(failures?.n).toBe(PURGE_MAX_FAILURES);
+    // Left for a person: no longer picked up.
+    expect(await purgeDeletedAccounts({ ...env, TRACES: traces }, later)).toMatchObject({
+      failed: 0,
+      more: false,
+    });
   });
 });
 

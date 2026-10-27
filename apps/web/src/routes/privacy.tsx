@@ -138,9 +138,10 @@ function Privacy() {
               <td>IP address of each request</td>
               <td>
                 Used to rate-limit requests (Cloudflare keeps the counter for one minute) and to cap
-                live-arena connections per visitor (as a hash, in memory, while connected). Our own
-                records never keep it, but IP addresses may appear in Cloudflare's request logs,
-                which we use only for security and debugging.
+                live-arena connections per visitor (as a hash, in memory, while connected). Apart
+                from the session and CLI sign-in records above, our own records don't keep it, but
+                IP addresses may appear in Cloudflare's request logs, which we use only for security
+                and debugging.
               </td>
               <td>Up to 7 days, in the request logs</td>
             </tr>

@@ -141,7 +141,7 @@ export function createAccount(env: AccountEnv, options: AccountOptions) {
   async function snapshot(userId: string) {
     const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
     if (!user) return null;
-    const { sessionsRevokedAt: _, deletedAt: __, ...profile } = user;
+    const { sessionsRevokedAt: _, deletedAt: __, purgeFailures: ___, ...profile } = user;
     const [linked, tokens, ownBots, ownActivations, sessions] = await Promise.all([
       db
         .select({
@@ -432,114 +432,215 @@ export type Account = ReturnType<typeof createAccount>;
 
 // ─── Purge (cron) ────────────────────────────────────────────────────────────────────────────────
 
-/**
- * Deletes R2 object `key` unless a version of another author still names it (`inUse`).
- *
- * A deploy writes its `versions` row before its R2 object, so one with the same content that
- * lands between the check and the delete would lose its object. Hence the object is read first,
- * and put back if a user appeared once it's gone.
- */
-async function deleteUnshared(
-  db: D1Database,
-  bucket: R2Bucket,
-  inUse: string,
-  key: string,
-  ownerId: string,
-) {
-  const used = () => db.prepare(inUse).bind(key, ownerId).first();
-  if (await used()) return;
-  const object = await bucket.get(key);
-  if (!object) return;
-  const bytes = await object.arrayBuffer();
-  await bucket.delete(key);
-  if (await used()) {
-    await bucket.put(key, bytes, { httpMetadata: object.httpMetadata ?? {} });
-    log("warn", "account.purge_object_restored", { key });
-  }
-}
-
 export interface PurgeBudget {
   /** Tombstones looked at per run. */
   users: number;
-  /** Rows (and their R2 objects) per page. */
-  page: number;
-  /** Pages per run, all users together. */
-  pages: number;
+  /** Lives (and their traces) per page. */
+  livesPage: number;
+  /**
+   * Versions per page. Each unshared bundle and source is read before it's deleted (see
+   * `deleteUnshared`), so this bounds memory too: at most 25 × (256 KiB + 1 MiB).
+   */
+  versionsPage: number;
+  /** D1 and R2 calls per run, well under the Worker's subrequest limit (1000). */
+  subrequests: number;
 }
 
-export const PURGE_BUDGET: PurgeBudget = { users: 5, page: 500, pages: 20 };
+export const PURGE_BUDGET: PurgeBudget = {
+  users: 5,
+  livesPage: 500,
+  versionsPage: 25,
+  subrequests: 500,
+};
+
+/** Failed runs on one tombstone after which the purge leaves it alone and alerts. */
+export const PURGE_MAX_FAILURES = 5;
 
 export interface PurgeResult {
   /** Users erased completely in this run. */
   users: number;
   lives: number;
   versions: number;
-  /** Tombstones left for the next run. */
+  /** Tombstones whose purge threw this run (retried later, after the others). */
+  failed: number;
+  /** D1 and R2 calls made. */
+  subrequests: number;
+  /** Work left for the next run. */
   more: boolean;
+}
+
+type PurgeEnv = Pick<AccountEnv, "DB" | "BUNDLES" | "SOURCES" | "TRACES">;
+
+/** Most calls one page can make: a versions page is the costly one (`deleteUnshared` × 2). */
+const pageCost = (budget: PurgeBudget) => 2 + 2 * (budget.versionsPage * 2 + 3);
+
+/**
+ * Deletes those of `keys` that no version of another author names, in one R2 call.
+ *
+ * A deploy writes its `versions` row before its object, so one with the same content landing
+ * between the check and the delete would lose its object. So unshared objects are read first,
+ * and after the delete the keys are checked again: any that a version claimed meanwhile is put
+ * back. Returns the calls made.
+ */
+async function deleteUnshared(
+  db: D1Database,
+  bucket: R2Bucket,
+  sql: { unshared: string; claimed: string },
+  keys: string[],
+  ownerId: string,
+): Promise<number> {
+  const { results } = await db
+    .prepare(sql.unshared)
+    .bind(JSON.stringify(keys), ownerId)
+    .all<{ key: string }>();
+  const unshared = results.map((r) => r.key);
+  if (unshared.length === 0) return 1;
+  const saved = new Map<string, { bytes: ArrayBuffer; meta: R2HTTPMetadata | undefined }>();
+  await Promise.all(
+    unshared.map(async (key) => {
+      const object = await bucket.get(key);
+      if (object) saved.set(key, { bytes: await object.arrayBuffer(), meta: object.httpMetadata });
+    }),
+  );
+  await bucket.delete(unshared);
+  const { results: claimed } = await db
+    .prepare(sql.claimed)
+    .bind(JSON.stringify(unshared), ownerId)
+    .all<{ key: string }>();
+  let restored = 0;
+  for (const { key } of claimed) {
+    const copy = saved.get(key);
+    if (!copy) continue;
+    await bucket.put(key, copy.bytes, { httpMetadata: copy.meta ?? {} });
+    restored++;
+    log("warn", "account.purge_object_restored", { key });
+  }
+  return 3 + unshared.length + restored;
+}
+
+/**
+ * Purges one tombstone as far as `allowance` calls go. Returns whether it's gone, and the
+ * calls made.
+ */
+async function purgeUser(
+  env: PurgeEnv,
+  id: string,
+  budget: PurgeBudget,
+  allowance: number,
+  result: PurgeResult,
+): Promise<{ done: boolean; spent: number }> {
+  let spent = 0;
+  while (spent + pageCost(budget) <= allowance) {
+    const { results: lifeRows } = await env.DB.prepare(PURGE_SQL.selectLives)
+      .bind(id, budget.livesPage)
+      .all<{ id: string; traceKey: string | null }>();
+    spent++;
+    if (lifeRows.length > 0) {
+      const traces = lifeRows.flatMap((l) => (l.traceKey ? [l.traceKey] : []));
+      if (traces.length) {
+        await env.TRACES.delete(traces);
+        spent++;
+      }
+      await env.DB.prepare(PURGE_SQL.deleteLives)
+        .bind(JSON.stringify(lifeRows.map((l) => l.id)))
+        .run();
+      spent++;
+      result.lives += lifeRows.length;
+      continue;
+    }
+    const { results: versionRows } = await env.DB.prepare(PURGE_SQL.selectVersions)
+      .bind(id, budget.versionsPage)
+      .all<{ id: string; bundleKey: string; sourceKey: string }>();
+    spent++;
+    if (versionRows.length > 0) {
+      spent += await deleteUnshared(
+        env.DB,
+        env.BUNDLES,
+        { unshared: PURGE_SQL.unsharedBundles, claimed: PURGE_SQL.claimedBundles },
+        versionRows.map((v) => v.bundleKey),
+        id,
+      );
+      spent += await deleteUnshared(
+        env.DB,
+        env.SOURCES,
+        { unshared: PURGE_SQL.unsharedSources, claimed: PURGE_SQL.claimedSources },
+        versionRows.map((v) => v.sourceKey),
+        id,
+      );
+      await env.DB.prepare(PURGE_SQL.deleteVersions)
+        .bind(JSON.stringify(versionRows.map((v) => v.id)))
+        .run();
+      spent++;
+      result.versions += versionRows.length;
+      continue;
+    }
+    await env.DB.prepare(PURGE_SQL.deleteUser).bind(id).run();
+    spent++;
+    result.users++;
+    return { done: true, spent };
+  }
+  return { done: false, spent };
 }
 
 /**
  * Step 2 of account deletion (`src/shared/account.ts`), from the 5-minute cron: for each
  * tombstone older than `ACCOUNT_PURGE_AFTER_MS`, deletes its lives (traces first), then its
- * versions (bundles and sources first, unless shared with another author), then the user row. R2 objects go before the rows that
- * name them, so an interrupted run leaves nothing unreachable; every step is idempotent.
+ * versions (bundles and sources first, unless shared with another author), then the user row.
+ * R2 objects go before the rows that name them, so an interrupted run leaves nothing
+ * unreachable; every step is idempotent. A run stops at `budget.subrequests` calls. A
+ * tombstone whose purge throws is counted (`users.purge_failures`), retried after the others,
+ * and left alone (with an error log to alert on) after `PURGE_MAX_FAILURES`.
  */
 export async function purgeDeletedAccounts(
-  env: Pick<AccountEnv, "DB" | "BUNDLES" | "SOURCES" | "TRACES">,
+  env: PurgeEnv,
   now: Date,
   budget: PurgeBudget = PURGE_BUDGET,
 ): Promise<PurgeResult> {
-  const result: PurgeResult = { users: 0, lives: 0, versions: 0, more: false };
+  const result: PurgeResult = {
+    users: 0,
+    lives: 0,
+    versions: 0,
+    failed: 0,
+    subrequests: 1,
+    more: false,
+  };
   const due = await env.DB.prepare(PURGE_SQL.dueUsers)
-    .bind(now.getTime() - ACCOUNT_PURGE_AFTER_MS, budget.users)
+    .bind(now.getTime() - ACCOUNT_PURGE_AFTER_MS, budget.users, PURGE_MAX_FAILURES)
     .all<{ id: string }>();
-  let pages = budget.pages;
   for (const { id } of due.results) {
-    let done = false;
-    while (pages > 0) {
-      pages--;
-      const { results: lifeRows } = await env.DB.prepare(PURGE_SQL.selectLives)
-        .bind(id, budget.page)
-        .all<{ id: string; traceKey: string | null }>();
-      if (lifeRows.length > 0) {
-        const traces = lifeRows.flatMap((l) => (l.traceKey ? [l.traceKey] : []));
-        if (traces.length) await env.TRACES.delete(traces);
-        await env.DB.prepare(PURGE_SQL.deleteLives)
-          .bind(JSON.stringify(lifeRows.map((l) => l.id)))
-          .run();
-        result.lives += lifeRows.length;
-        continue;
-      }
-      const { results: versionRows } = await env.DB.prepare(PURGE_SQL.selectVersions)
-        .bind(id, budget.page)
-        .all<{ id: string; bundleKey: string; sourceKey: string }>();
-      if (versionRows.length > 0) {
-        const bundles = new Set(versionRows.map((v) => v.bundleKey));
-        const sources = new Set(versionRows.map((v) => v.sourceKey));
-        for (const key of bundles) {
-          await deleteUnshared(env.DB, env.BUNDLES, PURGE_SQL.bundleInUse, key, id);
-        }
-        for (const key of sources) {
-          await deleteUnshared(env.DB, env.SOURCES, PURGE_SQL.sourceInUse, key, id);
-        }
-        await env.DB.prepare(PURGE_SQL.deleteVersions)
-          .bind(JSON.stringify(versionRows.map((v) => v.id)))
-          .run();
-        result.versions += versionRows.length;
-        continue;
-      }
-      await env.DB.prepare(PURGE_SQL.deleteUser).bind(id).run();
-      result.users++;
-      done = true;
-      break;
-    }
-    if (!done) {
+    const allowance = budget.subrequests - result.subrequests;
+    if (allowance < pageCost(budget)) {
       result.more = true;
       break;
     }
+    try {
+      const { done, spent } = await purgeUser(env, id, budget, allowance, result);
+      result.subrequests += spent;
+      if (!done) {
+        result.more = true;
+        break;
+      }
+    } catch (error) {
+      result.failed++;
+      result.more = true;
+      const row = await env.DB.prepare(PURGE_SQL.purgeFailed)
+        .bind(id)
+        .first<{ failures: number }>()
+        .catch(() => null);
+      result.subrequests += 2;
+      const stuck = (row?.failures ?? 0) >= PURGE_MAX_FAILURES;
+      log("error", "account.purge_user_failed", {
+        userId: id,
+        failures: row?.failures ?? null,
+        ...(stuck && { alert: "account_purge_stuck" }),
+        error,
+      });
+    }
   }
   if (!result.more && due.results.length === budget.users) result.more = true;
-  if (result.users || result.lives || result.versions) log("info", "account.purged", { ...result });
+  if (result.users || result.lives || result.versions || result.failed) {
+    log("info", "account.purged", { ...result });
+  }
   return result;
 }
 

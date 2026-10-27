@@ -45,9 +45,14 @@ export default {
         ),
       );
       ctx.waitUntil(
-        deleteUnclaimedAccounts(env.DB, now)
-          .then(() => purgeDeletedAccounts(env, now))
-          .catch((error) => log("error", "account.purge_failed", { error })),
+        deleteUnclaimedAccounts(env.DB, now).catch((error) =>
+          log("error", "account.unclaimed_failed", { error }),
+        ),
+      );
+      ctx.waitUntil(
+        purgeDeletedAccounts(env, now).catch((error) =>
+          log("error", "account.purge_failed", { error }),
+        ),
       );
       ctx.waitUntil(
         pruneExpiredCredentials(env.DB, now).catch((error) =>

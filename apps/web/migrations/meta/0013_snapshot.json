@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "8e952c1f-4858-48e3-bed0-2acbc681d7f8",
+  "id": "0179e1b9-74ce-46f1-92b1-97585facaab7",
   "prevId": "21e44eba-66b7-4bfb-a32e-8853938677ca",
   "tables": {
     "accounts": {
@@ -1350,6 +1350,14 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "purge_failures": {
+          "name": "purge_failures",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
         },
         "created_at": {
           "name": "created_at",

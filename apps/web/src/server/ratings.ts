@@ -34,6 +34,10 @@
  * UPDATE rating_progress SET rated_seq = 0 WHERE id = 1;
  * ```
  *
+ * **Bad scores.** A life whose score `@zerosnake/rating` can't take (not a finite number within
+ * ±`MAX_LIFE_SCORE`) isn't counted: the run logs `ratings.life_skipped` with its id and carries
+ * on, and rebuilds leave it out, so one bad row never stops the cursor.
+ *
  * **Bounded.** A run reads at most `maxLives` lives (`batchLives` per query) and makes a handful
  * of D1 queries per batch (Workers allow 1000 per invocation); what's left waits for the next
  * run, a minute later. Every run logs `ratings.updated` with the backlog.
@@ -44,6 +48,7 @@ import {
   createRatingState,
   DEFAULT_RATING_CONFIG,
   fromRatingsRow,
+  MAX_LIFE_SCORE,
   type RatingConfig,
   type RatingState,
   toRatingsRow,
@@ -103,6 +108,7 @@ interface Progress {
 }
 
 interface LifeRow {
+  id: string;
   seq: number;
   version_id: string;
   score: number;
@@ -157,7 +163,7 @@ export async function updateRatings(
     const limit = Math.min(batchLives, maxLives - lives);
     const { results: batch } = await db
       .prepare(
-        `SELECT seq, version_id, score, started_at, death_cause FROM lives
+        `SELECT id, seq, version_id, score, started_at, death_cause FROM lives
          WHERE seq > ?1 ORDER BY seq LIMIT ?2`,
       )
       .bind(progress.ratedSeq, limit)
@@ -253,6 +259,11 @@ export async function runRatingJob(env: RatingJobEnv, now: Date, options?: Ratin
   }
 }
 
+/** Whether `@zerosnake/rating` can take `score` (it throws a `RangeError` otherwise). */
+function ratableScore(score: unknown): score is number {
+  return typeof score === "number" && Math.abs(score) <= MAX_LIFE_SCORE;
+}
+
 /** Whether a life counts toward its version's rating in the stint that began at `activatedAt`. */
 export function countsToward(
   life: Pick<LifeRow, "started_at" | "death_cause">,
@@ -275,6 +286,16 @@ async function applyLives(
 ): Promise<Changes> {
   const byVersion = new Map<string, LifeRow[]>();
   for (const life of batch) {
+    if (!ratableScore(life.score)) {
+      // Rebuilds leave it out too (see `rebuild`), so skipping it here is all it takes.
+      log("warn", "ratings.life_skipped", {
+        lifeId: life.id,
+        versionId: life.version_id,
+        seq: life.seq,
+        score: String(life.score),
+      });
+      continue;
+    }
     const list = byVersion.get(life.version_id);
     if (list) list.push(life);
     else byVersion.set(life.version_id, [life]);
@@ -328,6 +349,7 @@ async function rebuild(
   const scores = new Map<string, { scores: number[]; n: number }>();
   for (const chunk of jsonChunks(targets.map((t) => ({ id: t.versionId, from: t.activatedAt })))) {
     // The last `window` counted lives of each version, oldest first, and how many it has.
+    // Scores `ratableScore` rejects are left out (text sorts above every number in SQLite).
     const { results } = await db
       .prepare(
         `SELECT version_id, score, n FROM (
@@ -339,10 +361,11 @@ async function rebuild(
            WHERE l.seq <= ?2
              AND l.started_at >= coalesce(t.value ->> '$.from', 0)
              AND l.death_cause IS NOT ?4
+             AND l.score BETWEEN -?5 AND ?5
          )
          WHERE k <= ?3 ORDER BY version_id, seq`,
       )
-      .bind(chunk, through, config.window, UNCOUNTED_DEATH_CAUSE)
+      .bind(chunk, through, config.window, UNCOUNTED_DEATH_CAUSE, MAX_LIFE_SCORE)
       .all<{ version_id: string; score: number; n: number }>();
     for (const r of results) {
       const s = scores.get(r.version_id);

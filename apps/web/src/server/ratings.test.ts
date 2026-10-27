@@ -295,6 +295,55 @@ describe("idempotency", () => {
   });
 });
 
+describe("bad scores", () => {
+  /** The `ratings.life_skipped` warnings logged so far. */
+  function skipped(warn: { mock: { calls: unknown[][] } }) {
+    return warn.mock.calls
+      .map(([record]) => record as { event: string; lifeId: string; score: string })
+      .filter((r) => r.event === "ratings.life_skipped");
+  }
+
+  it("skips a score out of range, logs it and keeps the cursor moving", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const a = await readyBot("a");
+    const b = await readyBot("b");
+    const [, , bad] = await addLives(a, [10, 20, 2e12]);
+    await addLives(b, [5, 6, 7]);
+    expect(await run()).toMatchObject({ lives: 6, ratedSeq: 6, assignedSeq: 6, more: false });
+    expect(await rating(a)).toMatchObject({ n_lives: 2, mean: 15 });
+    expect(await rating(b)).toMatchObject({ n_lives: 3, mean: 6 });
+    expect(await progress()).toMatchObject({ assigned_seq: 6, rated_seq: 6 });
+    expect(skipped(warn)).toEqual([
+      expect.objectContaining({ lifeId: bad, score: "2000000000000" }),
+    ]);
+
+    // The next run carries on as usual, and so does a rebuild.
+    await addLives(a, [30]);
+    await run();
+    expect(await rating(a)).toMatchObject({ n_lives: 3, mean: 20, life_seq: 7 });
+    await d1.db.prepare("UPDATE ratings SET life_seq = NULL").run();
+    expect(await run()).toMatchObject({ rebuilt: 2, more: false });
+    expect(await rating(a)).toMatchObject({ n_lives: 3, mean: 20, life_seq: 7 });
+    expect(await rating(b)).toMatchObject({ n_lives: 3, mean: 6 });
+  });
+
+  it("skips bad scores added to a stored rating, and ones that aren't numbers", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const v = await readyBot("a");
+    await addLives(v, [10, 20]);
+    await run();
+    await addLives(v, [-5e12, 30]);
+    // INTEGER affinity keeps text that isn't a number as text.
+    await addLives(v, [0], { ids: ["text-score"] });
+    await d1.db.prepare("UPDATE lives SET score = 'lots' WHERE id = 'text-score'").run();
+    expect(await run()).toMatchObject({ ratedSeq: 5, more: false });
+    expect(await rating(v)).toMatchObject({ n_lives: 3, mean: 20, life_seq: 5 });
+    expect(skipped(warn).map((r) => r.score)).toEqual(["-5000000000000", "lots"]);
+    expect(await rebuildRatings(d1.db, [v], NOW)).toBe(true);
+    expect(await rating(v)).toMatchObject({ n_lives: 3, mean: 20 });
+  });
+});
+
 describe("stints", () => {
   /** The site's rollback (`activateVersion`): another version active, its rating deleted. */
   async function rollback(bot: string, to: string, at: number) {

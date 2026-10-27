@@ -713,9 +713,9 @@ export function createModeration(env: ModerationEnv, options: ModerationOptions)
               SELECT ${id}, ${admin.id}, 'ban_version', ${owner.id}, bot_id, id, ${reason}, ${at}
               FROM ${versions} WHERE id = ${version.id} AND status != 'rejected'
               RETURNING id`,
-          // Earlier checks stay in the report, the moderation check is appended (like the
-          // room backstop's `arena-backstop` check). The consumer's `text` (what the CLI prints,
-          // "Checks passed…") gets the verdict on top, so nobody reads it as a pass.
+          // Earlier checks stay in the report, the moderation check is appended. The consumer's
+          // `text` (what the CLI prints, "Checks passed…") gets the verdict on top, so nobody
+          // reads it as a pass.
           sql`UPDATE ${versions}
               SET status = 'rejected', updated_at = ${at},
                 report = json_replace(

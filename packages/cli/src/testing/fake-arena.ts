@@ -180,6 +180,7 @@ export class FakeArena {
             ...b,
             archived: false,
             activeVersion: this.active(b)?.info.n ?? null,
+            activeQuarantine: this.active(b)?.info.quarantine ?? null,
             latestVersion: latest
               ? { n: latest.n, status: latest.status, createdAt: latest.createdAt }
               : null,

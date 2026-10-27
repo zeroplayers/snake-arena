@@ -3,6 +3,7 @@ import { getTableColumns, getTableName, is } from "drizzle-orm";
 import { getTableConfig, SQLiteTable } from "drizzle-orm/sqlite-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAuth } from "../server/auth";
+import { updateRatings } from "../server/ratings";
 import { createTestD1, type TestD1 } from "../test/d1";
 import { createDb, type Db } from ".";
 import { getLeaderboard, getProfile, leaderboardQuery, RANKED_MIN_LIVES } from "./queries";
@@ -104,6 +105,31 @@ describe("constraints", () => {
     ).rejects.toThrow(/CHECK/);
   });
 
+  it("bumps change_seq when a version is quarantined or released", async () => {
+    const seq = async () =>
+      (
+        await d1.db
+          .prepare("SELECT change_seq FROM versions WHERE id = 'seed-coward-1'")
+          .first<{ change_seq: number }>()
+      )?.change_seq ?? 0;
+    const max = async () =>
+      (await d1.db.prepare("SELECT max(change_seq) AS m FROM versions").first<{ m: number }>())
+        ?.m ?? 0;
+    const quarantine = (at: number | null) =>
+      d1.db
+        .prepare("UPDATE versions SET quarantined_at = ? WHERE id = 'seed-coward-1'")
+        .bind(at)
+        .run();
+    await quarantine(1);
+    expect(await seq()).toBe(await max());
+    const after = await seq();
+    // The same value again isn't a change.
+    await quarantine(1);
+    expect(await seq()).toBe(after);
+    await quarantine(null);
+    expect(await seq()).toBe(after + 1);
+  });
+
   it("enforces foreign keys", async () => {
     await expect(insertVersion("t-5", "no-such-bot", 1, "validating")).rejects.toThrow(
       /FOREIGN KEY/,
@@ -146,6 +172,66 @@ describe("leaderboard", () => {
     ]);
     expect(board.every((e) => e.lives >= RANKED_MIN_LIVES)).toBe(true);
     expect(board[0]?.ratingCi).toBeGreaterThan(0);
+  });
+
+  it("drops quarantined versions, so a frozen rank can't be kept", async () => {
+    const set = (at: number | null) =>
+      d1.db
+        .prepare("UPDATE versions SET quarantined_at = ? WHERE id = 'seed-greedy-2'")
+        .bind(at)
+        .run();
+    await set(1);
+    try {
+      const board = await getLeaderboard(db);
+      expect(board.map((e) => [e.rank, e.botName])).toEqual([
+        [1, "Spiral"],
+        [2, "Coward"],
+      ]);
+    } finally {
+      await set(null);
+    }
+  });
+
+  it("keeps rating a quarantined version's lives, off the board until it's lifted", async () => {
+    // Its own D1: the rating job rewrites the seed's ratings, which later tests read.
+    const own = await createTestD1({ seed: true });
+    try {
+      const ownDb = createDb(own.db);
+      const now = new Date();
+      await updateRatings(own.db, now);
+      const quarantine = (at: number | null) =>
+        own.db
+          .prepare("UPDATE versions SET quarantined_at = ? WHERE id = 'seed-greedy-2'")
+          .bind(at)
+          .run();
+      const covered = () =>
+        own.db
+          .prepare("SELECT life_seq FROM ratings WHERE version_id = 'seed-greedy-2'")
+          .first<number>("life_seq");
+      const names = async () => (await getLeaderboard(ownDb)).map((e) => e.botName);
+      expect(await names()).toEqual(["Greedy", "Spiral", "Coward"]);
+
+      await quarantine(now.getTime());
+      // A life that was already playing when its room quarantined the version ends later: the
+      // job still counts it (a lift shouldn't need a rebuild), the leaderboard still hides it.
+      const before = await covered();
+      await own.db
+        .prepare(
+          `INSERT INTO lives (id, version_id, room, start_tick, end_tick, score, death_cause,
+             started_at, ended_at)
+           VALUES ('late-life', 'seed-greedy-2', 'room', 0, 100, 80, 'collision', ?1, ?1)`,
+        )
+        .bind(now.getTime())
+        .run();
+      await updateRatings(own.db, now);
+      expect(await covered()).toBeGreaterThan(before ?? 0);
+      expect(await names()).toEqual(["Spiral", "Coward"]);
+
+      await quarantine(null);
+      expect(await names()).toEqual(["Greedy", "Spiral", "Coward"]);
+    } finally {
+      await own.dispose();
+    }
   });
 
   it("pages", async () => {

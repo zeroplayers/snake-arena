@@ -20,6 +20,7 @@ import {
   type VersionStatus,
   versions,
 } from "../db/schema";
+import type { VersionQuarantine } from "../shared/arena";
 
 /** Finished lives listed for the selected version. */
 export const RECENT_LIVES = 20;
@@ -64,6 +65,8 @@ export interface VersionRow {
   lives: number;
   /** First failed check of a rejected version, as the CLI shows it. */
   rejection: string | null;
+  /** Set when the arena quarantined it (`src/shared/arena.ts`): no new lives. */
+  quarantine: VersionQuarantine | null;
 }
 
 export interface SelectedVersion {
@@ -177,6 +180,8 @@ async function versionRows(db: Db, where: SQL | undefined, limit: number, offset
       n: versions.n,
       status: versions.status,
       report: versions.report,
+      quarantinedAt: versions.quarantinedAt,
+      quarantineReason: versions.quarantineReason,
       createdAt: versions.createdAt,
       lives: versions.livesCount,
       rating: ratings.mean,
@@ -190,10 +195,13 @@ async function versionRows(db: Db, where: SQL | undefined, limit: number, offset
     .limit(limit)
     .offset(offset);
   return rows.map(
-    ({ report, createdAt, ...v }): VersionRow => ({
+    ({ report, createdAt, quarantinedAt, quarantineReason, ...v }): VersionRow => ({
       ...v,
       createdAt: createdAt.toISOString(),
       rejection: v.status === "rejected" ? rejection(report) : null,
+      quarantine: quarantinedAt
+        ? { at: quarantinedAt.toISOString(), reason: quarantineReason ?? "" }
+        : null,
     }),
   );
 }

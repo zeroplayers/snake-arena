@@ -110,7 +110,11 @@ function describeBot(
   const row = (label: string, text: string) => lines.push(`  ${label.padEnd(8)} ${text}`);
   row(
     "active",
-    bot.activeVersion === null ? dim("none (not in the arena)") : `v${bot.activeVersion}`,
+    bot.activeVersion === null
+      ? dim("none (not in the arena)")
+      : bot.activeQuarantine
+        ? `v${bot.activeVersion} · ${red("quarantined")} by the arena ${ago(bot.activeQuarantine.at, remote.now())}: no new lives until reviewed`
+        : `v${bot.activeVersion}`,
   );
   const latest = bot.latestVersion;
   if (latest && latest.n !== bot.activeVersion) {

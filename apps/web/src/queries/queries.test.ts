@@ -87,6 +87,30 @@ describe("getBotPage", () => {
     expect(page?.versions.find((v) => v.n === 2)?.rejection).toBeNull();
   });
 
+  it("marks versions the arena quarantined", async () => {
+    const versionOf = async () =>
+      (await getBotPage(db, "linus", "spiral"))?.versions.find((v) => v.n === 2);
+    expect((await versionOf())?.quarantine).toBeNull();
+    const at = Date.parse("2026-10-26T13:00:00.000Z");
+    const set = (value: number | null) =>
+      d1.db
+        .prepare(
+          `UPDATE versions SET quarantined_at = ?, quarantine_reason = 'CPU limit'
+           WHERE n = 2 AND bot_id = (SELECT id FROM bots WHERE slug = 'spiral')`,
+        )
+        .bind(value)
+        .run();
+    await set(at);
+    try {
+      expect((await versionOf())?.quarantine).toEqual({
+        at: new Date(at).toISOString(),
+        reason: "CPU limit",
+      });
+    } finally {
+      await set(null);
+    }
+  });
+
   it("lists the latest finished lives with causes and killers", async () => {
     const lives = (await getBotPage(db, "ada", "greedy"))?.selected?.recentLives ?? [];
     expect(lives).toHaveLength(RECENT_LIVES);

@@ -16,12 +16,12 @@
  * version is still `ready`.
  *
  * A cheap incremental poll uses `versions.change_seq`, which triggers set to one more than the
- * largest so far whenever a version is inserted or its `status` changes. D1 runs one write
- * transaction at a time, so it grows in commit order and a cursor never skips a change (unlike
- * `updated_at`, the writer's clock before commit):
+ * largest so far whenever a version is inserted or its `status` or `quarantined_at` changes. D1
+ * runs one write transaction at a time, so it grows in commit order and a cursor never skips a
+ * change (unlike `updated_at`, the writer's clock before commit):
  *
  * ```sql
- * SELECT id, bot_id, status, change_seq FROM versions
+ * SELECT id, bot_id, status, quarantined_at, change_seq FROM versions
  * WHERE change_seq > ?1 ORDER BY change_seq LIMIT 500
  * ```
  *
@@ -135,9 +135,9 @@ export const ARENA_CONTROL_POLL_MS = 30_000;
  * nothing new has to be read:
  *
  * - **Version**: `status = 'rejected'`, with a failed check `{ name: "moderation", ok: false,
- *   message: <reason> }` appended to `versions.report` (like the room backstop's
- *   `arena-backstop` check), and `report.text`, if any, prefixed with "Rejected by a moderator:
- *   <reason>" so the suite's "Checks passed" isn't the first thing the author reads. Final.
+ *   message: <reason> }` appended to `versions.report`, and `report.text`, if any, prefixed
+ *   with "Rejected by a moderator: <reason>" so the suite's "Checks passed" isn't the first
+ *   thing the author reads. Final.
  * - **Bot**: `bots.banned_at` / `ban_reason` set; its `ready` version becomes `archived` and
  *   versions still in checks become `rejected` (same as archiving the bot). Lifting the ban
  *   leaves the bot with no active version, the owner picks one.
@@ -155,6 +155,42 @@ export const ARENA_CONTROL_POLL_MS = 30_000;
  * only matters for a job it picked up mid-ban.
  */
 export const MODERATION_CHECK_NAME = "moderation";
+
+// ─── Quarantine ──────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A room's CPU backstop (apps/arena `room.ts`) **evicts** a life whose calls the room's CPU limit
+ * keeps cutting short, so the room makes progress: the life ends with the neutral cause `evicted`
+ * (no `lives` row, not rated; the matchmaker still gets `lifeEnded`). A version evicted
+ * `EVICTIONS_TO_QUARANTINE` (2) times in one room is **quarantined**, for everyone:
+ *
+ * ```sql
+ * UPDATE versions SET quarantined_at = ?2, quarantine_reason = ?3
+ * WHERE id = ?1 AND quarantined_at IS NULL RETURNING id
+ * ```
+ *
+ * So is a version whose calls the backstop named `VERSION_KILLS_TO_QUARANTINE` (6) times within a
+ * week, across lives and rooms: rooms write each named kill to `version_kills` (and mark it
+ * `retracted` when a later kill in that room named nobody, which only a restart does), and the
+ * same batch quarantines the version once it has that many unretracted rows. That catches a bot
+ * that burns too rarely for any one life of it to be evicted.
+ *
+ * It isn't a ban: `status` stays `ready` and the owner can deploy or roll back as usual (a new
+ * version starts unquarantined). It bumps `change_seq`, so the incremental poll sees it. The
+ * matchmaker must queue no lives of a version with `quarantined_at` set, and drop the ones it
+ * queued; rooms also refuse them (`join` → `quarantined`, read from D1). Lives of it already
+ * running in other rooms play on, and may get it evicted there too. An admin lifts it by setting
+ * `quarantined_at` back to `NULL` (no UI yet). The site shows it on the bot page and the CLI in
+ * `zerosnake status` / `logs`.
+ *
+ * TODO(#23): the matchmaker should also count `evicted` lives per version across rooms and
+ * quarantine at the same threshold; rooms only count their own.
+ */
+export interface VersionQuarantine {
+  /** ISO 8601. */
+  at: string;
+  reason: string;
+}
 
 /** Arena quotas the site shows (SPEC §4). The matchmaker enforces them. */
 export const ARENA_LIMITS = {

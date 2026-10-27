@@ -26,6 +26,18 @@ importers:
       '@zerosnake/checks':
         specifier: workspace:*
         version: link:../../packages/checks
+      '@zerosnake/engine':
+        specifier: workspace:*
+        version: link:../../packages/engine
+      '@zerosnake/house-bots':
+        specifier: workspace:*
+        version: link:../../bots/house
+      '@zerosnake/sandbox':
+        specifier: workspace:*
+        version: link:../../packages/sandbox
+      '@zerosnake/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@zerosnake/web':
         specifier: workspace:*
         version: link:../web
@@ -33,9 +45,6 @@ importers:
       '@types/node':
         specifier: ^26.6.5
         version: 26.6.5
-      '@zerosnake/house-bots':
-        specifier: workspace:*
-        version: link:../../bots/house
       esbuild:
         specifier: ^0.28.2
         version: 0.28.2

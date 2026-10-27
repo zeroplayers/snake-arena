@@ -82,6 +82,13 @@ function BotPage() {
             <>
               Active: <span className="accent">v{active.n}</span>, rated{" "}
               {formatRating(active.rating, active.ratingCi)}
+              {active.quarantine && (
+                <>
+                  {" "}
+                  · <span className="status status-rejected">quarantined</span> by the arena on{" "}
+                  {formatDate(active.quarantine.at)}: it gets no new lives until reviewed
+                </>
+              )}
             </>
           ) : (
             "No active version."
@@ -143,6 +150,11 @@ function BotPage() {
                     <td>
                       <span className={`status status-${v.status}`}>{STATUS[v.status]}</span>
                       {v.rejection && <div className="muted small">{v.rejection}</div>}
+                      {v.quarantine && (
+                        <div className="muted small" title={v.quarantine.reason}>
+                          quarantined by the arena
+                        </div>
+                      )}
                     </td>
                     <td className="num">
                       {formatRating(v.rating, v.ratingCi)}

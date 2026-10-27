@@ -247,8 +247,8 @@ The cap should cover bots × `memoryLimitBytes`, or honest bots can run the heap
 ## Known gaps
 
 The meter bounds what code costs by its shape. Some data can still make one cheap operation
-slow; these were verified and are left to the DO's CPU limit and the room backstop (replay the
-batch with bots isolated, ban the version):
+slow; these were verified and are left to the DO's CPU limit and the room backstop (evict the
+life whose call keeps getting killed, quarantine the version; never a ban):
 
 - **Strings a built-in reads on its own.** Everything above charges strings where bot code hands
   them over; a built-in that reads a string the bot stored earlier, by a path not listed there,

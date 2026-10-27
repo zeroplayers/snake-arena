@@ -232,11 +232,19 @@ export const versions = sqliteTable(
     /**
      * Position in the order of status changes, for the matchmaker's incremental poll
      * (`src/shared/arena.ts`): set to one more than the largest so far when a row is inserted or
-     * its `status` changes. Kept by triggers (migration `0004_ratings_stint_change_seq`); writers
-     * need do nothing. D1 runs one write transaction at a time, so it grows in commit order,
-     * unlike `updated_at`.
+     * its `status` or `quarantined_at` changes. Kept by triggers (migrations
+     * `0004_ratings_stint_change_seq`, `0008_version_quarantine`); writers need do nothing. D1
+     * runs one write transaction at a time, so it grows in commit order, unlike `updated_at`.
      */
     changeSeq: integer("change_seq").notNull().default(0),
+    /**
+     * Set by the arena's room backstop when the version's lives kept getting cut short by the
+     * room's CPU limit and were evicted (`apps/arena/src/room.ts`). The version stays `ready`
+     * (it isn't a ban) but the matchmaker starts no lives of it until an admin clears this
+     * (`src/shared/arena.ts`, "Quarantine"). `quarantine_reason` says what happened, for people.
+     */
+    quarantinedAt: integer("quarantined_at", { mode: "timestamp_ms" }),
+    quarantineReason: text("quarantine_reason"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -332,6 +340,31 @@ export const lives = sqliteTable(
     index("lives_version_seq_idx").on(t.versionId, t.seq),
     check("lives_death_cause_check", oneOf(t.deathCause, deathCauses)),
   ],
+);
+
+/**
+ * Kills by a room's CPU limit that named a call of this version (apps/arena `room/backstop.ts`),
+ * from every room: enough of them within a week quarantine the version even when each life is
+ * killed too rarely for its room to evict it (`src/shared/arena.ts`, "Quarantine"). Written by
+ * rooms, at least once (`id` is the room's). `retracted` when the room later saw a kill that named
+ * nobody, which only a restart can be: its kills since the last such one weren't evidence.
+ */
+export const versionKills = sqliteTable(
+  "version_kills",
+  {
+    id: text("id").primaryKey(),
+    versionId: text("version_id")
+      .notNull()
+      .references(() => versions.id, { onDelete: "cascade" }),
+    room: text("room").notNull(),
+    lifeId: text("life_id").notNull(),
+    /** Room tick of the call the kill interrupted. */
+    tick: integer("tick").notNull(),
+    retracted: integer("retracted", { mode: "boolean" }).notNull().default(false),
+    at: integer("at", { mode: "timestamp_ms" }).notNull(),
+  },
+  // Counting a version's kills within the window.
+  (t) => [index("version_kills_version_at_idx").on(t.versionId, t.at)],
 );
 
 export const ratings = sqliteTable(

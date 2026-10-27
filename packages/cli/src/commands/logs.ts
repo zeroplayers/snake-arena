@@ -95,6 +95,11 @@ export async function logsCommand(
     `${bold(`${bot.slug} v${n}`)} · ${status} · deployed ${new Date(version.createdAt).toLocaleString()}`,
   );
   if (version.meta?.message) io.out(`  ${dim(`"${version.meta.message}"`)}`);
+  if (version.quarantine) {
+    io.out(
+      `\n${red("Quarantined by the arena")} on ${new Date(version.quarantine.at).toLocaleString()}: it gets no new lives until reviewed.\n  ${version.quarantine.reason}`,
+    );
+  }
   const report = formatReport(version.report);
   if (report.length > 0) io.out(`\nChecks:\n${report.join("\n")}`);
   if (version.status === "rejected" || version.status === "validating") return EXIT.ok;

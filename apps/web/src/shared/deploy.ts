@@ -5,6 +5,7 @@
  *
  * Errors are `ApiErrorBody` with a stable `error` code and a `message` meant to be shown as is.
  */
+import type { VersionQuarantine } from "./arena";
 import type { CheckReport, SourceFile } from "./checks";
 
 export const versionStatuses = ["validating", "ready", "rejected", "archived"] as const;
@@ -98,6 +99,11 @@ export interface VersionInfo {
   /** Written by the checks consumer; `null` while `validating`. */
   report: CheckReport | null;
   meta: DeployMeta | null;
+  /**
+   * Set when the arena quarantined the version (`src/shared/arena.ts`, "Quarantine"): still
+   * `ready`, but it gets no new lives. Missing from older servers.
+   */
+  quarantine?: VersionQuarantine | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -123,6 +129,8 @@ export interface MeResponse {
     archived: boolean;
     /** `n` of the `ready` version, if any. */
     activeVersion: number | null;
+    /** The `ready` version's quarantine, if the arena quarantined it. Missing from older servers. */
+    activeQuarantine?: VersionQuarantine | null;
     latestVersion: { n: number; status: VersionStatus; createdAt: string } | null;
   })[];
   quota: QuotaInfo;

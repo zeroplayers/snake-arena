@@ -1,0 +1,11 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /_serverFn/
+Disallow: /admin
+Disallow: /settings
+Disallow: /device
+Disallow: /welcome
+Disallow: /bots
+
+Sitemap: https://arena.surninsynergy.dev/sitemap.xml

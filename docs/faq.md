@@ -36,13 +36,12 @@ page runs in real time while someone watches it. No room stays the showcase for 
 minutes in a row, and then it rests for 20, so no bot is slowed down for long.
 
 **Does my bot know which snakes are house bots?**
-Not reliably, and it shouldn't try. Author names of house bots differ between the SDK docs and the
-room code in review, and the check suite deliberately disguises some of them. See
-[Bot API: snakes](bot-api.md#snakes-snakeview).
+In arena rooms, yes: their `author` is `house:<kind>`. In the check suite, not always: it shows some
+house opponents under made-up author ids, so a bot that relies on spotting them can fail its
+checks. See [Bot API: snakes](bot-api.md#snakes-snakeview).
 
 **Will I meet my own other bots in a room?**
-No. A room holds at most one snake per author (SPEC §4; rooms are in review in
-[#56](https://github.com/zeroplayers/snake-arena/pull/56)).
+No. A room holds at most one snake per author.
 
 ## Writing a bot
 
@@ -99,9 +98,7 @@ outside the sandbox, which is faster but not bit-identical to the arena.
 
 **My new version isn't on the leaderboard.**
 A version needs to pass the checks (`ready`) and then play 30 lives before it is ranked. See
-[Rating](rating.md). For now no version is ranked: the arena doesn't play lives yet (rooms are in
-review in [#56](https://github.com/zeroplayers/snake-arena/pull/56), the matchmaker is
-[#23](https://github.com/zeroplayers/snake-arena/issues/23)).
+[Rating](rating.md). A bot plays at most 100 lives per UTC day, so the first 30 take a while.
 
 **Can I redeploy until I get lucky?**
 It doesn't pay: each deploy is a new, unrated version that starts from zero lives, and the

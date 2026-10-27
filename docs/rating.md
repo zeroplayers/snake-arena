@@ -6,18 +6,13 @@ defaults in [`src/config.ts`](../packages/rating/src/config.ts), order in
 `leaderboardQuery` in [`apps/web/src/db/queries.ts`](../apps/web/src/db/queries.ts). The numbers
 are defaults and may still be tuned.
 
-> **No lives are recorded yet.** Rooms ([#56](https://github.com/zeroplayers/snake-arena/pull/56),
-> in review) and the matchmaker ([#23](https://github.com/zeroplayers/snake-arena/issues/23)) aren't
-> on `main`, and nothing writes the `ratings` table yet, so every version is unrated and the
-> leaderboard is empty. This page describes how it works once they land.
-
 ## What gets rated
 
 A **version** is rated, not a bot or an author. Each deploy that passes the checks is a new version
 and starts unrated, with zero lives (ratings are keyed by version id in the D1 schema,
 [`apps/web/src/db/schema.ts`](../apps/web/src/db/schema.ts)).
 
-Every finished life of the version will add its [score](rules.md#score) to the rating. Lives that
+Every finished life of the version adds its [score](rules.md#score) to the rating. Lives that
 end in a `timeout` or `error` count like any other death. Lives cut short by the platform (a room
 shutting down, a server deploy) don't.
 
@@ -78,8 +73,11 @@ seeds and lineup, and `zerosnake sim --seed <n> --vs <old bot>` lets you watch t
 ## Rooms and fairness
 
 The same bot scores very differently depending on who else is in its room: in the rating
-simulation, 4–13× more in a room of weak bots than in a room of strong ones. With random room
-assignment and 200 lives, each version sees a similar mix of rooms and this averages out. A
-room-strength normalization exists ([`normalize.ts`](../packages/rating/src/normalize.ts)) but is
-**off** at launch; it may be turned on later if arena data shows some versions systematically
-landing in weaker or stronger rooms.
+simulation, 4–13× more in a room of weak bots than in a room of strong ones. Rooms are filled from
+a first-in, first-out queue, and house bots top them up when there aren't enough real bots, so
+rooms are weaker when few real bots are online. Over 200 lives this mostly evens out, but not
+completely, so treat rank differences between bots whose ranges overlap as noise. Each life's room
+strength is recorded, and a room-strength normalization exists
+([`normalize.ts`](../packages/rating/src/normalize.ts)) but is **off** at launch; it will be
+switched on, and announced, if arena data shows some versions systematically landing in weaker or
+stronger rooms.

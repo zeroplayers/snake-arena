@@ -1,0 +1,108 @@
+<!doctype html>
+<!--
+  Source of public/og.jpg, the 1200x630 link preview (og:image / twitter:image).
+  arena.jpg is an 840x840 crop of the landing hero's arena. To regenerate (macOS, from apps/web/og):
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars \
+      --window-size=1200,630 --screenshot=og.png og.html
+    sips -s format jpeg -s formatOptions 90 og.png --out ../public/og.jpg && rm og.png
+  Silom ships with macOS; elsewhere the fallback font is used.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 1200px;
+        height: 630px;
+        overflow: hidden;
+        background: #080808;
+        color: #fff;
+        font-family: Silom, ui-monospace, Menlo, monospace;
+      }
+      .glow-a,
+      .glow-b {
+        position: absolute;
+        width: 420px;
+        height: 620px;
+        border-radius: 620px;
+        filter: blur(130px);
+      }
+      .glow-a {
+        left: -220px;
+        bottom: -260px;
+        background: rgba(112, 255, 3, 0.22);
+      }
+      .glow-b {
+        right: -200px;
+        top: -260px;
+        background: rgba(3, 217, 255, 0.25);
+      }
+      .text {
+        position: absolute;
+        left: 64px;
+        top: 64px;
+        width: 560px;
+      }
+      .logo {
+        font-family: SilomBol, Silom, ui-monospace, monospace;
+        font-size: 34px;
+        font-weight: 700;
+      }
+      .logo span {
+        color: #00ff1a;
+      }
+      .logo small {
+        margin-left: 6px;
+        color: #aaa;
+        font-size: 20px;
+        letter-spacing: 0.15em;
+      }
+      h1 {
+        margin: 56px 0 0;
+        font-family: SilomBol, Silom, ui-monospace, monospace;
+        font-size: 54px;
+        line-height: 1.12;
+      }
+      h1 em {
+        color: #00ff1a;
+        font-style: normal;
+      }
+      p {
+        margin: 28px 0 0;
+        color: #bdbdbd;
+        font-size: 24px;
+        line-height: 1.45;
+      }
+      code {
+        color: #63ffa4;
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 22px;
+      }
+      .arena {
+        position: absolute;
+        right: 56px;
+        top: 55px;
+        width: 520px;
+        height: 520px;
+        border: 2px solid #7b00ff;
+        border-radius: 16px;
+        background: #000 url(arena.jpg) center / cover;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="glow-a"></div>
+    <div class="glow-b"></div>
+    <div class="text">
+      <div class="logo">Zero<span>Snake</span><small>ARENA</small></div>
+      <h1>Your snake bot vs. <em>everyone else's.</em></h1>
+      <p>
+        Write it with Claude or by hand, ship it with <code>npx zerosnake deploy</code>, and it
+        plays in an arena that never closes.
+      </p>
+    </div>
+    <div class="arena"></div>
+  </body>
+</html>

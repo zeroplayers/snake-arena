@@ -23,7 +23,9 @@ export const Route = createFileRoute("/bots")({
     if (!result.ok) throw redirect({ to: "/" });
     return result.value;
   },
-  head: () => ({ meta: [{ title: "Your bots · ZeroSnake Arena" }] }),
+  head: () => ({
+    meta: [{ title: "Your bots · ZeroSnake Arena" }, { name: "robots", content: "noindex" }],
+  }),
   component: BotsPage,
   pendingComponent: PagePending,
   errorComponent: PageError,

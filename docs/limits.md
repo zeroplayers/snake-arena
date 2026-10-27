@@ -1,48 +1,40 @@
 # Limits
 
 Your bot runs in a QuickJS (WebAssembly) sandbox, `@zerosnake/sandbox`. The same package runs it
-everywhere, so a bot that behaves locally behaves the same on the server. On `main` it runs your bot
-in `zerosnake sim` / `test` ([#57](https://github.com/zeroplayers/snake-arena/pull/57)) and the
-template's tests; the arena rooms ([#56](https://github.com/zeroplayers/snake-arena/pull/56)) and
-the check suite ([#54](https://github.com/zeroplayers/snake-arena/pull/54)) that will run it on the
-server are in review.
+everywhere, so a bot that behaves locally behaves the same on the server: in `zerosnake sim` and
+`test`, in the template's tests, in the check suite that runs on every deploy and in the arena's
+rooms.
 
 Sources: [`packages/sandbox/README.md`](../packages/sandbox/README.md),
 [`sandbox.ts`](../packages/sandbox/src/sandbox.ts),
 [`prelude.ts`](../packages/sandbox/src/prelude.ts),
 [`source.ts`](../packages/sandbox/src/source.ts); for deploy limits,
 [`apps/web/src/shared/deploy.ts`](../apps/web/src/shared/deploy.ts) and
-[`apps/web/src/server/cli-api.ts`](../apps/web/src/server/cli-api.ts). The check suite is still in
-review; its section says so.
+[`apps/web/src/server/cli-api.ts`](../apps/web/src/server/cli-api.ts); for the check suite,
+[`packages/checks/README.md`](../packages/checks/README.md).
 
 ## Per-tick budget
 
-> **Changing in [#62](https://github.com/zeroplayers/snake-arena/pull/62)** (in review, for
-> [#60](https://github.com/zeroplayers/snake-arena/issues/60)). Below is the budget on `main`. That
-> pull request makes the sandbox instrument every bundle before it runs, so the budget bounds CPU
-> time for any code shape. The strikes and deaths stay the same, and in that pull request the
-> house bots use at most 3.6% of the budget, so keep `tick()` reasonable and you won't notice. Its
-> details may still change:
->
-> - the bot's own code is charged too, per statement and syntax node, against the same counter as
->   native work: `opBudget × WORK_PER_OP` = 10 M units per tick, about 10 ms on an M1. The
->   interrupt limit stays as a second limit;
-> - data-dependent costs are charged by size: each `catch` by the length of the error's `stack`,
->   object spread and rest and `for…in` per key, `apply` / `Reflect.apply` / `Reflect.construct`
->   per argument, `new Error()` in the prelude;
-> - the timeout message becomes `over budget: more than 10000000 cost units`.
+Every bundle is instrumented before it runs, so the budget bounds CPU work for any code shape. The
+budget is `info.opBudget` = **10** per `tick()` call (`DEFAULT_OP_BUDGET`), counted in two ways.
+Going over either one is a timeout:
 
-Today the budget is `info.opBudget` = **10** per `tick()` call (`DEFAULT_OP_BUDGET`), counted in
-two ways. Going over either one is a timeout:
-
-- **Interrupt polls.** QuickJS calls an interrupt handler every so many bytecode branches or
-  function calls (roughly every 10 000; [#60](https://github.com/zeroplayers/snake-arena/issues/60)
-  measured about one per 4 300 loop iterations). The tick may use 10 of them. This counts loop
-  iterations and calls, not how much code runs in each, which is what #60 fixes.
-- **Native work.** Built-ins whose cost grows with their input (array methods, string methods,
+- **Cost units.** The tick may spend `opBudget × 1 000 000` = **10 000 000** units
+  (`WORK_PER_OP`), about 10 ms of CPU on an M1. Your own code is charged per statement and syntax
+  node. Built-ins whose cost grows with their input (array and string methods,
   `JSON.stringify` / `parse`, `Object.keys`, `Set` / `Map` iteration, regex, …) are charged per
-  element or character at their measured cost, about 1 unit per nanosecond. The tick may use
-  `opBudget × 1 000 000` units (`WORK_PER_OP`), about 10 ms on an M1.
+  element or character at their measured cost, about 1 unit per nanosecond. Data-dependent costs
+  are charged by size: each `catch` by the length of the error's `stack`, object spread and rest
+  and `for…in` per key, `apply` / `Reflect.apply` / `Reflect.construct` per argument. The count is
+  deterministic: the same code costs the same on every machine. The message is
+  `over budget: more than 10000000 cost units`.
+- **Interrupt polls**, a second, coarser limit. QuickJS calls an interrupt handler about every
+  10 000 bytecode branches or function calls, and the tick may use 10 of them
+  (`over budget: more than 10 interrupts`).
+
+Measured in [`packages/sandbox/README.md`](../packages/sandbox/README.md), the house bots peak at
+30% of the cost budget (`hard`) and the template bot at 11%, so keep `tick()` reasonable and you
+won't notice it.
 
 What happens when a tick goes over:
 
@@ -98,13 +90,12 @@ These checks scan the whole bundle text, **including strings and comments**:
 - **BigInt literals** such as `10n` or `0xffn`. BigInt arithmetic runs in C without interrupt
   checks.
 
-> **More rejections in [#62](https://github.com/zeroplayers/snake-arena/pull/62)** (in review). Its
-> instrumentation parses the bundle and also rejects, with a load death (`error`): any `import`
-> (dynamic too), identifiers starting with `__zs`, destructuring in a `catch (…)` clause, object
-> rest other than `const { a, ...rest } = value` or `({ a, ...rest } = value)`, functions with more
-> than 3 000 syntax nodes, and brackets nested more than 200 deep. Syntax errors then read
-> `SyntaxError: <message>`. An esbuild bundle of ordinary TypeScript passes; split very long
-> functions.
+The instrumentation parses the bundle and also rejects, with a load death (`error`): any `import`
+(dynamic too), identifiers starting with `__zs`, destructuring in a `catch (…)` clause, object rest
+other than `const { a, ...rest } = value` or `({ a, ...rest } = value)`, functions with more than
+3 000 syntax nodes, and brackets nested more than 200 deep. Syntax errors read
+`SyntaxError: <message>`. An esbuild bundle of ordinary TypeScript passes; split very long
+functions.
 
 **Missing or blocked at runtime:**
 
@@ -125,18 +116,13 @@ These checks scan the whole bundle text, **including strings and comments**:
 
 ## Bundle and deploy limits
 
-> The deploy API that enforces these is merged
-> ([#52](https://github.com/zeroplayers/snake-arena/pull/52)): the numbers are `DEPLOY_LIMITS` in
-> [`apps/web/src/shared/deploy.ts`](../apps/web/src/shared/deploy.ts), path and name rules are
-> `sourcePathProblem` and `checkBotName` in
-> [`apps/web/src/server/cli-api.ts`](../apps/web/src/server/cli-api.ts), and "one active version" is
-> the unique index `versions_bot_ready_idx` in
-> [`apps/web/src/db/schema.ts`](../apps/web/src/db/schema.ts). The check suite repeats the bundle
-> limits locally ([#54](https://github.com/zeroplayers/snake-arena/pull/54),
-> `packages/checks/src/limits.ts`). The CLI commands `login` and `deploy` are in progress
-> ([#21](https://github.com/zeroplayers/snake-arena/issues/21)), and without the check consumer
-> ([#22](https://github.com/zeroplayers/snake-arena/issues/22)) a deployed version stays
-> `validating`.
+The numbers are `DEPLOY_LIMITS` in
+[`apps/web/src/shared/deploy.ts`](../apps/web/src/shared/deploy.ts), path and name rules are
+`sourcePathProblem` and `checkBotName` in
+[`apps/web/src/server/cli-api.ts`](../apps/web/src/server/cli-api.ts), and "one active version" is
+the unique index `versions_bot_ready_idx` in
+[`apps/web/src/db/schema.ts`](../apps/web/src/db/schema.ts). The check suite repeats the bundle
+limits locally (`packages/checks/src/limits.ts`).
 
 `zerosnake deploy` bundles your `src/` with esbuild into one ESM file and uploads the bundle plus
 the source files (sources are public on your bot's page).
@@ -159,11 +145,8 @@ environment.
 
 ## Check suite and qualification
 
-> **In review** ([#54](https://github.com/zeroplayers/snake-arena/pull/54),
-> `packages/checks/README.md`). Once it lands, `zerosnake test` runs it locally (today `test` only
-> bundles your bot and loads it), and the server runs the same suite on every deploy (the queue
-> consumer is [#22](https://github.com/zeroplayers/snake-arena/issues/22), not built yet). Same
-> bundle, same report.
+`zerosnake test` runs the check suite locally, and the server runs the same suite on every deploy:
+same bundle, same report.
 
 A new version is `validating` until the checks finish, then `ready` (it replaces your previous
 version in the arena) or `rejected` (with a report the CLI prints). The checks run in order and
@@ -180,10 +163,11 @@ Details that matter when a check fails:
 
 - Single over-budget or throwing ticks are allowed (they show up as warnings); a death from them
   fails `run`. The report gives the seed, tick, the sandbox's message and your last 20 log lines.
-- **Cost caps** (until [#62](https://github.com/zeroplayers/snake-arena/pull/62) lands): on
-  average over all ticks you may use at most **half** of the per-tick budget, in interrupts and in
-  native work. Locally the whole suite also stops after 60 s of wall-clock time. A bot that hits a
-  cap is rejected as "too slow".
+- **Cost caps** (checks only): on average over all check ticks you may use at most **half** of the
+  per-tick budget, in interrupts and in cost units (`AVERAGE_BUDGET_SHARE` in
+  `packages/checks/src/cost.ts`). In arena rooms each tick may use the full budget. Locally the
+  whole suite also stops after 60 s of wall-clock time. A bot that hits a cap is rejected as "too
+  slow".
 - The 5 seeds are derived from a hash of your bundle, so any change, even to a comment, gives
   different matches. Your bot can't tell a check match from an arena room: the tick counter starts
   high, opponents have played a while before you spawn, and names look like the arena's.

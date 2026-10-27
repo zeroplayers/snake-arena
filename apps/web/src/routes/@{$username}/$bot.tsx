@@ -10,6 +10,7 @@ import {
 import { Empty, PageError, PagePending } from "../../components/PageState";
 import { RatingChart } from "../../components/RatingChart";
 import { SourceFiles } from "../../components/SourceFiles";
+import { canonical, pageMeta } from "../../lib/meta";
 import type { Killer, LifeRow, VersionRow } from "../../queries/bot";
 import type { Sources } from "../../queries/sources";
 import { getBotPageData, getVersionSources } from "../../server/pages";
@@ -44,9 +45,19 @@ export const Route = createFileRoute("/@{$username}/$bot")({
     if (!page) throw notFound();
     return page;
   },
-  head: ({ params }) => ({
-    meta: [{ title: `${params.bot} by @${params.username} · ZeroSnake Arena` }],
-  }),
+  head: ({ params }) => {
+    const { meta, links } = canonical(`/@${params.username}/${params.bot}`);
+    return {
+      meta: [
+        ...pageMeta(
+          `${params.bot} by @${params.username}`,
+          `${params.bot}, a snake bot by @${params.username} on ZeroSnake Arena: its rating, versions, source and replays.`,
+        ),
+        ...meta,
+      ],
+      links,
+    };
+  },
   component: BotPage,
   pendingComponent: PagePending,
   errorComponent: PageError,

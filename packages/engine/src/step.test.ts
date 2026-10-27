@@ -95,9 +95,12 @@ describe("food", () => {
     spawnSnake(world, { id: "a", author: "a" });
     step(world, {});
     expect(world.food.length).toBe(c.foodBase + c.foodSpawnPerTick);
-    for (let t = 0; t < 100; t++) step(world, {});
+    // Circling keeps it away from the wall.
+    for (let t = 0; t < 100; t++) step(world, { a: { turn: 1 } });
     expect(world.food.length).toBe(c.foodBase + c.foodPerSnake);
-    for (const f of world.food) expect(Math.hypot(f.x, f.y)).toBeLessThan(c.arenaRadius);
+    for (const f of world.food) {
+      expect(Math.max(Math.abs(f.x), Math.abs(f.y))).toBeLessThan(c.arenaHalfSize);
+    }
   });
 
   it("eats pellets in the forward cone and grows", () => {

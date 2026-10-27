@@ -146,7 +146,8 @@ interface Danger {
   /** Nearest first. */
   bodies: Body[];
   heads: Head[];
-  arenaRadius: number;
+  /** Half-side of the square arena. */
+  arenaHalfSize: number;
 }
 
 /** Every visible body point near our head, every visible head, and the size of the arena. */
@@ -180,8 +181,8 @@ function dangerAround(state: BotState): Danger {
     }
   }
   bodies.sort((a, b) => a.reach - b.reach);
-  const arenaRadius = Math.hypot(self.head.x, self.head.y) + state.wallDistance;
-  return { bodies, heads, arenaRadius };
+  const arenaHalfSize = Math.max(Math.abs(self.head.x), Math.abs(self.head.y)) + state.wallDistance;
+  return { bodies, heads, arenaHalfSize };
 }
 
 /**
@@ -192,7 +193,7 @@ function dangerAround(state: BotState): Danger {
  */
 function safeTicks(self: SelfState, aim: number | Vec, danger: Danger): number {
   const me = { head: { ...self.head }, angle: self.angle, turnRate: self.turnRate };
-  const wall2 = (danger.arenaRadius - self.radius) ** 2;
+  const wall = danger.arenaHalfSize - self.radius;
   for (let t = 1; t <= LOOKAHEAD_TICKS; t++) {
     // Food within reach is eaten: from there on, straight on.
     if (typeof aim !== "number" && distance(me.head, aim) < self.radius * 6) aim = me.angle;
@@ -201,7 +202,7 @@ function safeTicks(self: SelfState, aim: number | Vec, danger: Danger): number {
     me.head.x += Math.cos(me.angle) * self.speed;
     me.head.y += Math.sin(me.angle) * self.speed;
     const { x, y } = me.head;
-    if (x * x + y * y > wall2) return t - 1;
+    if (Math.abs(x) > wall || Math.abs(y) > wall) return t - 1;
     // Bodies are nearest first: stop at the first one we can't have reached yet.
     for (const b of danger.bodies) {
       if (b.reach > t * self.speed) break;

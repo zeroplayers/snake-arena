@@ -1,7 +1,7 @@
 import { addFood, foodIndex, removeFood, spawnAmbientFood } from "./food.ts";
 import { Grid } from "./grid.ts";
 import { hungerDecay, lifeScore, segmentCountForMass, sizeForMass } from "./growth.ts";
-import { clamp, cos, exitTime, firstContact, sin, wrapAngle } from "./math.ts";
+import { clamp, cos, exitTime, firstContact, sin, squareNorm, wrapAngle } from "./math.ts";
 import { type Rng, rngFromState } from "./rng.ts";
 import type { ActionMap, Death, DeathCause, FaultMap, Food, Snake, Vec2, World } from "./types.ts";
 import { layoutSegments } from "./world.ts";
@@ -82,10 +82,10 @@ export function step(world: World, actions: ActionMap = {}, faults: FaultMap = {
 
   // 3. Collisions.
   resolveCollisions(world, s, die);
-  const arena = c.arenaRadius;
+  const arena = c.arenaHalfSize;
   for (let i = 0; i < n; i++) {
     const head = (snakes[i] as Snake).head;
-    if (head.x * head.x + head.y * head.y > arena * arena) {
+    if (squareNorm(head.x, head.y) > arena) {
       const x0 = s.x0[i] as number;
       const y0 = s.y0[i] as number;
       die(i, exitTime(x0, y0, head.x - x0, head.y - y0, arena), "wall", -1);
@@ -307,16 +307,11 @@ function dropRemains(world: World, snake: Snake, rng: Rng): void {
   const count = Math.min(segs.length, Math.max(1, Math.ceil(total / c.remainsMaxValue)));
   const value = total / count;
   const jitter = c.remainsJitter * snake.size;
-  const limit = c.arenaRadius * 0.98;
+  const limit = c.arenaHalfSize * 0.98;
   for (let k = 0; k < count; k++) {
     const p = segs[Math.floor((k * segs.length) / count)] as Vec2;
-    let x = p.x + rng.range(-jitter, jitter);
-    let y = p.y + rng.range(-jitter, jitter);
-    const d = Math.sqrt(x * x + y * y);
-    if (d > limit) {
-      x *= limit / d;
-      y *= limit / d;
-    }
+    const x = clamp(p.x + rng.range(-jitter, jitter), -limit, limit);
+    const y = clamp(p.y + rng.range(-jitter, jitter), -limit, limit);
     addFood(world, x, y, value, "remains");
   }
 }
@@ -377,11 +372,11 @@ function scratch(n: number): Scratch {
 const grids = new Map<string, Grid>();
 
 function gridFor(world: World): Grid {
-  const { arenaRadius, gridCellSize } = world.config;
-  const key = `${arenaRadius}:${gridCellSize}`;
+  const { arenaHalfSize, gridCellSize } = world.config;
+  const key = `${arenaHalfSize}:${gridCellSize}`;
   let grid = grids.get(key);
   if (!grid) {
-    grid = new Grid(arenaRadius + gridCellSize, gridCellSize);
+    grid = new Grid(arenaHalfSize + gridCellSize, gridCellSize);
     grids.set(key, grid);
   }
   return grid;

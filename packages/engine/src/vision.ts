@@ -1,6 +1,7 @@
 import type { BotInfo, BotState, Food as FoodView, SnakeView, Vec } from "@zerosnake/sdk";
 import { TICK_RATE } from "./config.ts";
 import { foodIndex } from "./food.ts";
+import { squareNorm } from "./math.ts";
 import type { Food, Snake, SnakeId, Vec2, World } from "./types.ts";
 
 /**
@@ -33,7 +34,7 @@ export function buildBotInfo(world: World, snake: Snake, limits: BotLimits): Bot
   const c = world.config;
   return {
     snakeId: snake.id,
-    worldRadius: c.arenaRadius,
+    worldHalfSize: c.arenaHalfSize,
     visionRadius: c.visionRadius,
     tickRate: TICK_RATE,
     maxLifeTicks: c.lifeCap,
@@ -155,7 +156,7 @@ export function buildBotState(world: World, snake: Snake | SnakeId): BotState {
     },
     snakes,
     food,
-    wallDistance: c.arenaRadius - Math.sqrt(hx * hx + hy * hy),
+    wallDistance: c.arenaHalfSize - squareNorm(hx, hy),
   };
 }
 

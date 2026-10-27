@@ -145,7 +145,7 @@ that die often but score quickly between deaths, because a respawn costs nothing
 window. Those bots rank badly per life.
 
 The numbers below are from the first version of this suite, on fixed seeds 101–505 in a
-simpler room (instant respawns, no pre-roll). Deploys now get per-bundle seeds, so exact scores differ, but the picture is the same.
+simpler room (instant respawns, no pre-roll), on the round arena it had before #76. Deploys now get per-bundle seeds, so exact scores differ, but the picture is the same.
 Per slot, `easy` collects ~470 over the five seeds (16 lives) and `chaos` ~170 (6 lives). Per
 life, `chaos` comes close to `easy` (27.7 vs 29.5).
 

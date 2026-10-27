@@ -6,8 +6,9 @@ import { runMatch, summarize } from "./match.ts";
  * A CI-sized slice of `scripts/bench.ts`: real engine matches, four snakes of each ranked bot,
  * respawn on death. Strength is the mean score per snake slot, which counts dying often against
  * a bot; score per life is printed too but not asserted (hard dies about twice as often as
- * medium, so per life the two are close). Over 120 seeds, every window of 6 consecutive
- * matches was ordered, with hard ≥ 1.19× medium.
+ * medium, so per life the two are close). On the square arena (#76), over 120 seeds every window
+ * of 6 consecutive matches was ordered, with hard ≥ 1.22× medium and medium ≥ 1.71× easy; per
+ * slot overall easy 189, medium 437, hard 657.
  */
 const MATCHES = 6;
 const TICKS = 1500;

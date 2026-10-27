@@ -35,7 +35,8 @@ import { layoutSegments } from "./world.ts";
  * and masses are float32, so a spectator's bodies match the room's to ~1e-5 units. Strings are
  * UTF-16 code units (as in replays; the engine has no text codecs), labels cut to 100 of them.
  */
-export const BROADCAST_VERSION = 2;
+/** 3: keyframes carry the square arena's config (`arenaHalfSize`, #76). */
+export const BROADCAST_VERSION = 3;
 
 const MAGIC = 0x5a;
 const KIND_KEYFRAME = 1;

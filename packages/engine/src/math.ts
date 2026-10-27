@@ -64,13 +64,40 @@ export function firstContact(px: number, py: number, vx: number, vy: number, r: 
   return t <= 1 ? t : -1;
 }
 
-/** Time t in [0, 1] at which a point moving from p0 by v leaves the disc of radius r. */
-export function exitTime(px: number, py: number, vx: number, vy: number, r: number): number {
-  const a = vx * vx + vy * vy;
-  if (a === 0) return 0;
-  const b = px * vx + py * vy;
-  const c = px * px + py * py - r * r;
-  const disc = b * b - a * c;
-  if (disc < 0) return 0;
-  return clamp((-b + Math.sqrt(disc)) / a, 0, 1);
+/**
+ * Time t in [0, 1] at which a point moving from p0 by v leaves the square of half-side h
+ * centred on the origin (0 if it starts outside, 1 if it doesn't leave).
+ */
+export function exitTime(px: number, py: number, vx: number, vy: number, h: number): number {
+  let t = 1;
+  if (vx > 0) t = Math.min(t, (h - px) / vx);
+  else if (vx < 0) t = Math.min(t, (-h - px) / vx);
+  if (vy > 0) t = Math.min(t, (h - py) / vy);
+  else if (vy < 0) t = Math.min(t, (-h - py) / vy);
+  return clamp(t, 0, 1);
+}
+
+/** Chebyshev norm: a point is inside the square of half-side h iff this is at most h. */
+export function squareNorm(x: number, y: number): number {
+  return Math.max(Math.abs(x), Math.abs(y));
+}
+
+/** Arctangent of t in [0, 1]: two half-angle reductions, then the series to t^21. */
+function atanUnit(t: number): number {
+  const r = t / (1 + Math.sqrt(1 + t * t));
+  const u = r / (1 + Math.sqrt(1 + r * r)); // |u| <= tan(π/16) ≈ 0.2
+  const u2 = u * u;
+  let s = 0;
+  for (let k = 21; k >= 3; k -= 2) s = u2 * (1 / k - s);
+  return 4 * u * (1 - s);
+}
+
+/** Deterministic `Math.atan2`: the angle of (x, y) in [-π, π]; 0 for the origin. */
+export function atan2(y: number, x: number): number {
+  const ax = Math.abs(x);
+  const ay = Math.abs(y);
+  if (ax === 0 && ay === 0) return 0;
+  let a = ay <= ax ? atanUnit(ay / ax) : HALF_PI - atanUnit(ax / ay);
+  if (x < 0) a = PI - a;
+  return y < 0 ? -a : a;
 }

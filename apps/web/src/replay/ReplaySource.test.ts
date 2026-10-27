@@ -24,7 +24,7 @@ interface Recorded {
  * cross chunk boundaries and keyframes.
  */
 function record(ticks = 420, chunkTicks = 150): Recorded {
-  const world = createWorld({ seed: 7, config: { arenaRadius: 25 } });
+  const world = createWorld({ seed: 7, config: { arenaHalfSize: 22 } });
   const chunks: Uint8Array[] = [];
   const recorder = new ReplayRecorder(world, { chunkTicks, onChunk: (b) => chunks.push(b) });
   const out: Recorded = { chunks, frames: [], turns: [], deaths: [], spawned: [] };
@@ -80,7 +80,7 @@ describe("ReplaySource", () => {
     expect(source.lastTick).toBe(rec.frames.length - 1);
     expect(source.endTick).toBe(source.lastTick);
     expect(source.desync).toBeUndefined();
-    expect(source.info).toMatchObject({ title: "test", arenaRadius: 25, tps: 10 });
+    expect(source.info).toMatchObject({ title: "test", arenaHalfSize: 22, tps: 10 });
     expect(source.snapshot(-1)).toBeUndefined();
     expect(source.snapshot(source.lastTick + 1)).toBeUndefined();
     expect(source.snapshot(1.5)).toBeUndefined();

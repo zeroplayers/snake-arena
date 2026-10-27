@@ -15,7 +15,7 @@ wheel or `+`/`-` to zoom.
 The renderer takes `RenderFrame`s (`src/types.ts`), not engine types, so an engine adapter is
 a plain mapping:
 
-- `tick`, `arenaRadius` (disc centred at the origin)
+- `tick`, `arenaHalfSize` (the arena is a square centred at the origin, this far along each axis)
 - `snakes[]`: `id`, `segments` (head first, any spacing), `angle` (radians from +x), `length`,
   optional `radius` (half-width) and `skin: { id?, color? }`
 - `food[]`: `x`, `y`, `size` (radius), optional `id` (enables grow-in / eaten animations) and `color`

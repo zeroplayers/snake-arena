@@ -336,7 +336,7 @@ export class BroadcastSource implements MatchSource {
     }
     this.snapshots.set(tick, {
       tick,
-      frame: { tick, arenaRadius: config.arenaRadius, snakes: renderSnakes, food },
+      frame: { tick, arenaHalfSize: config.arenaHalfSize, snakes: renderSnakes, food },
       snakes,
       deaths,
     });
@@ -367,7 +367,7 @@ export class BroadcastSource implements MatchSource {
     const vision = (config as { visionRadius?: number }).visionRadius;
     return {
       tps: TICK_RATE,
-      arenaRadius: config.arenaRadius,
+      arenaHalfSize: config.arenaHalfSize,
       visionRadius: vision ?? DEFAULT_VISION_RADIUS,
       liveDelay: this.options.liveDelay ?? DEFAULT_LIVE_DELAY,
       ...(this.options.title !== undefined && { title: this.options.title }),

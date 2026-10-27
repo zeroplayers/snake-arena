@@ -42,7 +42,7 @@ class FakeSocket extends EventTarget {
 
 /** A room: a world with spinning snakes and an encoder over it. */
 function room(stream = 1) {
-  const world = createWorld({ seed: 4, config: { arenaRadius: 60 } });
+  const world = createWorld({ seed: 4, config: { arenaHalfSize: 53 } });
   for (const id of ["a", "b", "c"]) spawnSnake(world, { id, author: `${id}-author` });
   const encoder = new BroadcastEncoder(world, {
     stream,
@@ -101,7 +101,11 @@ describe("BroadcastSource", () => {
     latest().deliver(r.keyframe());
     const source = await opening;
     expect(source.status).toBe("live");
-    expect(source.info).toMatchObject({ tps: 10, arenaRadius: 60, liveDelay: DEFAULT_LIVE_DELAY });
+    expect(source.info).toMatchObject({
+      tps: 10,
+      arenaHalfSize: 53,
+      liveDelay: DEFAULT_LIVE_DELAY,
+    });
     // The room sends no name of its own.
     expect(source.info.title).toBeUndefined();
     expect(source.firstTick).toBe(0);

@@ -6,7 +6,8 @@ import type { RngState } from "./rng.ts";
  * no shared references), so a world can be cloned, JSON-serialised or stored in a Durable
  * Object and resumed bit-identically.
  *
- * Coordinates: the arena is a disc of `config.arenaRadius` centred on (0, 0), y points up.
+ * Coordinates: the arena is a square of half-side `config.arenaHalfSize` centred on (0, 0), y
+ * points up.
  * Angles are radians, counter-clockwise from +x.
  */
 

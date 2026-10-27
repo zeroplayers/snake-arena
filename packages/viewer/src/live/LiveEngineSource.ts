@@ -136,7 +136,7 @@ export class LiveEngineSource implements MatchSource {
     const engineVision = (this.world.config as { visionRadius?: number }).visionRadius;
     this.info = {
       tps: TICK_RATE,
-      arenaRadius: this.world.config.arenaRadius,
+      arenaHalfSize: this.world.config.arenaHalfSize,
       visionRadius: options.visionRadius ?? engineVision ?? DEFAULT_VISION_RADIUS,
       ...(options.title !== undefined && { title: options.title }),
     };
@@ -370,7 +370,7 @@ export class LiveEngineSource implements MatchSource {
       tick,
       frame: {
         tick,
-        arenaRadius: world.config.arenaRadius,
+        arenaHalfSize: world.config.arenaHalfSize,
         snakes: renderSnakes,
         food: this.renderFood(world.food),
       },

@@ -14,13 +14,13 @@ const remainsValue = (world: World) =>
 describe("causes of death", () => {
   it("wall: head leaves the arena", () => {
     const world = quiet();
-    const r = world.config.arenaRadius;
-    place(world, { id: "a", x: r - 1, y: 0, angle: 0, mass: 40 });
+    const h = world.config.arenaHalfSize;
+    place(world, { id: "a", x: h - 1, y: 0, angle: 0, mass: 40 });
     step(world, { a: { turn: 0 } });
     expect(world.snakes).toHaveLength(0);
     expect(world.deaths).toMatchObject([{ id: "a", cause: "wall", killerId: null, tick: 1 }]);
     // Remains are pulled back inside so they can be eaten.
-    for (const f of world.food) expect(Math.hypot(f.x, f.y)).toBeLessThan(r);
+    for (const f of world.food) expect(Math.max(Math.abs(f.x), Math.abs(f.y))).toBeLessThan(h);
   });
 
   it("collision: head into another body, credited to its owner", () => {
@@ -81,10 +81,11 @@ describe("causes of death", () => {
   });
 
   it("the earliest contact during the move decides", () => {
-    // In one fast tick a's head would cross c's body (x = 98.5) and then the wall (x = 100).
+    // In one fast tick a's head would cross c's body (h - 1.5) and then the wall (x = h).
     const world = quiet({ speed: 6 });
-    place(world, { id: "c", x: 98.5, y: 3, angle: Math.PI / 2, mass: 200 });
-    place(world, { id: "a", x: 95, y: 0, angle: 0 });
+    const h = world.config.arenaHalfSize;
+    place(world, { id: "c", x: h - 1.5, y: 3, angle: Math.PI / 2, mass: 200 });
+    place(world, { id: "a", x: h - 5, y: 0, angle: 0 });
     step(world, {});
     expect(world.deaths).toMatchObject([{ id: "a", cause: "collision", killerId: "c" }]);
   });

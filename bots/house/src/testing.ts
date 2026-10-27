@@ -12,12 +12,12 @@ import {
   type Vec,
 } from "@zerosnake/sdk";
 
-export const WORLD_RADIUS = 100;
+export const WORLD_HALF_SIZE = 89;
 
 export function info(seed = 1): BotInfo {
   return {
     snakeId: "me",
-    worldRadius: WORLD_RADIUS,
+    worldHalfSize: WORLD_HALF_SIZE,
     visionRadius: 30,
     tickRate: 10,
     maxLifeTicks: 6000,
@@ -78,7 +78,7 @@ export function state(o: Partial<BotState> = {}): BotState {
     lifeTick: 0,
     snakes: [],
     food: [],
-    wallDistance: WORLD_RADIUS - Math.hypot(me.head.x, me.head.y),
+    wallDistance: WORLD_HALF_SIZE - Math.max(Math.abs(me.head.x), Math.abs(me.head.y)),
     ...o,
     self: me,
   };
@@ -91,13 +91,13 @@ export function act<M extends object>(bot: Bot<M>, s: BotState, seed = 1): BotAc
 }
 
 /**
- * Drives a bot through a tiny kinematic world: a disc of `worldRadius` with static bodies
+ * Drives a bot through a tiny kinematic world: a square of half-side `worldHalfSize` with static bodies
  * (radius 0.5) at `obstacles`, the engine's turning rule, no food. Returns the tick on which the
  * head touched a body or the wall, or `null` if it survived.
  */
 export function drive<M extends object>(
   bot: Bot<M>,
-  o: { obstacles: Vec[]; worldRadius: number; ticks: number; seed?: number; vision?: number },
+  o: { obstacles: Vec[]; worldHalfSize: number; ticks: number; seed?: number; vision?: number },
 ): number | null {
   const mem = bot.init?.(info(o.seed ?? 1)) ?? ({} as M);
   const { log } = createTickLog();
@@ -111,14 +111,14 @@ export function drive<M extends object>(
       lifeTick: t,
       self: me,
       snakes: seen.length ? [snake(seen, { head: null, angle: null })] : [],
-      wallDistance: o.worldRadius - Math.hypot(h.x, h.y),
+      wallDistance: o.worldHalfSize - Math.max(Math.abs(h.x), Math.abs(h.y)),
     });
     const action = bot.tick(s, mem, log);
     const turn = Math.max(-1, Math.min(1, Number(action.turn) || 0));
     const angle = normalizeAngle(me.angle - turn * me.turnRate);
     const head = { x: h.x + Math.cos(angle) * me.speed, y: h.y + Math.sin(angle) * me.speed };
     me = self({ head, angle });
-    if (Math.hypot(head.x, head.y) > o.worldRadius) return t;
+    if (Math.max(Math.abs(head.x), Math.abs(head.y)) > o.worldHalfSize) return t;
     for (const p of o.obstacles) if (Math.hypot(p.x - head.x, p.y - head.y) < 1) return t;
   }
   return null;

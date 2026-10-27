@@ -5,7 +5,7 @@ import { BundleCache, lifeStarter } from "./bundles.ts";
 
 const info: BotInfo = {
   snakeId: "me",
-  worldRadius: 1000,
+  worldHalfSize: 1000,
   visionRadius: 300,
   tickRate: 10,
   maxLifeTicks: 6000,

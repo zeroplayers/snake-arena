@@ -8,7 +8,7 @@ import {
   type SnakeView,
   type Vec,
 } from "@zerosnake/sdk";
-import { arenaRadius, bestFood, collectObstacles, steer } from "./common.ts";
+import { arenaHalfSize, bestFood, collectObstacles, steer } from "./common.ts";
 
 /** Only snakes this much smaller are hunted, so a botched cut-off still wins the head-on. */
 const PREY_RATIO = 0.8;
@@ -34,7 +34,7 @@ type Visible = SnakeView & { head: Vec; angle: number };
 function cutOff(state: BotState): Vec | undefined {
   const { self } = state;
   if (self.segments.length < MIN_HUNT_SEGMENTS) return undefined;
-  const wall = arenaRadius(state) - WALL_MARGIN;
+  const wall = arenaHalfSize(state) - WALL_MARGIN;
   let best: Vec | undefined;
   let bestD = HUNT_RANGE;
   for (const snake of state.snakes) {
@@ -44,7 +44,7 @@ function cutOff(state: BotState): Vec | undefined {
     const d = distance(self.head, prey.head);
     if (d >= bestD) continue;
     const aim = project(prey.head, prey.angle, LEAD);
-    if (Math.hypot(aim.x, aim.y) > wall) continue;
+    if (Math.max(Math.abs(aim.x), Math.abs(aim.y)) > wall) continue;
     // Only cuts we can make without turning around.
     if (Math.abs(angleDiff(self.angle, angleTo(self.head, aim))) > Math.PI / 2) continue;
     bestD = d;

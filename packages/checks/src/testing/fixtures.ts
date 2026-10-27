@@ -77,11 +77,12 @@ export const BAD_BOTS = {
   noTick: "export default { init() { return {}; } };",
   async: botWithTick("return { turn: 0 };", "async function later() {}"),
   /**
-   * init() throws on some lives: with the test seeds (101, 202, 303) the first life loads, so the
-   * load check passes, and the second throws.
+   * init() throws on some lives: with the test seeds (101, 202, 303) the load check's life loads,
+   * so it passes, and a later one throws. It drives straight into the wall, so it has many lives
+   * (and life seeds) even in a short check.
    */
   flakyInit: `export default {
-    init(info) { if (info.seed % 3 === 0) throw new Error("bad seed " + info.seed); return {}; },
-    tick() { return { turn: 0.3 }; },
+    init(info) { if (info.seed % 3 === 1) throw new Error("bad seed " + info.seed); return {}; },
+    tick() { return { turn: 0 }; },
   };`,
 };

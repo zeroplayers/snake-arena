@@ -17,11 +17,15 @@ export function steerTo(snake: Snake, heading: number, turnRate: number): number
 /** Spins on the spot forever. */
 export const circle: Policy = () => ({ turn: 1 });
 
-/** Heads for the nearest pellet it can reach without orbiting it, turning back from the wall. */
+/**
+ * Heads for the nearest pellet it can reach without orbiting it, turning back from the wall
+ * (pellets beyond where it turns back are left alone, or it would dither at that line).
+ */
 export const farm: Policy = (snake, world) => {
   const c = world.config;
   const { x, y } = snake.head;
-  if (Math.hypot(x, y) > c.arenaRadius * 0.85) {
+  const band = c.arenaHalfSize * 0.85;
+  if (Math.max(Math.abs(x), Math.abs(y)) > band) {
     return { turn: steerTo(snake, Math.atan2(-y, -x), c.turnRate) };
   }
   // A pellet at distance d, bearing φ off the heading, lies on a circle of radius d / (2 sin φ)
@@ -32,7 +36,7 @@ export const farm: Policy = (snake, world) => {
   let heading = snake.angle;
   for (const f of world.food) {
     const d = Math.hypot(f.x - x, f.y - y);
-    if (d >= best) continue;
+    if (d >= best || Math.max(Math.abs(f.x), Math.abs(f.y)) > band) continue;
     const bearing = Math.atan2(f.y - y, f.x - x);
     const phi = Math.abs(Math.sin(bearing - snake.angle));
     if (d + reach < 2 * turnRadius * phi) continue;
@@ -48,7 +52,7 @@ export function wander(seed: number): Policy {
   return (snake, world) => {
     const c = world.config;
     const { x, y } = snake.head;
-    if (Math.hypot(x, y) > c.arenaRadius * 0.85) {
+    if (Math.max(Math.abs(x), Math.abs(y)) > c.arenaHalfSize * 0.85) {
       return { turn: steerTo(snake, Math.atan2(-y, -x), c.turnRate) };
     }
     return { turn: rng.range(-1, 1), boost: rng.next() < 0.05 };

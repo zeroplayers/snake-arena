@@ -21,8 +21,9 @@
   "compatibility_flags": ["nodejs_compat"],
   // Workers Logs: structured request logs (src/server/edge.ts) and invocation logs.
   "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": true } },
-  // Rating job every minute (src/server/ratings.ts), arena liveness check every five
-  // (src/server/liveness.ts); src/server.ts dispatches on the expression. Locally:
+  // Rating job every minute (src/server/ratings.ts), arena liveness check and revoked session
+  // pruning every five (src/server/liveness.ts, session-store.ts); src/server.ts dispatches on the
+  // expression. Locally:
   // curl "http://localhost:3000/cdn-cgi/handler/scheduled?cron=*+*+*+*+*" (or ?cron=*/5+*+*+*+*).
   "triggers": { "crons": ["* * * * *", "*/5 * * * *"] },
 
@@ -130,9 +131,8 @@
           "migrations_dir": "migrations"
         }
       ],
-      // PLACEHOLDER until the namespace exists (the deploy workflow refuses this id):
-      // `pnpm exec wrangler kv namespace create zerosnake-staging-auth`, then paste its id here.
-      "kv_namespaces": [{ "binding": "AUTH_KV", "id": "00000000-0000-0000-0000-000000000000" }],
+      // `wrangler kv namespace create zerosnake-staging-auth` (see README "Staging").
+      "kv_namespaces": [{ "binding": "AUTH_KV", "id": "17570618d89f4dbf90c5b691193a14bb" }],
       "r2_buckets": [
         { "binding": "BUNDLES", "bucket_name": "zerosnake-staging-bundles" },
         { "binding": "SOURCES", "bucket_name": "zerosnake-staging-sources" },

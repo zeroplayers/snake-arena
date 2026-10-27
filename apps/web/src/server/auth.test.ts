@@ -5,6 +5,8 @@ import { CookieJar, type FakeGithubUser, mockGithub } from "../test/github";
 import { type Auth, CLI_CLIENT_ID, createAuth, isValidUsername } from "./auth";
 import { type CliIdentity, type CliToken, hashToken } from "./cli-auth";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 const BASE = "http://localhost:3000";
 
 const ada: FakeGithubUser = { id: 1, login: "Ada", name: "Ada L.", email: "ada@example.com" };
@@ -216,24 +218,79 @@ describe("web sessions (KV, not the D1 that apps/arena shares)", () => {
     const dump = await dumpTables(d1.db);
     expect(dump).toContain("ada@example.com");
     expect(dump).not.toContain(session?.token);
-    expect(dump).not.toContain('"sessions"');
+    expect(dump).toContain('"sessions":[]');
   });
 
-  it("are deleted from KV on sign-out", async () => {
+  it("are deleted from KV on sign-out, and revoked in D1 by hash only", async () => {
     const jar = await signUp(ada);
+    const [session] = await webSessions(d1.kv);
     const cookie = jar.header();
     expect((await post("/sign-out", {}, { jar })).status).toBe(200);
     expect(await webSessions(d1.kv)).toEqual([]);
     expect(await getSessionByCookie(cookie)).toBeNull();
+    const dump = await dumpTables(d1.db);
+    expect(dump).toContain(await hashToken(session?.token ?? ""));
+    expect(dump).not.toContain(session?.token);
   });
 
-  it("are all deleted when the user revokes them", async () => {
+  /** Moves the session's expiry back so that the next read refreshes it (`updateAge` is a day). */
+  async function ageSession(token: string, raw: string) {
+    const value = JSON.parse(raw);
+    value.session.expiresAt = new Date(Date.now() + 28 * DAY_MS).toISOString();
+    await d1.kv.put(token, JSON.stringify(value));
+    return value.session.expiresAt as string;
+  }
+  const storedExpiry = async (token: string) =>
+    (await d1.kv.get<{ session: { expiresAt: string } }>(token, "json"))?.session.expiresAt;
+
+  it("get refreshed when a day old (what a stale copy must not get)", async () => {
+    const jar = await signUp(ada);
+    const [session] = await webSessions(d1.kv);
+    const token = session?.token ?? "";
+    const aged = await ageSession(token, (await d1.kv.get(token)) ?? "");
+    expect(await getSession({ jar })).not.toBeNull();
+    expect(Date.parse((await storedExpiry(token)) ?? "")).toBeGreaterThan(Date.parse(aged));
+  });
+
+  it("stay signed out though another location still serves the KV copy", async () => {
+    const jar = await signUp(ada);
+    const [session] = await webSessions(d1.kv);
+    const token = session?.token ?? "";
+    const raw = (await d1.kv.get(token)) ?? "";
+    const cookie = jar.header();
+    expect((await post("/sign-out", {}, { jar })).status).toBe(200);
+
+    // A stale copy, old enough that reading it would refresh it for another 30 days.
+    const aged = await ageSession(token, raw);
+    expect(await getSessionByCookie(cookie)).toBeNull();
+    expect(await storedExpiry(token)).toBe(aged);
+  });
+
+  it("are all revoked by sign-out everywhere, even ones the active-sessions list missed", async () => {
     const laptop = await signUp(ada);
     const phone = await signInWithGithub(ada);
-    expect(await webSessions(d1.kv)).toHaveLength(2);
+    const sessions = await webSessions(d1.kv);
+    expect(sessions).toHaveLength(2);
+    const phoneToken = sessions.find((s) => phone.header().includes(s.token))?.token ?? "";
+    const userId = sessions[0]?.userId;
+
+    // The list is read-modify-write on an eventually consistent store: drop the phone from it.
+    const listKey = `active-sessions-${userId}`;
+    const list = (await d1.kv.get<{ token: string }[]>(listKey, "json")) ?? [];
+    await d1.kv.put(listKey, JSON.stringify(list.filter((s) => s.token !== phoneToken)));
+
     expect((await post("/revoke-sessions", {}, { jar: laptop })).status).toBe(200);
-    expect(await webSessions(d1.kv)).toEqual([]);
+    expect(await d1.kv.get(phoneToken)).not.toBeNull();
     expect(await getSession({ jar: phone })).toBeNull();
+    expect(await getSession({ jar: laptop })).toBeNull();
+
+    // Signing in again works.
+    expect((await getSession({ jar: await signInWithGithub(ada) }))?.user.id).toBe(userId);
+  });
+
+  it("can't be revoked selectively by the KV list (`/revoke-other-sessions` is off)", async () => {
+    const jar = await signUp(ada);
+    expect((await post("/revoke-other-sessions", {}, { jar })).status).toBe(404);
   });
 
   it("see username claims and bans at once, though both are written to D1 directly", async () => {

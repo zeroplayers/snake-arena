@@ -68,6 +68,14 @@ jobs:
             exit 1
           fi
 
+      # Build the site before anything changes: migrations run before the new site is live, so
+      # the old site serves against the new schema until "Deploy web"; keep that window short.
+      - name: Build web
+        working-directory: apps/web
+        env:
+          CLOUDFLARE_ENV: staging
+        run: pnpm build
+
       # Arena first: the site binds to its Durable Objects by script name.
       - name: Deploy arena
         working-directory: apps/arena
@@ -78,13 +86,11 @@ jobs:
         working-directory: apps/web
         run: pnpm exec wrangler d1 migrations apply DB --env staging --remote
 
-      - name: Build and deploy web
+      - name: Deploy web
         working-directory: apps/web
         env:
           CLOUDFLARE_ENV: staging
-        run: |
-          pnpm build
-          pnpm exec wrangler deploy
+        run: pnpm exec wrangler deploy
 
       - name: Smoke check
         run: |

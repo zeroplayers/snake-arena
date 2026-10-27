@@ -5,6 +5,10 @@ npx zerosnake init my-snake    # new bot project from template/ (offline)
 cd my-snake
 npx zerosnake sim              # local match in the sandbox, opens the viewer
 npx zerosnake test             # the deploy checks (#13)
+npx zerosnake login            # device flow in the browser
+npx zerosnake deploy --create  # upload; live once the server's checks pass
+npx zerosnake status           # bots, active versions, ratings, deploys left today
+npx zerosnake logs             # a version's check report and recent lives
 ```
 
 `--help` on any command lists its options. Exit codes: `0` ok, `1` the bot failed (didn't
@@ -36,6 +40,56 @@ zerosnake sim [--vs easy,hard,./other-bot.ts] [--seed N] [--ticks N] [--headless
 On an M1 Max laptop: `init` ~0.2 s, viewer's first ticks ~0.5 s after `sim` starts, a headless
 3000-tick match (5 minutes of game time) against the four house bots ~4 s (~1 s with
 `--native-house`).
+
+## Remote commands
+
+`login`, `logout`, `deploy`, `status` and `logs` talk to the site's API (`apps/web`, types from
+`@zerosnake/web/shared`, bundled into `dist/cli.js`). The server is `--url`, else `ZEROSNAKE_URL`,
+else `https://arena.surninsynergy.dev` (staging, until there's a final domain); plain `http` is
+allowed only for localhost.
+
+- **`login`**: RFC 8628 device flow. `POST /api/auth/device/code` (client `zerosnake-cli`), print
+  the code, open `verification_uri_complete`, poll `POST /api/auth/cli/token` at the given interval
+  (`slow_down` adds 5 s; network errors and 5xx keep polling until the code expires). The `zsk_…`
+  token goes to `credentials.json` in the config folder (`~/Library/Application Support/zerosnake`,
+  `%APPDATA%\zerosnake`, `$XDG_CONFIG_HOME/zerosnake` or `~/.config/zerosnake`;
+  `ZEROSNAKE_CONFIG_DIR` overrides), one per server, file `0600` in a `0700` folder, written to a
+  temporary file and renamed. Tokens are never printed. A new login revokes the token it replaces;
+  a token it couldn't finish with (`GET /api/auth/cli/me` failing after retries) is revoked too.
+  `ZEROSNAKE_TOKEN` (CI) is used instead of the stored token when set.
+- **`logout`**: `POST /api/auth/cli/logout`, then deletes the token here even if the server can't be
+  reached (and says to revoke it at `/settings`).
+- **`deploy`**: `GET /api/me` first (bot exists? quota left? the server's limits), then bundles
+  with `bundleBot` exactly like `sim`, collects the sources (everything under `src/` except hidden
+  files, plus other project files the bundle imports, minus a vendored SDK; text only), and runs
+  the local checks (`src/artifact.ts`: the deploy API's limits and path rules, then loading in the
+  sandbox; the same as `test`). The upload always carries an `Idempotency-Key` (a UUID per run,
+  reused by every retry): network errors, 5xx, a gateway's 429 and `409 deploy_in_progress` are
+  retried with backoff for up to 90 s, which outlasts the API's one-minute takeover of a deploy
+  that died half way. Then it polls `GET /api/bots/:bot/versions/:n` every 2 s (up to 10 minutes)
+  until `ready` or `rejected`, and prints the check report. Still `validating` after that, it exits
+  1 and says the checks may not run on this server yet (#22; the API has no hint for that). The
+  local upload-size check measures the exact body sent, `meta` included.
+  The bot is `--bot <slug>`, else `"zerosnake": { "bot": "<slug>" }` in package.json, else the
+  package name as a slug; `--create` creates it (`POST /api/bots`). `--entry <file>` picks the
+  entry file (`sim` and `test` call that `--bot`).
+- **`status`**: `GET /api/me` (bots, active and latest version, quota) plus the public profile
+  `GET /api/users/:username` for each active version's rating (mean ± CI over N lives, ranked from
+  30) and lives played.
+- **`logs`**: the version (`--version`, else active, else latest), its status, message and check
+  report; then `GET /api/bots/:bot/versions/:n/lives?limit=20[&deaths=1]`, an endpoint that doesn't
+  exist yet (#25; the shape the CLI expects is `LifeEntry` in `src/commands/logs.ts`). Until then it
+  links the bot's page, which lists recent lives.
+
+Every API failure becomes a plain-language message (`explain` in `src/remote/api.ts`): the
+server's `message` plus what to do, for each `ApiErrorBody` code and for non-JSON answers. Redirects
+are never followed (the token stays with the server it's for) and never retried: they're reported
+as a wrong address or a misconfigured server.
+
+Tests: `src/remote.test.ts` runs the commands against `FakeArena` (an in-memory API with fault
+injection); `src/remote.integration.test.ts` runs login → deploy → status → logs → logout against
+apps/web's real auth and CLI API (D1/R2/queue through wrangler's platform proxy), with the device
+approval and the checks consumer (#22) done on the database.
 
 ## `init` and dependencies
 

@@ -27,7 +27,7 @@ function run(cmd: string, args: string[], cwd: string) {
  * monorepo is reachable from there.
  */
 describe("the packed CLI", () => {
-  it("installs and runs init and sim with nothing but its own files", () => {
+  it("installs and runs init, sim and help with nothing but its own files", () => {
     const root = packageRoot();
     const tmp = makeProject({ "package.json": JSON.stringify({ name: "outside", private: true }) });
 
@@ -59,6 +59,12 @@ describe("the packed CLI", () => {
     const version = run("node", [bin, "--version"], tmp);
     expect(version.err).toBe("");
     expect(version.out.trim()).toBe(pkg.version);
+    for (const command of ["login", "logout", "deploy", "status", "logs"]) {
+      const help = run("node", [bin, command, "--help"], tmp);
+      expect(help.code, help.err).toBe(0);
+      expect(help.err).toBe("");
+      expect(help.out).toContain(`Usage: zerosnake ${command}`);
+    }
 
     const init = run("node", [bin, "init", "my-bot"], tmp);
     expect(init.code, init.err).toBe(0);

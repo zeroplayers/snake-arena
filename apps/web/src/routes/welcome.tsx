@@ -1,5 +1,6 @@
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
+import { SignInTerms } from "../components/SignInTerms";
 import { authClient } from "../lib/auth-client";
 
 interface WelcomeSearch {
@@ -88,6 +89,7 @@ function Welcome() {
             {pending ? "Saving…" : "Continue"}
           </button>
         </div>
+        <SignInTerms action="continuing" />
       </form>
     </section>
   );

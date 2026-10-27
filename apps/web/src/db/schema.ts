@@ -41,29 +41,39 @@ const updatedAt = () =>
 
 // ─── Better Auth ────────────────────────────────────────────────────────────────────────────────
 
-export const users = sqliteTable("users", {
-  id: id(),
-  name: text("name").notNull(),
-  email: text("email").notNull().unique(),
-  emailVerified: integer("email_verified", { mode: "boolean" }).notNull().default(false),
-  image: text("image"),
-  /** Claimed once after the first sign-in (`/username/claim`), lowercase. `null` until then. */
-  username: text("username").unique(),
-  displayUsername: text("display_username"),
-  /** GitHub login at sign-in, used to suggest a username. */
-  githubLogin: text("github_login"),
-  /**
-   * Set by an admin (`src/server/moderation.ts`); `null` while in good standing. A banned user
-   * can sign in and look, but can't deploy, create or change bots, or sign in the CLI, and none
-   * of their bots play (their `ready` versions were archived by the ban).
-   */
-  bannedAt: integer("banned_at", { mode: "timestamp_ms" }),
-  banReason: text("ban_reason"),
-  /** Web sessions created up to this moment are revoked (`/revoke-sessions`, "sign out everywhere"). */
-  sessionsRevokedAt: integer("sessions_revoked_at", { mode: "timestamp_ms" }),
-  createdAt: createdAt(),
-  updatedAt: updatedAt(),
-});
+export const users = sqliteTable(
+  "users",
+  {
+    id: id(),
+    name: text("name").notNull(),
+    email: text("email").notNull().unique(),
+    emailVerified: integer("email_verified", { mode: "boolean" }).notNull().default(false),
+    image: text("image"),
+    /** Claimed once after the first sign-in (`/username/claim`), lowercase. `null` until then. */
+    username: text("username").unique(),
+    displayUsername: text("display_username"),
+    /** GitHub login at sign-in, used to suggest a username. */
+    githubLogin: text("github_login"),
+    /**
+     * Set by an admin (`src/server/moderation.ts`); `null` while in good standing. A banned user
+     * can sign in and look, but can't deploy, create or change bots, or sign in the CLI, and none
+     * of their bots play (their `ready` versions were archived by the ban).
+     */
+    bannedAt: integer("banned_at", { mode: "timestamp_ms" }),
+    banReason: text("ban_reason"),
+    /** Web sessions created up to this moment are revoked (`/revoke-sessions`, "sign out everywhere"). */
+    sessionsRevokedAt: integer("sessions_revoked_at", { mode: "timestamp_ms" }),
+    /**
+     * The user deleted their account (`src/shared/account.ts`): the row is a scrubbed tombstone
+     * until the purge job erases it with everything it owns. `null` for a live account.
+     */
+    deletedAt: integer("deleted_at", { mode: "timestamp_ms" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  // The purge job's queue of tombstones.
+  (t) => [index("users_deleted_at_idx").on(t.deletedAt).where(sql`deleted_at IS NOT NULL`)],
+);
 
 /**
  * Unused: web sessions live in KV, bound to apps/web only (src/server/session-store.ts, #50).

@@ -85,6 +85,13 @@
       "when": 1793124011428,
       "tag": "0011_web_sessions_to_kv",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1793131268632,
+      "tag": "0012_account_deletion",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,6 @@
+import { DELETE_ACCOUNT_STATEMENTS, deleteAccountParams, PURGE_SQL } from "@zerosnake/web/shared";
 import { afterEach, describe, expect, it } from "vitest";
+import { insertLives } from "./db.ts";
 import { DAY_MS, type MatchmakerConfig } from "./matchmaker/config.ts";
 import type { MatchmakerStatus, TickReport } from "./matchmaker.ts";
 import type { LifeDrop, LifeResult, LifeTicket, RoomStatus } from "./protocol.ts";
@@ -332,6 +334,52 @@ describe("MatchmakerDO", () => {
     await d1("UPDATE users SET banned_at = NULL WHERE id = 'u-user'");
     await mm("tick");
     expect((await status()).playable).toBe(3);
+  }, 60_000);
+
+  it("a deleted account's bots stop at the next poll, and a late life of theirs is dropped", async () => {
+    await setup({ openThreshold: 2, reconcileMs: DAY_MS });
+    await seedBots([
+      { author: "u-gone", bot: "gone" },
+      { author: "u-gone", bot: "gone2" },
+      { author: "u-a", bot: "a" },
+      { author: "u-b", bot: "b" },
+    ]);
+    await settle();
+    const [r] = await openRooms();
+    if (!r) throw new Error("no room");
+    const goneLife = (await lives(r)).find((l) => l.author === "u-gone");
+    if (!goneLife) throw new Error("no u-gone life");
+
+    // Step 1 of the deletion, exactly as the site runs it, and no hint from the site.
+    const db = await harness().d1();
+    const at = Date.now();
+    await db.batch(
+      DELETE_ACCOUNT_STATEMENTS.map((s) =>
+        db.prepare(s).bind(...deleteAccountParams(s, "u-gone", at)),
+      ),
+    );
+    await mm("tick");
+    const leaving = (await lives(r)).filter((l) => l.leaving).map((l) => l.versionId);
+    expect(leaving).toEqual([goneLife.versionId]);
+    expect((await step(r)).joined).toEqual([]);
+    expect((await status()).playable).toBe(2);
+
+    // Step 2 erases the rows. The room reports the retired life only now: dropped, not an error.
+    const ids = JSON.stringify([versionId("gone"), versionId("gone2")]);
+    await db.prepare(PURGE_SQL.deleteVersions).bind(ids).run();
+    await db.prepare(PURGE_SQL.deleteUser).bind("u-gone").run();
+    const late = ended(
+      { lifeId: goneLife.lifeId, versionId: goneLife.versionId, author: "u-gone", source: "queue" },
+      r,
+      "retired",
+    );
+    await insertLives(db, [late]);
+    const row = await db.prepare("SELECT id FROM lives WHERE id = ?").bind(goneLife.lifeId).first();
+    expect(row).toBeNull();
+    await mm("lifeEnded", late);
+    await mm("tick");
+    expect((await status()).playable).toBe(2);
+    expect((await step(r)).joined.map((t) => t.author)).not.toContain("u-gone");
   }, 60_000);
 
   it("a quarantine reported by a room, or found when issuing, stops the version at once", async () => {

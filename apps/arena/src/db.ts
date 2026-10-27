@@ -47,6 +47,8 @@ export function lifeRow(r: LifeResult): LifeRow | null {
 /**
  * Inserts finished lives. Idempotent: a life already written is left alone. `evicted` lives are
  * skipped: `lives.death_cause` doesn't allow the value, and they mustn't count toward ratings.
+ * So is a life of a version deleted meanwhile (its owner deleted the account, apps/web
+ * `src/shared/account.ts`): the foreign key would fail the insert on every retry.
  */
 export async function insertLives(db: D1Database, results: LifeResult[]): Promise<void> {
   const rows = results.map(lifeRow).filter((row) => row !== null);
@@ -57,7 +59,8 @@ export async function insertLives(db: D1Database, results: LifeResult[]): Promis
         .prepare(
           `INSERT INTO lives (id, version_id, room, start_tick, end_tick, score, length_max, kills,
             death_cause, killer, replay_key, trace_key, started_at, ended_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+           SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
+           WHERE EXISTS (SELECT 1 FROM versions WHERE id = ?2) ON CONFLICT(id) DO NOTHING`,
         )
         .bind(
           row.id,

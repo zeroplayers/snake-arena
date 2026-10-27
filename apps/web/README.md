@@ -344,3 +344,40 @@ ones whose bot hasn't used its `livesPerBotPerDay` lives today. With no `ready` 
 `arena.liveness`, at level `error` with `alert: "no_lives"` when stalled, so a Workers Logs alert
 works as well. Locally, trigger it with
 `curl "http://localhost:3000/cdn-cgi/handler/scheduled?cron=*/5+*+*+*+*"`.
+
+## Legal pages and data rights
+
+`/terms`, `/acceptable-use` and `/privacy` (cookie list included) are plain routes in
+`src/routes/`. The operator's name, address, contact email, governing law and courts are
+placeholders in [`src/legal.ts`](src/legal.ts), together with the "last updated" date. The
+Privacy Policy describes what the code stores: when that changes (a new table, column, cookie,
+log field, metric or processor), update the page in the same pull request.
+
+On `/settings`, signed-in users can:
+
+- **Download my data**: `GET /api/account/export`, one JSON file streamed from D1 and KV
+  (`src/server/account.ts`), with links to each version's bundle and sources
+  (`GET /api/account/files/:versionId/bundle|source`, owner only).
+- **Delete my account**: `POST /api/account/delete` with the username typed as confirmation.
+  Step 1 runs at once, as one D1 batch (`DELETE_ACCOUNT_STATEMENTS` in
+  `src/shared/account.ts`): the user row becomes a scrubbed tombstone (`users.deleted_at`), the
+  GitHub link, CLI tokens and device codes are deleted, sessions are revoked and the bots
+  archived, so the matchmaker stops them at its next poll. Step 2 is the 5-minute cron
+  (`purgeDeletedAccounts`), 15 minutes later: lives and their traces, versions with their bundles
+  and sources, then the user row. Other players' lives keep `killer` pointing at the deleted
+  version ("a deleted bot"); the moderation log keeps its ids. The same cron deletes expired CLI
+  tokens, and device codes and OAuth state an hour after they expire
+  (`pruneExpiredCredentials`).
+
+### Web Analytics
+
+Cloudflare Web Analytics is cookieless, so it needs no consent banner. The root layout loads its
+beacon when `CF_BEACON_TOKEN` (a `vars` entry in `wrangler.jsonc`, per environment; public, not
+a secret) is set and `ENVIRONMENT` isn't `development`; never on `/device`, whose URL carries the
+CLI's one-time code. To turn it on: dashboard → **Analytics & Logs → Web Analytics → Add a
+site**, enter the hostname (`arena.surninsynergy.dev`), choose the manual JavaScript snippet,
+copy the `token` value out of it into `CF_BEACON_TOKEN` under `env.staging.vars`, and deploy.
+(Enabling automatic setup for the proxied zone instead makes Cloudflare inject the same beacon
+itself; then leave `CF_BEACON_TOKEN` empty so it isn't loaded twice.) If the site ever sends a
+Content-Security-Policy, allow `https://static.cloudflareinsights.com` (script) and
+`https://cloudflareinsights.com` (connect).

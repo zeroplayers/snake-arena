@@ -10,12 +10,15 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AcceptableUseRouteImport } from './routes/acceptable-use'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as BotsRouteImport } from './routes/bots'
 import { Route as DeviceRouteImport } from './routes/device'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as LeaderboardRouteImport } from './routes/leaderboard'
+import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as TermsRouteImport } from './routes/terms'
 import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as AtChar123usernameChar125IndexRouteImport } from './routes/@{$username}/index'
 import { Route as AtChar123usernameChar125BotRouteImport } from './routes/@{$username}/$bot'
@@ -25,16 +28,24 @@ import { Route as ApiMeRouteImport } from './routes/api/me'
 import { Route as DocsIndexRouteImport } from './routes/docs.index'
 import { Route as DocsSlugRouteImport } from './routes/docs.$slug'
 import { Route as ReplayIdRouteImport } from './routes/replay.$id'
+import { Route as ApiAccountDeleteRouteImport } from './routes/api/account/delete'
+import { Route as ApiAccountExportRouteImport } from './routes/api/account/export'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiUsersUsernameRouteImport } from './routes/api/users/$username'
 import { Route as ApiBotsBotVersionsRouteImport } from './routes/api/bots/$bot/versions'
 import { Route as ApiLivesIdTraceRouteImport } from './routes/api/lives/$id/trace'
+import { Route as ApiAccountFilesVersionIdKindRouteImport } from './routes/api/account/files/$versionId/$kind'
 import { Route as ApiBotsBotVersionsNRouteImport } from './routes/api/bots/$bot/versions/$n'
 import { Route as ApiBotsBotVersionsNLivesRouteImport } from './routes/api/bots/$bot/versions/$n/lives'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AcceptableUseRoute = AcceptableUseRouteImport.update({
+  id: '/acceptable-use',
+  path: '/acceptable-use',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminRoute = AdminRouteImport.update({
@@ -62,9 +73,19 @@ const LeaderboardRoute = LeaderboardRouteImport.update({
   path: '/leaderboard',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PrivacyRoute = PrivacyRouteImport.update({
+  id: '/privacy',
+  path: '/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TermsRoute = TermsRouteImport.update({
+  id: '/terms',
+  path: '/terms',
   getParentRoute: () => rootRouteImport,
 } as any)
 const WelcomeRoute = WelcomeRouteImport.update({
@@ -114,6 +135,16 @@ const ReplayIdRoute = ReplayIdRouteImport.update({
   path: '/replay/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAccountDeleteRoute = ApiAccountDeleteRouteImport.update({
+  id: '/api/account/delete',
+  path: '/api/account/delete',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAccountExportRoute = ApiAccountExportRouteImport.update({
+  id: '/api/account/export',
+  path: '/api/account/export',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
@@ -134,6 +165,12 @@ const ApiLivesIdTraceRoute = ApiLivesIdTraceRouteImport.update({
   path: '/api/lives/$id/trace',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAccountFilesVersionIdKindRoute =
+  ApiAccountFilesVersionIdKindRouteImport.update({
+    id: '/api/account/files/$versionId/$kind',
+    path: '/api/account/files/$versionId/$kind',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiBotsBotVersionsNRoute = ApiBotsBotVersionsNRouteImport.update({
   id: '/$n',
   path: '/$n',
@@ -148,12 +185,15 @@ const ApiBotsBotVersionsNLivesRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/acceptable-use': typeof AcceptableUseRoute
   '/admin': typeof AdminRoute
   '/bots': typeof BotsRoute
   '/device': typeof DeviceRoute
   '/docs': typeof DocsRouteWithChildren
   '/leaderboard': typeof LeaderboardRoute
+  '/privacy': typeof PrivacyRoute
   '/settings': typeof SettingsRoute
+  '/terms': typeof TermsRoute
   '/welcome': typeof WelcomeRoute
   '/@{$username}/$bot': typeof AtChar123usernameChar125BotRoute
   '/api/bots': typeof ApiBotsRouteWithChildren
@@ -163,20 +203,26 @@ export interface FileRoutesByFullPath {
   '/replay/$id': typeof ReplayIdRoute
   '/@{$username}/': typeof AtChar123usernameChar125IndexRoute
   '/docs/': typeof DocsIndexRoute
+  '/api/account/delete': typeof ApiAccountDeleteRoute
+  '/api/account/export': typeof ApiAccountExportRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
   '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
   '/api/lives/$id/trace': typeof ApiLivesIdTraceRoute
+  '/api/account/files/$versionId/$kind': typeof ApiAccountFilesVersionIdKindRoute
   '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRouteWithChildren
   '/api/bots/$bot/versions/$n/lives': typeof ApiBotsBotVersionsNLivesRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/acceptable-use': typeof AcceptableUseRoute
   '/admin': typeof AdminRoute
   '/bots': typeof BotsRoute
   '/device': typeof DeviceRoute
   '/leaderboard': typeof LeaderboardRoute
+  '/privacy': typeof PrivacyRoute
   '/settings': typeof SettingsRoute
+  '/terms': typeof TermsRoute
   '/welcome': typeof WelcomeRoute
   '/@{$username}/$bot': typeof AtChar123usernameChar125BotRoute
   '/api/bots': typeof ApiBotsRouteWithChildren
@@ -186,22 +232,28 @@ export interface FileRoutesByTo {
   '/replay/$id': typeof ReplayIdRoute
   '/@{$username}': typeof AtChar123usernameChar125IndexRoute
   '/docs': typeof DocsIndexRoute
+  '/api/account/delete': typeof ApiAccountDeleteRoute
+  '/api/account/export': typeof ApiAccountExportRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
   '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
   '/api/lives/$id/trace': typeof ApiLivesIdTraceRoute
+  '/api/account/files/$versionId/$kind': typeof ApiAccountFilesVersionIdKindRoute
   '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRouteWithChildren
   '/api/bots/$bot/versions/$n/lives': typeof ApiBotsBotVersionsNLivesRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/acceptable-use': typeof AcceptableUseRoute
   '/admin': typeof AdminRoute
   '/bots': typeof BotsRoute
   '/device': typeof DeviceRoute
   '/docs': typeof DocsRouteWithChildren
   '/leaderboard': typeof LeaderboardRoute
+  '/privacy': typeof PrivacyRoute
   '/settings': typeof SettingsRoute
+  '/terms': typeof TermsRoute
   '/welcome': typeof WelcomeRoute
   '/@{$username}/$bot': typeof AtChar123usernameChar125BotRoute
   '/api/bots': typeof ApiBotsRouteWithChildren
@@ -211,10 +263,13 @@ export interface FileRoutesById {
   '/replay/$id': typeof ReplayIdRoute
   '/@{$username}/': typeof AtChar123usernameChar125IndexRoute
   '/docs/': typeof DocsIndexRoute
+  '/api/account/delete': typeof ApiAccountDeleteRoute
+  '/api/account/export': typeof ApiAccountExportRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
   '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
   '/api/lives/$id/trace': typeof ApiLivesIdTraceRoute
+  '/api/account/files/$versionId/$kind': typeof ApiAccountFilesVersionIdKindRoute
   '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRouteWithChildren
   '/api/bots/$bot/versions/$n/lives': typeof ApiBotsBotVersionsNLivesRoute
 }
@@ -222,12 +277,15 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/acceptable-use'
     | '/admin'
     | '/bots'
     | '/device'
     | '/docs'
     | '/leaderboard'
+    | '/privacy'
     | '/settings'
+    | '/terms'
     | '/welcome'
     | '/@{$username}/$bot'
     | '/api/bots'
@@ -237,20 +295,26 @@ export interface FileRouteTypes {
     | '/replay/$id'
     | '/@{$username}/'
     | '/docs/'
+    | '/api/account/delete'
+    | '/api/account/export'
     | '/api/auth/$'
     | '/api/users/$username'
     | '/api/bots/$bot/versions'
     | '/api/lives/$id/trace'
+    | '/api/account/files/$versionId/$kind'
     | '/api/bots/$bot/versions/$n'
     | '/api/bots/$bot/versions/$n/lives'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/acceptable-use'
     | '/admin'
     | '/bots'
     | '/device'
     | '/leaderboard'
+    | '/privacy'
     | '/settings'
+    | '/terms'
     | '/welcome'
     | '/@{$username}/$bot'
     | '/api/bots'
@@ -260,21 +324,27 @@ export interface FileRouteTypes {
     | '/replay/$id'
     | '/@{$username}'
     | '/docs'
+    | '/api/account/delete'
+    | '/api/account/export'
     | '/api/auth/$'
     | '/api/users/$username'
     | '/api/bots/$bot/versions'
     | '/api/lives/$id/trace'
+    | '/api/account/files/$versionId/$kind'
     | '/api/bots/$bot/versions/$n'
     | '/api/bots/$bot/versions/$n/lives'
   id:
     | '__root__'
     | '/'
+    | '/acceptable-use'
     | '/admin'
     | '/bots'
     | '/device'
     | '/docs'
     | '/leaderboard'
+    | '/privacy'
     | '/settings'
+    | '/terms'
     | '/welcome'
     | '/@{$username}/$bot'
     | '/api/bots'
@@ -284,22 +354,28 @@ export interface FileRouteTypes {
     | '/replay/$id'
     | '/@{$username}/'
     | '/docs/'
+    | '/api/account/delete'
+    | '/api/account/export'
     | '/api/auth/$'
     | '/api/users/$username'
     | '/api/bots/$bot/versions'
     | '/api/lives/$id/trace'
+    | '/api/account/files/$versionId/$kind'
     | '/api/bots/$bot/versions/$n'
     | '/api/bots/$bot/versions/$n/lives'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AcceptableUseRoute: typeof AcceptableUseRoute
   AdminRoute: typeof AdminRoute
   BotsRoute: typeof BotsRoute
   DeviceRoute: typeof DeviceRoute
   DocsRoute: typeof DocsRouteWithChildren
   LeaderboardRoute: typeof LeaderboardRoute
+  PrivacyRoute: typeof PrivacyRoute
   SettingsRoute: typeof SettingsRoute
+  TermsRoute: typeof TermsRoute
   WelcomeRoute: typeof WelcomeRoute
   AtChar123usernameChar125BotRoute: typeof AtChar123usernameChar125BotRoute
   ApiBotsRoute: typeof ApiBotsRouteWithChildren
@@ -307,9 +383,12 @@ export interface RootRouteChildren {
   ApiMeRoute: typeof ApiMeRoute
   ReplayIdRoute: typeof ReplayIdRoute
   AtChar123usernameChar125IndexRoute: typeof AtChar123usernameChar125IndexRoute
+  ApiAccountDeleteRoute: typeof ApiAccountDeleteRoute
+  ApiAccountExportRoute: typeof ApiAccountExportRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiUsersUsernameRoute: typeof ApiUsersUsernameRoute
   ApiLivesIdTraceRoute: typeof ApiLivesIdTraceRoute
+  ApiAccountFilesVersionIdKindRoute: typeof ApiAccountFilesVersionIdKindRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -319,6 +398,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/acceptable-use': {
+      id: '/acceptable-use'
+      path: '/acceptable-use'
+      fullPath: '/acceptable-use'
+      preLoaderRoute: typeof AcceptableUseRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin': {
@@ -356,11 +442,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LeaderboardRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/privacy': {
+      id: '/privacy'
+      path: '/privacy'
+      fullPath: '/privacy'
+      preLoaderRoute: typeof PrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings': {
       id: '/settings'
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/terms': {
+      id: '/terms'
+      path: '/terms'
+      fullPath: '/terms'
+      preLoaderRoute: typeof TermsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/welcome': {
@@ -426,6 +526,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ReplayIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/account/delete': {
+      id: '/api/account/delete'
+      path: '/api/account/delete'
+      fullPath: '/api/account/delete'
+      preLoaderRoute: typeof ApiAccountDeleteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/account/export': {
+      id: '/api/account/export'
+      path: '/api/account/export'
+      fullPath: '/api/account/export'
+      preLoaderRoute: typeof ApiAccountExportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
@@ -452,6 +566,13 @@ declare module '@tanstack/react-router' {
       path: '/api/lives/$id/trace'
       fullPath: '/api/lives/$id/trace'
       preLoaderRoute: typeof ApiLivesIdTraceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/account/files/$versionId/$kind': {
+      id: '/api/account/files/$versionId/$kind'
+      path: '/api/account/files/$versionId/$kind'
+      fullPath: '/api/account/files/$versionId/$kind'
+      preLoaderRoute: typeof ApiAccountFilesVersionIdKindRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/bots/$bot/versions/$n': {
@@ -518,12 +639,15 @@ const ApiBotsRouteWithChildren =
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AcceptableUseRoute: AcceptableUseRoute,
   AdminRoute: AdminRoute,
   BotsRoute: BotsRoute,
   DeviceRoute: DeviceRoute,
   DocsRoute: DocsRouteWithChildren,
   LeaderboardRoute: LeaderboardRoute,
+  PrivacyRoute: PrivacyRoute,
   SettingsRoute: SettingsRoute,
+  TermsRoute: TermsRoute,
   WelcomeRoute: WelcomeRoute,
   AtChar123usernameChar125BotRoute: AtChar123usernameChar125BotRoute,
   ApiBotsRoute: ApiBotsRouteWithChildren,
@@ -531,9 +655,12 @@ const rootRouteChildren: RootRouteChildren = {
   ApiMeRoute: ApiMeRoute,
   ReplayIdRoute: ReplayIdRoute,
   AtChar123usernameChar125IndexRoute: AtChar123usernameChar125IndexRoute,
+  ApiAccountDeleteRoute: ApiAccountDeleteRoute,
+  ApiAccountExportRoute: ApiAccountExportRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiUsersUsernameRoute: ApiUsersUsernameRoute,
   ApiLivesIdTraceRoute: ApiLivesIdTraceRoute,
+  ApiAccountFilesVersionIdKindRoute: ApiAccountFilesVersionIdKindRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

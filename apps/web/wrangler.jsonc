@@ -31,6 +31,8 @@
   // ADMIN_USER_IDS / ADMIN_GITHUB_IDS: comma-separated admins for /admin (src/server/moderation.ts);
   // GitHub ids are numeric (`gh api users/<login> --jq .id`), never logins.
   // NO_LIVES_ALERT_MINUTES: how long without lives the liveness check calls the arena stalled.
+  // CF_BEACON_TOKEN: Cloudflare Web Analytics site token (public, not a secret; see README
+  // "Web Analytics"). Empty: no analytics. Never loaded while ENVIRONMENT is development.
   "vars": {
     "ENVIRONMENT": "development",
     "BETTER_AUTH_URL": "http://localhost:3000",
@@ -38,7 +40,8 @@
     "BOTS_PER_AUTHOR": "3",
     "ADMIN_USER_IDS": "",
     "ADMIN_GITHUB_IDS": "",
-    "NO_LIVES_ALERT_MINUTES": "15"
+    "NO_LIVES_ALERT_MINUTES": "15",
+    "CF_BEACON_TOKEN": ""
   },
   // Rate limits (src/server/rate-limit.ts; RATE_LIMITS there must match, a test checks).
   // namespace_id: any integer unique in the Cloudflare account; nothing to create.
@@ -98,7 +101,8 @@
         "BOTS_PER_AUTHOR": "3",
         "ADMIN_USER_IDS": "",
         "ADMIN_GITHUB_IDS": "",
-        "NO_LIVES_ALERT_MINUTES": "15"
+        "NO_LIVES_ALERT_MINUTES": "15",
+        "CF_BEACON_TOKEN": ""
       },
       "ratelimits": [
         {

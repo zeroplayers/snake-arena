@@ -6,11 +6,14 @@ import {
   Outlet,
   redirect,
   Scripts,
+  useLocation,
 } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { AnalyticsBeacon } from "../components/AnalyticsBeacon";
 import { GithubLink } from "../components/GithubLink";
 import { signInWithGithub } from "../lib/auth-client";
 import { getViewer } from "../server/functions";
+import { getSiteConfig } from "../server/site-config";
 import appCss from "../styles/app.css?url";
 
 export const Route = createRootRoute({
@@ -22,6 +25,9 @@ export const Route = createRootRoute({
     }
     return { viewer };
   },
+  // Per-environment and fixed for the Worker's life: read once, at the server render.
+  loader: () => getSiteConfig(),
+  staleTime: Number.POSITIVE_INFINITY,
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -80,6 +86,8 @@ function RootLayout() {
           <span className="footer-links">
             <Link to="/docs">Docs</Link>
             <GithubLink />
+            <Link to="/terms">Terms</Link>
+            <Link to="/privacy">Privacy</Link>
           </span>
         </footer>
       </div>
@@ -88,6 +96,9 @@ function RootLayout() {
 }
 
 function RootDocument({ children }: { children: ReactNode }) {
+  const { beaconToken } = Route.useLoaderData();
+  // The device page's URL carries the CLI's one-time code.
+  const analytics = useLocation({ select: (l) => !l.pathname.startsWith("/device") });
   return (
     <html lang="en">
       <head>
@@ -95,6 +106,7 @@ function RootDocument({ children }: { children: ReactNode }) {
       </head>
       <body>
         {children}
+        <AnalyticsBeacon token={analytics ? beaconToken : null} />
         <Scripts />
       </body>
     </html>

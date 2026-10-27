@@ -59,3 +59,29 @@ compiled JS, so this flag can go then.
 `CLAUDE.md` states numbers from the engine's `DEFAULT_CONFIG`, the sandbox limits and the SDK. When
 any of those change, update `CLAUDE.md` (and the skills if a workflow changes). The starter bot
 reads every constant at runtime, so it keeps working; the docs are what goes stale.
+
+## The starter bot must win by a margin, on any seeds
+
+`zerosnake test` and the server judge a bundle on the 5 seeds its hash gives. A fresh
+`zerosnake init` + `zerosnake test`, and the CLI's tests (`packages/cli`), play the starter bot's
+own seeds. Bundles are reproducible (same sources, same bytes in any folder or machine:
+`packages/cli/src/bundle.ts`), but any change to `src/bot.ts`, or to the SDK it bundles, re-rolls
+those seeds. So the bot has to qualify whatever the seeds, with room to spare. After changing it
+(or the SDK, engine, sandbox or house bots), measure:
+
+```sh
+pnpm --filter zerosnake margin --sets 1000    # the real checks on 1000 seed sets, a few minutes
+```
+
+It prints the distribution of the margin (mean score per life / easy's in the same seat) and the
+budget used. The current bot (October 2026): no failures on 1000 seed sets, at least 1.5× on 997
+of them (1% 1.73×, median 4.5×, lowest 1.1×); at most 0.7× of the per-tick budget on its costliest
+tick and 0.2× of the suite's average allowance, minified or not. `easy`'s own mean score per life
+ranges from under 10 to over 150 between seed sets (median 28), so the lowest sets say more about
+easy than about the bot: watch the 1% figure and the failures. `cli.test.ts` checks three seed sets
+at ≥ 1.5×. When the numbers change, update "Keep a margin over `easy`" in `CLAUDE.md`.
+
+The bot must also stay well inside the per-tick budget (the smoke test wants at most half of it
+on its seeds). QuickJS counts interrupts per ~10 000 branches or calls, and the sandbox's metering
+adds calls of its own, so a few nested loops (feelers × look-ahead ticks × body points) add up
+fast: the margin script prints the peak, and running the bot in-process doesn't show it.

@@ -17,6 +17,7 @@
   "scripts": {
     "build": "node scripts/build.ts",
     "prepack": "node scripts/build.ts",
+    "margin": "node --experimental-transform-types --disable-warning=ExperimentalWarning scripts/margin.ts",
     "typecheck": "tsc -p ."
   },
   "dependencies": {

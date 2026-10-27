@@ -3,8 +3,9 @@
 A bot for [ZeroSnake Arena](https://github.com/zeroplayers/snake-arena): slither.io-style snakes,
 each driven by a small JS/TS program, playing each other 24/7 in persistent rooms.
 
-The starter bot in `src/bot.ts` eats the nearest food it can reach and steers clear of bodies and
-the wall. It beats the weakest house bot and loses to the rest: make it yours.
+The starter bot in `src/bot.ts` goes for the best food it can reach and steers clear of bodies, of
+the road ahead of other heads and of the wall. It beats the `easy` house bot by a wide margin and
+rarely dies, but never hunts: make it yours.
 
 ## Quick start
 

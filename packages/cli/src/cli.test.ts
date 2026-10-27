@@ -3,6 +3,7 @@ import {
   CHECK_SEED_COUNT,
   CHECK_TICKS,
   type CheckReport,
+  checkSeeds,
   REPORT_VERSION,
   runChecks,
 } from "@zerosnake/checks";
@@ -196,6 +197,20 @@ describe("zerosnake test", () => {
     const bundle = await bundleBot(join(root, "src", "bot.ts"), { cwd: root });
     const sources = readSources(root, bundle).map(({ path, bytes }) => ({ path, bytes }));
     expect(report).toEqual(await runChecks({ bundle: bundle.code, sources }));
+  }, 120_000);
+
+  it("passes the template bot with a margin on other seeds too, not by luck", async () => {
+    // The tests here play the seeds of the template bot's own bundle. Any edit to the bot or the
+    // SDK re-rolls them, so it must win on any seeds, by a margin (`pnpm --filter zerosnake
+    // margin` measures it over hundreds of seed sets; template/MAINTAINING.md).
+    const root = botProject({ "src/bot.ts": TEMPLATE_BOT });
+    const { code } = await bundleBot("src/bot.ts", { cwd: root });
+    for (const set of [1, 2, 3]) {
+      const seeds = await checkSeeds(`seed set ${set}`, CHECK_SEED_COUNT);
+      const { passed, qualify } = await runChecks({ bundle: code, sources: [] }, { seeds });
+      expect(passed).toBe(true);
+      expect(qualify.score).toBeGreaterThan(1.5 * (qualify.bar ?? 0));
+    }
   }, 120_000);
 
   it("fails a bot that can't beat easy, and says so", async () => {

@@ -73,7 +73,10 @@ export default defineBot({
 });
 `;
 
-/** The template's starter bot (`template/src/bot.ts`): passes the deploy checks. */
+/**
+ * The template's starter bot (`template/src/bot.ts`): passes the deploy checks whatever its
+ * seeds, with a margin (checked in cli.test.ts), so tests that need a passing bot can use it.
+ */
 export const TEMPLATE_BOT = readFileSync(join(templateDir(), "src", "bot.ts"), "utf8");
 
 /** Drives straight on into the wall every life: loads and runs, but can't qualify. */

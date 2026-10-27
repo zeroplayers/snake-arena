@@ -1,6 +1,7 @@
 import { type BotAction, createTickLog } from "@zerosnake/sdk";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createSandbox, type Sandbox, type TickReport } from "./index.ts";
+import { UNITS_PER_WEIGHT } from "./instrument.ts";
 import exampleBot from "./testing/example-bot.ts";
 import {
   botWithTick,
@@ -50,9 +51,12 @@ describe("happy path", () => {
     life.dispose();
   });
 
-  it("reports interrupts and native work per tick", () => {
+  it("reports interrupts and cost units per tick", () => {
     const [light] = run(botWithTick("return { turn: 0 };"), 1);
-    expect(light).toMatchObject({ outcome: "ok", interrupts: 0, work: 0 });
+    expect(light).toMatchObject({ outcome: "ok", interrupts: 0 });
+    // Just the charge for entering tick() and building `{ turn: 0 }`.
+    expect(light?.work).toBeGreaterThan(0);
+    expect(light?.work).toBeLessThan(50 * UNITS_PER_WEIGHT);
     const [busy] = run(
       botWithTick(
         "let s = 0; for (let i = 0; i < 20000; i++) s += i; [1,2,3].indexOf(2); return { turn: 0 };",
@@ -61,7 +65,9 @@ describe("happy path", () => {
     );
     expect(busy?.outcome).toBe("ok");
     expect(busy?.interrupts).toBeGreaterThan(0);
-    expect(busy?.work).toBe(300);
+    // Test, update and body are charged once per iteration; indexOf pays for its 3 elements.
+    expect(busy?.work).toBeGreaterThan(20000 * 10 * UNITS_PER_WEIGHT);
+    expect(busy?.work).toBeLessThan(20000 * 20 * UNITS_PER_WEIGHT);
   });
 
   it("clamps turn and normalises boost", () => {
@@ -152,18 +158,17 @@ describe("budget", () => {
     expect(report?.outcome).toBe("timeout");
   });
 
-  it("cannot be swallowed by a Promise executor (review of #49)", () => {
+  it("has no Promise, which could swallow the interrupt (reviews of #49 and #62)", () => {
     for (const body of [
       "for (let j = 0; j < 3000; j++) new Promise(() => { for (let i = 0; i < 1e6; i++); }); return { turn: 0.5 };",
-      "for (;;) new Promise(() => { const a = []; a.length = 1e5; for (;;) a.slice(); }); return { turn: 0.5 };",
-      "for (;;) { try { new Promise(() => { for (;;); }); } catch (e) {} } return { turn: 0.5 };",
       "for (;;) Promise.resolve().then(() => {}, () => {}); return { turn: 0.5 };",
     ]) {
       const life = sandbox.startLife(botWithTick(body), makeInfo());
       const start = performance.now();
       const report = life.tick(oneState());
       expect(performance.now() - start, body).toBeLessThan(1000);
-      expect(report, body).toMatchObject({ outcome: "timeout", action: { turn: 0 }, strikes: 1 });
+      expect(report, body).toMatchObject({ outcome: "error", action: { turn: 0 } });
+      expect(report.error).toMatch(/^ReferenceError: .*Promise/);
       life.dispose();
     }
   });
@@ -363,18 +368,14 @@ describe("determinism", () => {
   });
 
   it("cannot import anything", () => {
-    const life = sandbox.startLife(
+    for (const source of [
       "import x from 'node:fs'; export default { tick() {} };",
-      makeInfo(),
-    );
-    expect(life.death?.message).toMatch(/could not load module/);
-    const [report] = run(
-      botWithTick(
-        "let r = 'pending'; import('node:fs').then(() => { r = 'loaded'; }, () => { r = 'failed'; }); log(r); return { turn: 0 };",
-      ),
-      1,
-    );
-    expect(report?.log.lines).toEqual(["pending"]);
+      "export * from 'node:fs'; export default { tick() {} };",
+      botWithTick("import('node:fs'); return { turn: 0 };"),
+    ]) {
+      const life = sandbox.startLife(source, makeInfo());
+      expect(life.death?.message, source).toMatch(/^bots can't import anything/);
+    }
   });
 
   it("gives identical reports for identical runs, including budgets", async () => {

@@ -5,22 +5,26 @@ import { DEFAULT_OP_BUDGET } from "../sandbox.ts";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 
-/** Bundles bot source (TS, may import `@zerosnake/sdk`) into one ESM file, like the CLI will. */
-export async function bundle(source: string): Promise<string> {
+/**
+ * Bundles bot source (TS, may import `@zerosnake/sdk`) into one ESM file, like the CLI will.
+ * `minify` builds it the way some authors ship theirs.
+ */
+export async function bundle(source: string, minify = false): Promise<string> {
   const out = await build({
     stdin: { contents: source, resolveDir: here, loader: "ts", sourcefile: "bot.ts" },
     bundle: true,
     format: "esm",
     platform: "neutral",
     target: "es2023",
+    minify,
     write: false,
   });
   return out.outputFiles[0]?.text ?? "";
 }
 
 /** Bundles the example bot in this folder. */
-export function bundleExampleBot(): Promise<string> {
-  return bundle(`export { default } from "./example-bot.ts";`);
+export function bundleExampleBot(minify = false): Promise<string> {
+  return bundle(`export { default } from "./example-bot.ts";`, minify);
 }
 
 export function makeInfo(overrides: Partial<BotInfo> = {}): BotInfo {

@@ -10,10 +10,11 @@ describe("memory", () => {
     const sandbox = await createSandbox();
     const honest = sandbox.startLife(HONEST, makeInfo());
     // Many medium strings: each allocation is small, so QuickJS's own limit never sees them;
-    // only the capped wasm heap stops this.
+    // only the capped wasm heap stops this. (Each is pushed in an array: a string argument would
+    // be charged per char, in case push were a built-in that converts it.)
     const hog = sandbox.startLife(
       botWithTick(
-        "for (;;) hoard.push(chunk + Math.random());",
+        "for (;;) hoard.push([chunk + Math.random()]);",
         "const hoard = []; const chunk = 'x'.repeat(1000);",
       ),
       makeInfo(),
@@ -36,7 +37,7 @@ describe("memory", () => {
 
   // Review of #49: a hog that catches its OOM used to survive and keep the heap.
   const CATCHING_HOG = botWithTick(
-    "try { for (;;) hoard.push(chunk + Math.random()); } catch { hoard.length -= 40; } return { turn: 0.5 };",
+    "try { for (;;) hoard.push([chunk + Math.random()]); } catch { hoard.length -= 40; } return { turn: 0.5 };",
     "const hoard = []; const chunk = 'y'.repeat(4096);",
   );
 
@@ -44,7 +45,7 @@ describe("memory", () => {
   function growHeapToCap(sandbox: Sandbox): void {
     const filler = sandbox.startLife(
       botWithTick(
-        "for (;;) hoard.push(chunk + Math.random());",
+        "for (;;) hoard.push([chunk + Math.random()]);",
         "const hoard = []; const chunk = 'x'.repeat(4096);",
       ),
       makeInfo({ opBudget: 1000 }),
@@ -56,7 +57,8 @@ describe("memory", () => {
 
   it("kills a bot that catches its OOM, as soon as it grows the heap", async () => {
     const sandbox = await createSandbox();
-    const hog = sandbox.startLife(CATCHING_HOG, makeInfo());
+    // A raised budget: long strings are charged per char, so the default one ends the tick first.
+    const hog = sandbox.startLife(CATCHING_HOG, makeInfo({ opBudget: 1000 }));
     const report = hog.tick(oneState());
     expect(report.outcome).not.toBe("ok");
     expect(report.death).toMatchObject({ fault: "error", reason: "oom" });
@@ -79,7 +81,7 @@ describe("memory", () => {
     // nothing notices until the next periodic check.
     const hog = sandbox.startLife(
       botWithTick(
-        "if (hoard.length === 0) for (let i = 0; i < 13000; i++) hoard.push(chunk + i); return { turn: 0.5 };",
+        "if (hoard.length === 0) for (let i = 0; i < 13000; i++) hoard.push([chunk + i]); return { turn: 0.5 };",
         "const hoard = []; const chunk = 'h'.repeat(4096);",
       ),
       makeInfo({ opBudget: 1000 }),

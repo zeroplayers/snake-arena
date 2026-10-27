@@ -1,0 +1,367 @@
+import { beforeAll, describe, expect, it } from "vitest";
+import { createSandbox, instrument, type Sandbox } from "./index.ts";
+import { MAX_FUNCTION_NODES } from "./instrument.ts";
+import { botWithTick, makeInfo, oneState } from "./testing/fixtures.ts";
+
+let sandbox: Sandbox;
+beforeAll(async () => {
+  sandbox = await createSandbox();
+});
+
+/** Runs `body` (a function body returning JSON-able data) in the sandbox and in Node. */
+function both(body: string): { sandboxed: unknown; native: unknown } {
+  const life = sandbox.startLife(
+    botWithTick(`log(JSON.stringify((function () { ${body} })())); return { turn: 0 };`),
+    makeInfo(),
+  );
+  expect(life.death, life.death?.message).toBeNull();
+  const report = life.tick(oneState());
+  life.dispose();
+  expect(report.outcome, report.error ?? "").toBe("ok");
+  const native = new Function(`"use strict"; ${body}`)();
+  return {
+    sandboxed: JSON.parse(report.log.lines[0] ?? "null"),
+    native: JSON.parse(JSON.stringify(native)),
+  };
+}
+
+describe("instrument keeps the semantics", () => {
+  const programs: Record<string, string> = {
+    "labels, break and continue": `
+      const out = [];
+      outer: for (let i = 0; i < 4; i++) {
+        for (let j = 0; j < 4; j++) { if (j === 2) continue outer; if (i === 3) break outer; out.push(i * 10 + j); }
+      }
+      let k = 0; do k++; while (k < 5);
+      let w = 0; while (w < 3) w++;
+      for (;;) break;
+      return [out, k, w];`,
+    "loops without braces and empty bodies": `
+      let s = 0; for (let i = 0; i < 5; i++) s += i;
+      let t = 0; for (let i = 0; i < 5; t += i++);
+      const keys = []; for (const k in { a: 1, b: 2 }) keys.push(k);
+      const vals = []; for (const v of [3, 4]) vals.push(v);
+      if (s > 3) s = -s; else s = 0;
+      return [s, t, keys, vals];`,
+    "switch with fallthrough and default": `
+      const out = [];
+      for (const x of [0, 1, 2, 3]) {
+        switch (x) {
+          case 0: out.push('zero');
+          case 1: out.push('one'); ${"out.push(1);".repeat(30)} break;
+          default: out.push('other');
+          case 2: out.push('two');
+        }
+      }
+      return out;`,
+    "try, catch and finally": `
+      const out = [];
+      function f() { try { return 'try'; } finally { out.push('finally'); } }
+      function g() { try { throw 1; } catch { return 'caught'; } finally { out.push('g'); } }
+      function h() { try { throw new Error('x'); } finally { return 'swallowed'; } }
+      function k() { for (let i = 0; i < 3; i++) { try { if (i < 2) throw i; } finally { if (i < 2) continue; } return i; } }
+      function m() { try { try { throw 'inner'; } finally { out.push('m'); } } catch (e) { return e; } }
+      let e2; try { null.x; } catch (e) { e2 = e instanceof TypeError; }
+      return [f(), g(), h(), k(), m(), e2, out];`,
+    "functions, defaults and patterns": `
+      function f(a, b = a + 1, { c, d: [e, ...rest] = [5, 6, 7] } = {}, ...more) { return [a, b, c, e, rest, more]; }
+      const arrow = (x) => ({ x });
+      const seq = (x) => (x, x + 1);
+      const { p, q: { r = 9 } = {} } = { p: 1 };
+      const { k0, ...others } = { k0: 0, k1: 1, k2: 2 };
+      let x1, y1; ({ x: x1, ...y1 } = { x: 1, y: 2 });
+      return [f(1), f(1, 2, { c: 3 }, 8, 9), arrow(4), seq(1), p, r, others, x1, y1, f.length, arrow.length];`,
+    "closures and per-iteration bindings": `
+      const fs = [];
+      for (let i = 0; i < 3; i++) fs.push(() => i);
+      const counter = (() => { let n = 0; return () => ++n; })();
+      counter(); counter();
+      return [fs.map((f) => f()), counter()];`,
+    classes: `
+      class A { x = 1; #y = 2; static s = 'S'; static { A.t = A.s + '!'; } get y() { return this.#y; } m() { return this.x + this.#y; } }
+      class B extends A { z = this.x + 10; constructor() { super(); this.w = this.z * 2; } m() { return super.m() * 10; } }
+      const b = new B();
+      return [b.x, b.y, b.z, b.w, b.m(), A.s, A.t, Object.keys(b), b instanceof A];`,
+    "getters, setters and generators": `
+      const o = { _v: 1, get v() { return this._v * 2; }, set v(n) { this._v = n; } };
+      o.v = 5;
+      function* g(n) { for (let i = 0; i < n; i++) yield i * i; return 'done'; }
+      const it = g(3);
+      return [o.v, [...g(4)], it.next(), it.next(), it.next(), it.next()];`,
+    "spread, rest and for-in": `
+      const base = { a: 1 };
+      const child = Object.create(base); child.b = 2;
+      const keys = []; for (const k in child) keys.push(k);
+      const merged = { ...child, ...[7], c: 3 };
+      const arr = [...'ab', ...[1, 2]];
+      const keys2 = []; for (const k in (0, child)) keys2.push(k);
+      return [keys, merged, arr, Math.max(...arr.slice(2)), keys2];`,
+    "templates, tags and optional chaining": `
+      const tag = (s, ...v) => s.raw.join('|') + v.join(',');
+      const o = { a: { b: () => 4 } };
+      return [\`x\${1 + 1}y\`, tag\`a\${1}b\${2}c\`, o?.a?.b?.(), o.z?.b, o.z?.()];`,
+    "asi and comments": `
+      let a = 1
+      let b = a
+      ;(function () { a = 2 })()
+      if (a) /* comment */ b = 3
+      else b = 4
+      // trailing comment
+      return [a, b]`,
+    "compound assignments, updates and destructuring targets": `
+      const o = { a: 1, s: 'x', n: [1, 2] }; const k = 'a'; let i = 0;
+      o.a += 2; o[k] *= 3; o.n[i++] += 10; o.s += 'y'; o[k]++; --o.n[1];
+      const get = () => o; get().a -= 1; get()[k] += 5; get().s += 'z'; get().n[0]++;
+      let s = 'ab'; s += s; let t = 1; t += 2; t **= 2; t %= 7;
+      const arr = [0, 0]; [arr[0], arr[1]] = [5, 6]; ({ p: o.q } = { p: 7 }); [o.len] = [3];
+      const out = [];
+      for ([o.x, o.y] of [[1, 2]]) out.push(o.x + o.y);
+      for (const [a, b = a * 2] of [[1], [2, 3]]) out.push(a + b);
+      for (const { a, b: [c] } of [{ a: 1, b: [2] }]) out.push(a, c);
+      for (const x of [1, 2]) {}
+      for (o.i of [9]);
+      const m = Math.max(...[1, 5, 3], ...new Set([7]));
+      let u = 'x'
+      ;[u] = ['y']
+      const v = u
+      i++
+      ;(function () { out.push('iife'); })()
+      return [o, s, t, arr, out, m, u, v, i, typeof Math.random];`,
+    "strings and conversions": `
+      const big = 'n'.repeat(100);
+      return [5 == '5', '10' < 9, -'3', +'0x10', '7' * '6', big < 'o', big === 'n'.repeat(100), \`\${big}\`.length,
+        ['b', 'a'].sort().join(''), [' 2', '1'].map(Number), new Map([[big, 1]]).get(big), Object.fromEntries([['k', big.length]]),
+        String(Symbol('d')), [1, 2] + '', { valueOf() { return '4'; } } * 2, new String('5') * 2, Math.floor.bind(null, '2.5')()];`,
+    "exceptions through functions and loops": `
+      const out = [];
+      function thrower() { throw new Error('boom'); }
+      function rethrow() { try { thrower(); } catch (e) { out.push(e.message); throw e; } }
+      try { rethrow(); } catch (e) { out.push(e.stack.includes('thrower'), e instanceof Error); }
+      const it = { [Symbol.iterator]() { return this; }, i: 0, next() { return { value: this.i++, done: this.i > 3 }; }, return() { out.push('closed'); return {}; } };
+      for (const x of it) { if (x === 1) break; out.push(x); }
+      try { for (const x of [1]) { throw 'p'; } } catch (e) { out.push(e); }
+      try { for (const [a] of [null]) {} } catch (e) { out.push(e instanceof TypeError); }
+      const f = (x) => x * 2; const g = () => ({ a: 1 }); const h = () => {};
+      function* gen() { try { yield 1; yield 2; } finally { out.push('gen done'); } }
+      for (const y of gen()) { out.push(y); break; }
+      return [out, f(3), g(), h()];`,
+    "errors and their messages": `
+      const out = [];
+      try { undefined.x; } catch (e) { out.push(e.constructor === TypeError, e instanceof Error); }
+      try { throw new RangeError('r'); } catch (e) { out.push(e.message, e.name, e instanceof RangeError); }
+      class MyError extends Error { constructor(m) { super(m); this.name = 'MyError'; } }
+      try { throw new MyError('mine'); } catch (e) { out.push(e.name, e.message, e instanceof Error, Error.prototype.isPrototypeOf(e)); }
+      out.push(Object.getPrototypeOf(TypeError) === Error, Error('no new').message);
+      return out;`,
+    // Re-verification of #62 (H4): with no space after `=>` the `try` of the arrow and the
+    // body's string check started at the same position and nested the wrong way round.
+    "arrows without spaces (minified code)": `
+      const s=[1,2].reduce((a,b)=>a+b,0),m=[{x:1},{x:'2'}].map(k=>k.x),f=v=>v+1,g=(a)=>'s'+a;
+      const h=()=>({a:1}),n=x=>y=>x+y,c=(a,b)=>(a,b),q=x=>/*c*/x,r=x=>
+        x*2;
+      function u(o,k){o.n++;for(let i=0;i<3;i++)o[k]+=i
+        for(const x of[1,2])o.n+=x
+        for(const[y]of[[5]])o[k]+=y
+        switch(o.n){case 4:o[k]+=1;${"o.n+=o[k];".repeat(12)}break;default:o.n--}return o}
+      return[s,m,f(1),f('1'),g(2),h(),n(1)(2),c(1,2),q(3),r(4),u({n:0,a:'x'},'a'),u({n:0,a:1},'a')];`,
+  };
+  for (const [name, body] of Object.entries(programs)) {
+    it(name, () => {
+      const { sandboxed, native } = both(body);
+      expect(sandboxed).toEqual(native);
+    });
+  }
+
+  it("keeps every line where it was", () => {
+    const source = botWithTick(`
+      const a = 1;
+      for (let i = 0; i < 2; i++) a + i;
+      throw new Error("line 5");`);
+    const out = instrument(source);
+    if (!out.ok) throw new Error(out.error);
+    expect(out.source.split("\n").length).toBe(source.split("\n").length);
+    const life = sandbox.startLife(source, makeInfo());
+    const report = life.tick(oneState());
+    life.dispose();
+    expect(report.error).toMatch(/^Error: line 5\n\s+at tick \(bot\.js:5:/);
+  });
+
+  it("is deterministic", () => {
+    const source = botWithTick(
+      "for (const x of state.food) if (x.value > 0) log(x.x); return { turn: 0 };",
+    );
+    expect(instrument(source)).toEqual(instrument(source));
+  });
+});
+
+describe("instrument rejects", () => {
+  const cases: [string, string, RegExp][] = [
+    [
+      "reserved names",
+      "const __zs_g = 1e15; export default { tick() {} };",
+      /reserved for the sandbox/,
+    ],
+    ["escaped reserved names", "const \\u005f_zs_g = 1; export default { tick() {} };", /reserved/],
+    ["reserved private names", "class A { #__zs = 1; } export default { tick() {} };", /reserved/],
+    ["reserved parameter names", "export default { tick(__zs_o) {} };", /reserved/],
+    ["object rest in parameters", "export default { tick({ a, ...rest }) {} };", /object rest/],
+    [
+      "nested object rest",
+      "const { a: { ...b } } = {}; export default { tick() {} };",
+      /object rest/,
+    ],
+    [
+      "object rest in for-of",
+      "for (const { ...r } of []) {} export default { tick() {} };",
+      /object rest/,
+    ],
+    [
+      "catch patterns",
+      "try {} catch ({ message }) {} export default { tick() {} };",
+      /catch clause/,
+    ],
+    ["imports", "import x from 'y'; export default { tick() {} };", /can't import/],
+    ["re-exports", "export { x } from 'y'; export default { tick() {} };", /can't import/],
+    ["dynamic import", "export default { tick() { import('x'); } };", /can't import/],
+    [
+      "deep nesting",
+      `const x = ${"[".repeat(300)}${"]".repeat(300)}; export default { tick() {} };`,
+      /nested more than 200/,
+    ],
+    ["syntax errors", "export default { tick( };", /^SyntaxError/],
+    ["BigInt", "const x = 1n; export default { tick() {} };", /BigInt/],
+    [
+      "functions over the size limit",
+      `export default { tick() { let x = 0; ${"x = (x + 1) | 0;".repeat(MAX_FUNCTION_NODES / 6)} } };`,
+      /too large for the sandbox/,
+    ],
+    // Re-verification of #62: literals compile while QuickJS parses, before any charge runs.
+    [
+      "case-insensitive regex literals that take too long to compile",
+      `const r = /${"[a-z]".repeat(300)}/i; export default { tick() {} };`,
+      /regex literals of this bundle take too long/,
+    ],
+    [
+      "regex literals with too many properties of strings",
+      `${Array.from({ length: 11 }, (_, i) => `const r${i} = /\\p{RGI_Emoji}/v;`).join(" ")} export default { tick() {} };`,
+      /regex literals of this bundle take too long/,
+    ],
+    [
+      "many property escapes",
+      `const r = /${"\\p{L}".repeat(65)}/u; export default { tick() {} };`,
+      /more than 64 \\p\{…\} escapes/,
+    ],
+    [
+      "class fields over the size limit",
+      `class A { ${Array.from({ length: MAX_FUNCTION_NODES / 2 }, (_, i) => `f${i} = ${i};`).join(" ")} } export default { tick() {} };`,
+      /too large for the sandbox/,
+    ],
+  ];
+  for (const [name, source, message] of cases) {
+    it(name, () => {
+      const out = instrument(source);
+      expect(out.ok).toBe(false);
+      if (!out.ok) expect(out.error).toMatch(message);
+      const life = sandbox.startLife(source, makeInfo());
+      expect(life.death).toMatchObject({ fault: "error", reason: "load" });
+    });
+  }
+
+  it("accepts the regex literals an honest bot uses", () => {
+    const source = `const r = [${"/^[a-z_]+$/i, /\\p{L}+/u, /(\\d+)\\.(\\d+)/g, ".repeat(20)}]; export default { tick() {} };`;
+    expect(instrument(source).ok).toBe(true);
+  });
+
+  it("accepts big tables at module level", () => {
+    const source = `const table = [${Array.from({ length: 20000 }, (_, i) => i).join(",")}];
+      export default { tick() { return { turn: table[5] / 1e5 }; } };`;
+    const life = sandbox.startLife(source, makeInfo());
+    expect(life.death).toBeNull();
+    expect(life.tick(oneState()).action).toEqual({ turn: 5e-5 });
+    life.dispose();
+  });
+});
+
+describe("the meter is out of the bot's reach", () => {
+  it("leaves nothing on globalThis", () => {
+    const report = (() => {
+      const life = sandbox.startLife(
+        botWithTick(
+          "log(Reflect.ownKeys(globalThis).filter((k) => String(k).includes('zs')).join(',') || 'none'); return { turn: 0 };",
+          "const seen = typeof globalThis['__zs' + '_meter'];",
+        ).replace("export default", "export const atLoad = seen; export default"),
+        makeInfo(),
+      );
+      const r = life.tick(oneState());
+      life.dispose();
+      return r;
+    })();
+    expect(report.log.lines).toEqual(["none"]);
+  });
+
+  it("refuses a bundle that skips the header", () => {
+    // What a consumer that bypassed instrument() would run: the prelude notices.
+    const life = sandbox.startLife(
+      botWithTick("return { turn: 0 };").replace(
+        "export default",
+        "globalThis.x = 1; export default",
+      ),
+      makeInfo(),
+    );
+    expect(life.death).toBeNull(); // instrumented by startLife itself
+    life.dispose();
+  });
+});
+
+describe("string checks", () => {
+  /** How many inline string checks the instrumented `code` has. */
+  function checks(code: string): number {
+    const result = instrument(`${code}\nexport default {};`);
+    if (!result.ok) throw new Error(result.error);
+    return result.source.split('==="string"').length - 1;
+  }
+
+  it("leaves out names that only ever hold numbers", () => {
+    expect(
+      checks(
+        "function f(p) { const dx = p - 1; let s = 0; for (let i = 0; i < 9; i++) s += dx * dx; return s; }",
+      ),
+    ).toBe(1);
+    expect(checks("let best = Infinity; const d = Math.hypot(3, 4); if (d < best) best = d;")).toBe(
+      0,
+    );
+    expect(checks("let a = 1, b = 2; a = b; b = a; const c = a * b;")).toBe(0);
+  });
+
+  it("keeps them wherever a name may hold a string", () => {
+    for (const code of [
+      // Parameters, destructuring, catch, for-in/of, globals.
+      "function f(x) { return x - 1; }",
+      "const [x] = [1]; x - 1;",
+      "try {} catch (x) { x - 1; }",
+      "for (const x in {}) x - 1;",
+      "x - 1;",
+      // A write of something else anywhere, also in a closure or through +=.
+      "let x = 1; const f = () => { x = 's'; }; x - 1;",
+      "let x = 1; x += ''; x - 1;",
+      "let x = 1; x += {}; x - 1;",
+      // var repeating a parameter starts with the argument.
+      "function f(x) { var x; return x - 1; }",
+      // A default can't see the body's bindings; a shadowed Math is not the global.
+      "let x = 's'; function f(a = x - 1) { let x = 1; return a; }",
+      "const Math = { f: () => 's' }; Math.f() - 1;",
+      // A shadowed read-only global.
+      "function f(NaN) { return NaN - 1; }",
+    ]) {
+      expect(checks(code), code).toBeGreaterThan(0);
+    }
+  });
+
+  it("skips arguments and return values only for the bot's own functions", () => {
+    expect(checks("function f(a) { return a; } let s = 's'; f(s);")).toBe(0);
+    // f escapes: its return value and the argument `f` itself are checked.
+    expect(checks("function f(a) { return a; } let s = 's'; [s].map(f);")).toBe(2);
+    expect(checks("let f = (a) => a; f = Math.floor; let s = 's'; f(s);")).toBeGreaterThan(0);
+    expect(checks("class N extends Number {} let s = 's'; new N(s);")).toBe(1);
+  });
+});

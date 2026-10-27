@@ -14,6 +14,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { main } from "./cli.ts";
 import type { Remote } from "./remote/api.ts";
@@ -75,6 +76,11 @@ async function route(w: Web, request: Request): Promise<Response> {
   p = /^\/api\/bots\/([^/]+)\/versions\/([^/]+)$/.exec(pathname);
   if (m === "GET" && p?.[1] && p[2])
     return w.cliApi.getVersion(request, decodeURIComponent(p[1]), p[2]);
+  p = /^\/api\/bots\/([^/]+)\/versions\/([^/]+)\/lives$/.exec(pathname);
+  if (m === "GET" && p?.[1] && p[2])
+    return w.cliApi.listLives(request, decodeURIComponent(p[1]), p[2]);
+  p = /^\/api\/lives\/([^/]+)\/trace$/.exec(pathname);
+  if (m === "GET" && p?.[1]) return w.cliApi.getTrace(request, decodeURIComponent(p[1]));
   p = /^\/api\/users\/([^/]+)$/.exec(pathname);
   if (m === "GET" && p?.[1]) {
     const profile = await w.profile(decodeURIComponent(p[1]));
@@ -261,6 +267,71 @@ describe("the CLI against the real API", () => {
     expect(logs.out).toContain("✓ loads");
     // Neither life has ended.
     expect(logs.out).toContain("No lives yet.");
+
+    // A life ends and the room writes its trace (#25).
+    const trace = {
+      format: 1,
+      lifeId: "l3",
+      versionId,
+      roomId: "r1",
+      startTick: 20,
+      endTick: 25,
+      cause: "wall",
+      killer: null,
+      budget: { ops: 10, work: 10_000_000, logBytes: 1024 },
+      totals: {
+        ticks: 5,
+        timeouts: 0,
+        errors: 0,
+        skipped: 0,
+        maxWork: 1_000_000,
+        sumWork: 2_000_000,
+        maxOps: 1,
+        logTicks: 1,
+        logBytes: 12,
+      },
+      load: { log: [] },
+      restarts: [],
+      sampleEvery: 1,
+      sampled: [],
+      events: [],
+      full: [
+        {
+          tick: 24,
+          lifeTick: 4,
+          turn: 1,
+          boost: true,
+          outcome: "ok",
+          work: 1_000_000,
+          ops: 1,
+          log: ["edge is close"],
+          seen: {
+            x: 99,
+            y: 0,
+            angle: 0,
+            length: 10,
+            wall: 0.5,
+            snakes: 0,
+            food: 0,
+            nearest: null,
+            foodDist: null,
+          },
+        },
+      ],
+    };
+    await w.platform.env.TRACES.put("2026-10-27/l3.json.gz", gzipSync(JSON.stringify(trace)));
+    await w.platform.env.DB.prepare(
+      `INSERT INTO lives (id, version_id, room, start_tick, end_tick, death_cause, trace_key,
+         started_at, ended_at) VALUES ('l3', ?, 'r1', 20, 25, 'wall', '2026-10-27/l3.json.gz', ?, ?)`,
+    )
+      .bind(versionId, Date.now() - 1000, Date.now())
+      .run();
+    const deaths = await run(["logs", "--deaths"]);
+    expect(deaths.code, deaths.err).toBe(0);
+    expect(deaths.out).toContain("hit the wall");
+    expect(deaths.out).toContain("Life l3: hit the wall at room tick 25, after 5 ticks");
+    expect(deaths.out).toContain("[4] head (99, 0) angle 0 length 10 wall 0.5");
+    expect(deaths.out).toContain("log: edge is close");
 
     const logout = await run(["logout"]);
     expect(logout.code).toBe(0);

@@ -3,13 +3,19 @@
  * (`src/server/edge.ts`: rate limits, request log, metrics) into TanStack Start, except the live
  * showcase's WebSocket, which goes to the arena (`src/server/showcase.ts`). Cron Triggers
  * (`triggers.crons` in wrangler.jsonc) run the rating job every minute (`src/server/ratings.ts`),
- * and every five the arena liveness check (`src/server/liveness.ts`) and the pruning of expired
- * revoked web sessions (`src/server/session-store.ts`); every thirty the replay retention sweep
+ * and every five the arena liveness check (`src/server/liveness.ts`), the pruning of expired
+ * revoked web sessions (`src/server/session-store.ts`), and the purge of deleted accounts and
+ * expired sign-in credentials (`src/server/account.ts`); every thirty the replay retention sweep
  * (`src/server/replays.ts`).
  */
 import handler from "@tanstack/react-start/server-entry";
 import { log } from "@zerosnake/observability";
 import { createDb } from "./db";
+import {
+  deleteUnclaimedAccounts,
+  pruneExpiredCredentials,
+  purgeDeletedAccounts,
+} from "./server/account";
 import { handleEdge } from "./server/edge";
 import { getRateLimiter } from "./server/env";
 import { runLivenessCheck } from "./server/liveness";
@@ -36,6 +42,21 @@ export default {
       ctx.waitUntil(
         pruneRevokedSessions(createDb(env.DB), now).catch((error) =>
           log("error", "auth.prune_revoked_sessions_failed", { error }),
+        ),
+      );
+      ctx.waitUntil(
+        deleteUnclaimedAccounts(env.DB, now).catch((error) =>
+          log("error", "account.unclaimed_failed", { error }),
+        ),
+      );
+      ctx.waitUntil(
+        purgeDeletedAccounts(env, now).catch((error) =>
+          log("error", "account.purge_failed", { error }),
+        ),
+      );
+      ctx.waitUntil(
+        pruneExpiredCredentials(env.DB, now).catch((error) =>
+          log("error", "auth.prune_expired_failed", { error }),
         ),
       );
     }

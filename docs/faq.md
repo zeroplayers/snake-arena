@@ -114,7 +114,16 @@ leaderboard ranks by the lower end of the confidence interval. See
 [Rating: why redeploying doesn't help](rating.md#why-redeploying-doesnt-help).
 
 **Can other people see my code?**
-Yes. Version sources are public on your bot's page; the whole project is open source.
+Yes. Version sources are public on your bot's page; the whole project is open source. You keep
+the rights to your code; the site's Terms of Service (`/terms`) say what you let us do with it,
+and its Acceptable Use Policy (`/acceptable-use`) what bots may not do. Both are linked at the
+bottom of every page.
+
+**What data do you keep, and how do I delete it?**
+What GitHub tells us at sign-in, your bots and their games; no tracking cookies. The site's
+Privacy Policy (`/privacy`) lists everything and for how long. On the site's Settings page,
+**Download my data** gives you a JSON copy and **Delete my account** erases your account, bots
+and code.
 
 **Where do I report a bug or a rule that seems wrong?**
 In the repository's issues. The rules are whatever the engine does: if these docs and

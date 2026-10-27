@@ -62,6 +62,8 @@ export function classify(method: string, pathname: string): { route: string; kin
     [/^\/api\/bots\/[^/]+\/versions$/, "/api/bots/:bot/versions"],
     [/^\/api\/users\/[^/]+$/, "/api/users/:username"],
     [/^\/api\/lives\/[^/]+\/replay$/, "/api/lives/:id/replay"],
+    [/^\/api\/account\/files\/[^/]+\/[^/]+$/, "/api/account/files/:version/:kind"],
+    [/^\/api\/account\/(export|delete)$/, pathname],
     [/^\/api\/(me|bots|health)$/, pathname],
   ];
   const route = patterns.find(([re]) => re.test(pathname))?.[1] ?? "/api/*";
@@ -94,9 +96,17 @@ async function refusal(limiter: RateLimiter, kind: RouteKind, ip: string) {
 }
 
 /** Which authentication failure a response is, if any (`auth.failure` metric). */
-function authFailure(kind: RouteKind, response: Response, outcome: string | undefined) {
+function authFailure(
+  kind: RouteKind,
+  route: string,
+  response: Response,
+  outcome: string | undefined,
+) {
   const { status } = response;
-  if (kind === "api" && status === 401) return "cli_token";
+  // `/api/account/*` takes the web session, the rest of `/api/*` a CLI token.
+  if (kind === "api" && status === 401) {
+    return route.startsWith("/api/account/") ? "session" : "cli_token";
+  }
   if (kind === "server_fn" && outcome === "unauthorized") return "session";
   if (kind === "auth" || kind === "auth_write") {
     if (status === 401 || status === 403) return "auth_api";
@@ -182,7 +192,7 @@ export async function handleEdge(
     }
   }
   if (status >= 500) writeMetric(env.METRICS, "http.error", { route, outcome, status });
-  const failure = authFailure(kind, response, context.outcome);
+  const failure = authFailure(kind, route, response, context.outcome);
   if (failure) writeMetric(env.METRICS, "auth.failure", { kind: failure, route, status });
 
   return withRequestId(response, requestId);

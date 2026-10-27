@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { createDb, type Db } from "../db";
+import { type Account, createAccount } from "./account";
 import { type Auth, createAuth } from "./auth";
 import { type BotAdmin, callMatchmaker, createBotAdmin, matchmakerNotifier } from "./bot-admin";
 import { type CliApi, createCliApi } from "./cli-api";
@@ -12,6 +13,7 @@ let cliApi: CliApi | undefined;
 let botAdmin: BotAdmin | undefined;
 let moderation: Moderation | undefined;
 let rateLimiter: RateLimiter | undefined;
+let account: Account | undefined;
 
 /** The Worker's Better Auth instance, built on first use from `env`. */
 export function getAuth() {
@@ -52,4 +54,13 @@ export function getModeration() {
     rateLimiter: getRateLimiter(),
   });
   return moderation;
+}
+
+export function getAccount() {
+  account ??= createAccount(env, {
+    getSession: (input) => getAuth().api.getSession(input),
+    notify: matchmakerNotifier(env.MATCHMAKER),
+    rateLimiter: getRateLimiter(),
+  });
+  return account;
 }

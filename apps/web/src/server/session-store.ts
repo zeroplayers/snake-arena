@@ -82,7 +82,9 @@ export function kvSessionStore(
       .get();
     if (!row || row.revoked) return null;
     // Not part of the session Better Auth hands out (`/get-session` returns the user as is).
-    const { sessionsRevokedAt, ...user } = row.user;
+    const { sessionsRevokedAt, deletedAt, purgeFailures: _, ...user } = row.user;
+    // A deleted account also revokes its sessions; this holds even for one created meanwhile.
+    if (deletedAt) return null;
     if (sessionsRevokedAt && new Date(cached.session.createdAt) <= sessionsRevokedAt) return null;
     return user;
   }

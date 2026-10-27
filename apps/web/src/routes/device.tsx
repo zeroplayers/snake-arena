@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type FormEvent, useEffect, useState } from "react";
+import { SignInTerms } from "../components/SignInTerms";
 import { authClient, signInWithGithub } from "../lib/auth-client";
 
 interface DeviceSearch {
@@ -44,6 +45,7 @@ function Device() {
         <button type="button" className="button" onClick={() => signInWithGithub()}>
           Sign in with GitHub
         </button>
+        <SignInTerms />
       </section>
     );
   }

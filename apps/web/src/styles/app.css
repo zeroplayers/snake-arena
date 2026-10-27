@@ -1421,6 +1421,53 @@ button.link-card:hover {
   text-decoration: underline;
 }
 
+/* Legal pages and the data panel in Settings */
+
+.legal .table tr td {
+  vertical-align: top;
+  font-size: 14px;
+}
+
+.legal-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid #222;
+  font-size: 14px;
+}
+
+.button.danger {
+  border: 1px solid var(--pink);
+  background: transparent;
+  color: var(--pink);
+}
+
+.button.danger:hover:not(:disabled) {
+  background: var(--pink);
+  color: #000;
+}
+
+.danger-zone {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--pink);
+  border-radius: 8px;
+}
+
+.danger-zone p {
+  margin: 0;
+}
+
+.footer-company {
+  flex-basis: 100%;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 /* Keyboard users can jump past the header. */
 .skip-link {
   position: absolute;

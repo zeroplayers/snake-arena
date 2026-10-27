@@ -41,29 +41,41 @@ const updatedAt = () =>
 
 // ─── Better Auth ────────────────────────────────────────────────────────────────────────────────
 
-export const users = sqliteTable("users", {
-  id: id(),
-  name: text("name").notNull(),
-  email: text("email").notNull().unique(),
-  emailVerified: integer("email_verified", { mode: "boolean" }).notNull().default(false),
-  image: text("image"),
-  /** Claimed once after the first sign-in (`/username/claim`), lowercase. `null` until then. */
-  username: text("username").unique(),
-  displayUsername: text("display_username"),
-  /** GitHub login at sign-in, used to suggest a username. */
-  githubLogin: text("github_login"),
-  /**
-   * Set by an admin (`src/server/moderation.ts`); `null` while in good standing. A banned user
-   * can sign in and look, but can't deploy, create or change bots, or sign in the CLI, and none
-   * of their bots play (their `ready` versions were archived by the ban).
-   */
-  bannedAt: integer("banned_at", { mode: "timestamp_ms" }),
-  banReason: text("ban_reason"),
-  /** Web sessions created up to this moment are revoked (`/revoke-sessions`, "sign out everywhere"). */
-  sessionsRevokedAt: integer("sessions_revoked_at", { mode: "timestamp_ms" }),
-  createdAt: createdAt(),
-  updatedAt: updatedAt(),
-});
+export const users = sqliteTable(
+  "users",
+  {
+    id: id(),
+    name: text("name").notNull(),
+    email: text("email").notNull().unique(),
+    emailVerified: integer("email_verified", { mode: "boolean" }).notNull().default(false),
+    image: text("image"),
+    /** Claimed once after the first sign-in (`/username/claim`), lowercase. `null` until then. */
+    username: text("username").unique(),
+    displayUsername: text("display_username"),
+    /** GitHub login at sign-in, used to suggest a username. */
+    githubLogin: text("github_login"),
+    /**
+     * Set by an admin (`src/server/moderation.ts`); `null` while in good standing. A banned user
+     * can sign in and look, but can't deploy, create or change bots, or sign in the CLI, and none
+     * of their bots play (their `ready` versions were archived by the ban).
+     */
+    bannedAt: integer("banned_at", { mode: "timestamp_ms" }),
+    banReason: text("ban_reason"),
+    /** Web sessions created up to this moment are revoked (`/revoke-sessions`, "sign out everywhere"). */
+    sessionsRevokedAt: integer("sessions_revoked_at", { mode: "timestamp_ms" }),
+    /**
+     * The user deleted their account (`src/shared/account.ts`): the row is a scrubbed tombstone
+     * until the purge job erases it with everything it owns. `null` for a live account.
+     */
+    deletedAt: integer("deleted_at", { mode: "timestamp_ms" }),
+    /** Purge runs that failed on this tombstone; past a few it's left for a person. */
+    purgeFailures: integer("purge_failures").notNull().default(0),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  // The purge job's queue of tombstones.
+  (t) => [index("users_deleted_at_idx").on(t.deletedAt).where(sql`deleted_at IS NOT NULL`)],
+);
 
 /**
  * Unused: web sessions live in KV, bound to apps/web only (src/server/session-store.ts, #50).
@@ -100,6 +112,16 @@ export const revokedSessions = sqliteTable(
   },
   (t) => [index("revoked_sessions_expires_at_idx").on(t.expiresAt)],
 );
+
+/**
+ * Usernames of deleted accounts (SHA-256 of the lowercase name), which nobody may claim until
+ * `until`, so a new account can't pose as the old one straight away (`src/server/account.ts`,
+ * `/username/claim`). Pruned by the 5-minute cron.
+ */
+export const heldUsernames = sqliteTable("held_usernames", {
+  usernameHash: text("username_hash").primaryKey(),
+  until: integer("until", { mode: "timestamp_ms" }).notNull(),
+});
 
 export const accounts = sqliteTable(
   "accounts",
@@ -271,6 +293,9 @@ export const versions = sqliteTable(
   },
   (t) => [
     index("versions_change_seq_idx").on(t.changeSeq),
+    // R2 keys are content-addressed and may be shared: the account purge checks for other users.
+    index("versions_bundle_key_idx").on(t.bundleKey),
+    index("versions_source_key_idx").on(t.sourceKey),
     // Bot page: versions newest first. No index on `status` alone: it would steer the
     // leaderboard query away from `ratings_rank_idx`.
     uniqueIndex("versions_bot_n_idx").on(t.botId, t.n),

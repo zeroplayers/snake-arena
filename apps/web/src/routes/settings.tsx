@@ -1,5 +1,6 @@
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { useState } from "react";
+import { AccountData } from "../components/AccountData";
 import { authClient } from "../lib/auth-client";
 import { getCliTokens } from "../server/functions";
 
@@ -107,6 +108,8 @@ function Settings() {
           </tbody>
         </table>
       </section>
+
+      <AccountData username={viewer?.username ?? null} />
     </>
   );
 }

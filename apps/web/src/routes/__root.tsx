@@ -6,12 +6,16 @@ import {
   Outlet,
   redirect,
   Scripts,
+  useLocation,
 } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { AnalyticsBeacon } from "../components/AnalyticsBeacon";
 import { GithubLink, GithubMark } from "../components/GithubLink";
+import { LEGAL } from "../legal";
 import { signInWithGithub } from "../lib/auth-client";
 import { siteMeta } from "../lib/meta";
 import { getViewer } from "../server/functions";
+import { getSiteConfig } from "../server/site-config";
 import { REPO } from "../site";
 import appCss from "../styles/app.css?url";
 
@@ -24,6 +28,9 @@ export const Route = createRootRoute({
     }
     return { viewer };
   },
+  // Per-environment and fixed for the Worker's life: read once, at the server render.
+  loader: () => getSiteConfig(),
+  staleTime: Number.POSITIVE_INFINITY,
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -93,7 +100,18 @@ function RootLayout() {
             <Link to="/leaderboard">Leaderboard</Link>
             <Link to="/docs">Docs</Link>
             <GithubLink />
+            <Link to="/terms">Terms</Link>
+            <Link to="/acceptable-use">Acceptable Use</Link>
+            <Link to="/privacy">Privacy</Link>
+            <a href={LEGAL.x.url} target="_blank" rel="me noopener">
+              Made by {LEGAL.x.handle}
+              <span className="sr-only"> on X (opens in a new tab)</span>
+            </a>
           </span>
+          <small className="footer-company">
+            {LEGAL.operator}, registered in England and Wales, company number {LEGAL.companyNumber}.
+            Registered office: {LEGAL.address}.
+          </small>
         </footer>
       </div>
     </RootDocument>
@@ -101,6 +119,11 @@ function RootLayout() {
 }
 
 function RootDocument({ children }: { children: ReactNode }) {
+  const { beaconToken } = Route.useLoaderData();
+  // The CLI's one-time code is in the device page's URL, and in `/welcome?next=` on the way there.
+  const analytics = useLocation({
+    select: (l) => !l.pathname.startsWith("/device") && !l.href.includes("user_code"),
+  });
   return (
     <html lang="en">
       <head>
@@ -108,6 +131,7 @@ function RootDocument({ children }: { children: ReactNode }) {
       </head>
       <body>
         {children}
+        <AnalyticsBeacon token={analytics ? beaconToken : null} />
         <Scripts />
       </body>
     </html>

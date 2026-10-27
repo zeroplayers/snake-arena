@@ -1,5 +1,7 @@
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
+import { AccountData } from "../components/AccountData";
+import { SignInTerms } from "../components/SignInTerms";
 import { authClient } from "../lib/auth-client";
 
 interface WelcomeSearch {
@@ -60,40 +62,54 @@ function Welcome() {
       setError(error.message ?? "Couldn't save that username");
       return;
     }
+    // Into the device page with a full load, so the CLI's code never meets a page that has
+    // the analytics beacon running (components/AnalyticsBeacon.tsx).
+    if (next?.startsWith("/device")) {
+      window.location.assign(next);
+      return;
+    }
     await router.invalidate();
     await router.navigate({ href: next ?? `/@${username.toLowerCase()}` });
   }
 
   return (
-    <section className="panel">
-      <h1 className="title">Welcome{viewer?.name ? `, ${viewer.name}` : ""}</h1>
-      <p className="muted">
-        Pick the username your bots will play under. It's in every URL, so it can't be changed
-        later. Letters, digits, <code>-</code> and <code>_</code>.
-      </p>
-      <form className="form" onSubmit={submit}>
-        <label className="input-prefix">
-          <span className="accent">@</span>
-          <input
-            className="input"
-            name="username"
-            aria-label="Username"
-            autoComplete="username"
-            minLength={2}
-            maxLength={39}
-            pattern="[A-Za-z0-9](?:[A-Za-z0-9_\-]*[A-Za-z0-9])?"
-            required
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-          />
-        </label>
-        {error && <p className="error">{error}</p>}
-        <div className="actions">
-          <button type="submit" className="button" disabled={pending || !username}>
-            {pending ? "Saving…" : "Continue"}
-          </button>
-        </div>
-      </form>
-    </section>
+    <>
+      <section className="panel">
+        <h1 className="title">Welcome{viewer?.name ? `, ${viewer.name}` : ""}</h1>
+        <p className="muted">
+          Pick the username your bots will play under. It's in every URL, so it can't be changed
+          later. Letters, digits, <code>-</code> and <code>_</code>.
+        </p>
+        <form className="form" onSubmit={submit}>
+          <label className="input-prefix">
+            <span className="accent">@</span>
+            <input
+              className="input"
+              name="username"
+              aria-label="Username"
+              autoComplete="username"
+              minLength={2}
+              maxLength={39}
+              pattern="[A-Za-z0-9](?:[A-Za-z0-9_\-]*[A-Za-z0-9])?"
+              required
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+          </label>
+          {error && <p className="error">{error}</p>}
+          <div className="actions">
+            <button type="submit" className="button" disabled={pending || !username}>
+              {pending ? "Saving…" : "Continue"}
+            </button>
+          </div>
+          <SignInTerms action="continuing" />
+        </form>
+      </section>
+      <AccountData
+        username={null}
+        title="Changed your mind?"
+        deleteLabel="Cancel and delete my data"
+      />
+    </>
   );
 }

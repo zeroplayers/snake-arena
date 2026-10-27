@@ -178,6 +178,7 @@ export class FakeArena {
           const latest = this.versions.filter((v) => v.info.bot.id === b.id).at(-1)?.info;
           return {
             ...b,
+            archived: false,
             activeVersion: this.active(b)?.info.n ?? null,
             latestVersion: latest
               ? { n: latest.n, status: latest.status, createdAt: latest.createdAt }

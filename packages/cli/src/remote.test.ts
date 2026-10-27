@@ -1,0 +1,401 @@
+/**
+ * `login`, `logout`, `deploy`, `status` and `logs` against {@link FakeArena}, an in-memory stand-in
+ * for the site's API. `remote.integration.test.ts` runs the same flow against the real one.
+ */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { DeployRequest } from "@zerosnake/web/shared";
+import { afterAll, describe, expect, it } from "vitest";
+import { main } from "./cli.ts";
+import { Credentials } from "./remote/config.ts";
+import { apiError, FakeArena, SERVER } from "./testing/fake-arena.ts";
+import { captureIo, cleanUp, GOOD_BOT, makeProject, TUNING } from "./testing/project.ts";
+
+afterAll(cleanUp);
+
+function botProject(files: Record<string, string> = {}): string {
+  return makeProject({
+    "package.json": JSON.stringify({ name: "my-snake" }),
+    "src/bot.ts": GOOD_BOT,
+    "src/tuning.ts": TUNING,
+    ...files,
+  });
+}
+
+/** A fake arena, a config folder, and (unless `loggedIn: false`) a stored token it accepts. */
+function setUp({ loggedIn = true } = {}) {
+  const arena = new FakeArena();
+  const configDir = makeProject({});
+  const opened: string[] = [];
+  const slept: number[] = [];
+  const remote = arena.remote({ ZEROSNAKE_CONFIG_DIR: configDir }, opened);
+  const sleep = remote.sleep;
+  remote.sleep = (ms) => {
+    slept.push(ms);
+    return sleep(ms);
+  };
+  const store = new Credentials(configDir);
+  if (loggedIn) {
+    arena.tokens.add("zsk_stored");
+    store.set(SERVER, { token: "zsk_stored", username: "ada", savedAt: "2026-10-27T00:00:00Z" });
+  }
+  const run = async (argv: string[], cwd = botProject()) => {
+    const io = captureIo(cwd);
+    const code = await main(argv, io, remote);
+    return { code, out: io.stdout(), err: io.stderr(), all: `${io.stdout()}\n${io.stderr()}` };
+  };
+  return { arena, remote, store, opened, slept, run, configDir };
+}
+
+describe("zerosnake login", () => {
+  it("runs the device flow, stores the token privately and never prints it", async () => {
+    const { arena, store, opened, slept, run, configDir } = setUp({ loggedIn: false });
+    const r = await run(["login"]);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain(`open ${SERVER}/device and enter the code`);
+    expect(r.out).toContain("WXYZ-1234");
+    expect(r.out).toContain(`Logged in to ${SERVER} as @ada.`);
+    expect(opened).toEqual([`${SERVER}/device?user_code=WXYZ-1234`]);
+    expect(slept).toEqual([5000, 5000]);
+    expect(store.get(SERVER)).toMatchObject({ token: "zsk_secret1", username: "ada" });
+    expect(r.all).not.toContain("zsk_");
+    expect(readFileSync(join(configDir, "credentials.json"), "utf8")).toContain("zsk_secret1");
+    expect(arena.calls("POST", /cli\/token/)[0]?.body).toEqual({
+      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+      device_code: "device-123",
+      client_id: "zerosnake-cli",
+    });
+  });
+
+  it("slows down when asked and rides out connection trouble", async () => {
+    const { arena, slept, run } = setUp({ loggedIn: false });
+    arena.devicePolls = ["authorization_pending", "slow_down", "authorization_pending"];
+    arena.fail("POST", /cli\/token/, "network");
+    arena.fail("POST", /cli\/token/, new Response("bad gateway", { status: 502 }));
+    const r = await run(["login", "--no-open"]);
+    expect(r.code, r.err).toBe(0);
+    expect(slept).toEqual([5000, 5000, 5000, 5000, 10_000, 10_000]);
+  });
+
+  it("stops when the login is denied or the code expires", async () => {
+    const denied = setUp({ loggedIn: false });
+    denied.arena.devicePolls = ["access_denied"];
+    const r = await denied.run(["login", "--no-open"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("The login was denied in the browser");
+    expect(denied.store.get(SERVER)).toBeNull();
+
+    const expired = setUp({ loggedIn: false });
+    expired.arena.devicePolls = Array(200).fill("authorization_pending");
+    const e = await expired.run(["login", "--no-open"]);
+    expect(e.code).toBe(1);
+    expect(e.err).toContain("The code expired before it was approved");
+  });
+
+  it("revokes the token a new login replaces", async () => {
+    const { arena, store, run } = setUp();
+    expect((await run(["login", "--no-open"])).code).toBe(0);
+    expect(arena.revoked).toEqual(["zsk_stored"]);
+    expect(store.get(SERVER)?.token).toBe("zsk_secret1");
+  });
+});
+
+describe("zerosnake logout", () => {
+  it("revokes the token and deletes it", async () => {
+    const { arena, store, run } = setUp();
+    const r = await run(["logout"]);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain(`Logged out of ${SERVER}`);
+    expect(arena.revoked).toEqual(["zsk_stored"]);
+    expect(store.get(SERVER)).toBeNull();
+    expect((await run(["logout"])).out).toContain("You aren't logged in");
+  });
+
+  it("deletes the token even when the server can't be reached", async () => {
+    const { arena, store, run } = setUp();
+    arena.fail("POST", /cli\/logout/, "network");
+    const r = await run(["logout"]);
+    expect(r.code).toBe(0);
+    expect(r.err).toContain(`revoke it at ${SERVER}/settings`);
+    expect(store.get(SERVER)).toBeNull();
+  });
+});
+
+describe("zerosnake deploy", () => {
+  it("needs a login", async () => {
+    const { run } = setUp({ loggedIn: false });
+    const r = await run(["deploy"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(
+      `You're not logged in to ${SERVER}. Run \`zerosnake login --url ${SERVER}\``,
+    );
+  });
+
+  it("names your bots when the project's isn't one of them, and uploads nothing", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("greedy");
+    const r = await run(["deploy"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('No bot "my-snake". @ada has: greedy.');
+    expect(r.err).toContain("--create");
+    expect(arena.calls("POST", /versions/)).toHaveLength(0);
+  });
+
+  it("creates the bot, uploads bundle and sources, and waits for the checks", async () => {
+    const { arena, run } = setUp();
+    const r = await run(["deploy", "--create", "-m", "first try"]);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("within the deploy limits");
+    expect(r.out).toContain("loads in the sandbox");
+    expect(r.out).toContain("created the bot my-snake");
+    expect(r.out).toContain("uploaded my-snake v1 (19 of 20 deploys left today)");
+    expect(r.out).toContain("my-snake v1 passed the checks and is live in the arena.");
+    expect(r.out).toContain("qualification score 42.0");
+    expect(r.out).toContain(`${SERVER}/@ada/my-snake?v=1`);
+    expect(r.err).toContain("Waiting for the server to check my-snake v1");
+
+    expect(arena.calls("POST", /^\/api\/bots$/)[0]?.body).toEqual({
+      name: "my-snake",
+      slug: "my-snake",
+    });
+    const [upload] = arena.calls("POST", /versions/);
+    const body = upload?.body as DeployRequest;
+    expect(body.bundle).toContain("export");
+    expect(body.sources.map((s) => s.path)).toEqual(["src/bot.ts", "src/tuning.ts"]);
+    expect(body.sources[0]?.content).toBe(GOOD_BOT);
+    expect(body.meta).toMatchObject({ cliVersion: expect.any(String), message: "first try" });
+    expect(upload?.headers.get("idempotency-key")).toMatch(/^[0-9a-f-]{36}$/);
+    expect(arena.calls("GET", /versions\/1$/).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("deploys to --bot, or the bot named in package.json", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("greedy");
+    expect((await run(["deploy", "--bot", "greedy", "--no-wait"])).code).toBe(0);
+    const cwd = botProject({
+      "package.json": JSON.stringify({ name: "x", zerosnake: { bot: "greedy" } }),
+    });
+    const r = await run(["deploy", "--no-wait"], cwd);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("uploaded greedy v2");
+    expect(r.out).toContain("zerosnake status");
+    expect(arena.calls("GET", /versions\/\d/)).toHaveLength(0);
+  });
+
+  it("retries with the same Idempotency-Key and makes one version", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("my-snake");
+    arena
+      .fail("POST", /versions$/, "network")
+      .fail("POST", /versions$/, apiError(503, "unavailable", "Couldn't queue the checks."))
+      .fail("POST", /versions$/, "lost")
+      .fail("POST", /versions$/, apiError(409, "deploy_in_progress", "Still processing."));
+    arena.fail("GET", /versions\/1$/, "network");
+    const r = await run(["deploy"]);
+    expect(r.code, r.err).toBe(0);
+    const keys = arena.calls("POST", /versions$/).map((c) => c.headers.get("idempotency-key"));
+    expect(keys).toHaveLength(5);
+    expect(new Set(keys).size).toBe(1);
+    expect(arena.versions).toHaveLength(1);
+    expect(r.err).toContain("Upload didn't go through (ECONNRESET); retrying in 1s");
+    expect(r.err).toContain("still processing the first attempt");
+    expect(r.out).toContain("my-snake v1 passed the checks");
+  });
+
+  it("prints the report and exits 1 when the checks reject the version", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("my-snake");
+    arena.outcome = {
+      status: "rejected",
+      report: {
+        ok: false,
+        checks: [
+          { name: "loads", ok: true },
+          { name: "qualification", ok: false, message: "mean score 12.0, easy scored 29.5" },
+        ],
+      },
+      polls: 1,
+    };
+    const r = await run(["deploy"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("my-snake v1 was rejected:");
+    expect(r.err).toContain("✗ qualification: mean score 12.0, easy scored 29.5");
+    expect(r.err).toContain("Nothing changed in the arena");
+  });
+
+  it("stops early when today's deploys are used up", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("my-snake");
+    arena.deploysToday = 20;
+    const r = await run(["deploy"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/You've used all 20 deploys for today\. More at .+ \(00:00 UTC\)/);
+    expect(r.out).not.toContain("bundles");
+  });
+
+  it("checks the limits locally before uploading", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("my-snake");
+    const r = await run(["deploy"], botProject({ "src/my notes.md": "# ideas" }));
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("✗ source paths: src/my notes.md may only contain letters");
+    expect(arena.calls("POST", /versions/)).toHaveLength(0);
+  });
+
+  it("explains the server's refusals", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("my-snake");
+    arena.fail(
+      "POST",
+      /versions$/,
+      apiError(422, "sources_too_large", "Sources are 1.2 MB; the limit is 1 MB.", {
+        limit: 1,
+        actual: 2,
+      }),
+    );
+    const r = await run(["deploy"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("Sources are 1.2 MB; the limit is 1 MB.\nEverything under src/");
+
+    arena.tokens.clear();
+    const expired = await run(["deploy"]);
+    expect(expired.code).toBe(1);
+    expect(expired.err).toContain("didn't accept your login: it expired or was revoked");
+  });
+
+  it("gives up waiting after a while, leaving the checks running", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("my-snake");
+    arena.outcome = { ...arena.outcome, polls: 10_000 };
+    const r = await run(["deploy"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("The server is still checking my-snake v1 after 10 minutes");
+  });
+
+  it("uses ZEROSNAKE_TOKEN when set (CI)", async () => {
+    const arena = new FakeArena();
+    arena.tokens.add("zsk_ci");
+    arena.addBot("my-snake");
+    const io = captureIo(botProject());
+    const remote = arena.remote({
+      ZEROSNAKE_TOKEN: "zsk_ci",
+      ZEROSNAKE_CONFIG_DIR: makeProject({}),
+    });
+    expect(await main(["deploy", "--no-wait"], io, remote)).toBe(0);
+    expect(arena.calls("POST", /versions$/)[0]?.headers.get("authorization")).toBe("Bearer zsk_ci");
+  });
+});
+
+describe("zerosnake status", () => {
+  it("shows bots, versions, ratings and deploys left", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("greedy");
+    arena.addBot("draft");
+    arena.addBot("newbie");
+    expect((await run(["deploy", "--bot", "greedy"])).code).toBe(0);
+    expect((await run(["deploy", "--bot", "draft"])).code).toBe(0);
+    arena.outcome = { ...arena.outcome, polls: 100 };
+    expect((await run(["deploy", "--bot", "greedy", "--no-wait"])).code).toBe(0);
+    arena.ratings = {
+      greedy: { rating: 312.44, ratingCi: 18.2, ratedLives: 64, lives: 1234 },
+      draft: { rating: 50, ratingCi: 40, ratedLives: 12, lives: 12 },
+    };
+
+    const r = await run(["status"]);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain(`Logged in to ${SERVER} as @ada`);
+    expect(r.out).toContain(`greedy ${SERVER}/@ada/greedy`);
+    expect(r.out).toMatch(/active\s+v1\n\s+latest\s+v2 · validating · deployed 1 min ago/);
+    expect(r.out).toContain("312.4 ± 18.2 over 64 lives · ranked");
+    expect(r.out).toContain("1,234 played (all versions)");
+    expect(r.out).toContain("50.0 ± 40.0 over 12 lives · unranked until 30 lives");
+    expect(r.out).toMatch(/newbie .+\n\s+active\s+none \(not in the arena\)/);
+    expect(r.out).toMatch(/Deploys today: 3 of 20, 17 left \(resets at .+\)/);
+
+    const one = await run(["status", "--bot", "draft"]);
+    expect(one.out).not.toContain("greedy");
+  });
+});
+
+describe("zerosnake logs", () => {
+  it("shows the version and points at the site while the API has no lives", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("my-snake");
+    expect((await run(["deploy", "-m", "eat more"])).code).toBe(0);
+    const r = await run(["logs"]);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("my-snake v1 · ready (active)");
+    expect(r.out).toContain('"eat more"');
+    expect(r.out).toContain("✓ loads");
+    expect(r.out).toContain("The CLI can't list lives yet (zeroplayers/snake-arena#25)");
+    expect(r.out).toContain(`${SERVER}/@ada/my-snake?v=1`);
+  });
+
+  it("lists recent lives and how they ended", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("my-snake");
+    expect((await run(["deploy"])).code).toBe(0);
+    arena.livesEndpoint = true;
+    const life = {
+      startedAt: "2026-10-27T10:00:00Z",
+      score: 300,
+      lengthMax: 80,
+      kills: 2,
+      killer: null,
+    };
+    arena.lives = [
+      { ...life, id: "l3", endedAt: null, deathCause: null },
+      {
+        ...life,
+        id: "l2",
+        endedAt: "2026-10-27T10:05:00Z",
+        deathCause: "collision",
+        killer: "@bob/viper v2",
+      },
+      { ...life, id: "l1", endedAt: "2026-10-27T10:01:00Z", deathCause: "timeout" },
+    ];
+    // Run from elsewhere: with a single bot, logs picks it.
+    const r = await run(["logs"], makeProject({}));
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("alive");
+    expect(r.out).toContain("ran into @bob/viper v2");
+    expect(r.out).toContain(`replay: ${SERVER}/replay/l2`);
+    expect(r.out).toContain("too slow");
+
+    const deaths = await run(["logs", "--deaths", "--version", "1"]);
+    expect(deaths.out).not.toContain("alive");
+    expect(arena.calls("GET", /lives/).at(-1)?.path).toBe(
+      "/api/bots/my-snake/versions/1/lives?limit=20&deaths=1",
+    );
+  });
+
+  it("shows why a version was rejected", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("my-snake");
+    arena.outcome = {
+      status: "rejected",
+      report: { ok: false, checks: [{ name: "loads", ok: false, message: "threw on load" }] },
+      polls: 1,
+    };
+    await run(["deploy"]);
+    const r = await run(["logs", "--version", "1"]);
+    expect(r.out).toContain("my-snake v1 · rejected");
+    expect(r.out).toContain("✗ loads: threw on load");
+    const missing = await run(["logs", "--version", "7"]);
+    expect(missing.code).toBe(1);
+    expect(missing.err).toContain('Bot "my-snake" has no version 7.');
+  });
+});
+
+describe("help", () => {
+  it("covers the remote commands", async () => {
+    for (const command of ["login", "logout", "deploy", "status", "logs"]) {
+      const io = captureIo(".");
+      expect(await main([command, "--help"], io)).toBe(0);
+      expect(io.stdout()).toContain(`Usage: zerosnake ${command}`);
+    }
+    const io = captureIo(".");
+    await main(["--help"], io);
+    expect(io.stdout()).not.toContain("Coming soon: login");
+  });
+});

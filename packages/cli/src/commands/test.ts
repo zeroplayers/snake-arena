@@ -1,9 +1,8 @@
-import { createSandbox } from "@zerosnake/sandbox";
+import { readSources, runLocalChecks } from "../artifact.ts";
 import { bundleBot } from "../bundle.ts";
 import { EXIT, UsageError } from "../errors.ts";
 import { type Io, parse } from "../io.ts";
-import { assertLoads } from "../preflight.ts";
-import { collectSources, findEntry, findProject } from "../project.ts";
+import { findEntry, findProject } from "../project.ts";
 import { dim, green, stderrHasColor } from "../term.ts";
 
 export const TEST_HELP = `Usage: zerosnake test [options]
@@ -23,7 +22,7 @@ const OPTIONS = {
 /** zeroplayers/snake-arena#13 builds the shared check suite this command will run. */
 export const CHECKS_PENDING =
   "The full check suite is coming with zeroplayers/snake-arena#13 (@zerosnake/checks).\n" +
-  "Until then `zerosnake test` only bundles your bot and loads it in the sandbox;\n" +
+  "Until then `zerosnake test` only checks the deploy limits and loads your bot in the sandbox;\n" +
   "use `zerosnake sim --headless` to see how it plays.";
 
 export async function testCommand(argv: string[], io: Io): Promise<number> {
@@ -40,13 +39,11 @@ export async function testCommand(argv: string[], io: Io): Promise<number> {
   const project = findProject(io.cwd);
   const entry = findEntry(project, io.cwd, values.bot);
   const bundle = await bundleBot(entry, { cwd: project.root, color: stderrHasColor() });
-  const sources = collectSources(project.root);
+  const sources = readSources(project.root, bundle);
   io.out(
     `${green("✓")} bundles ${dim(`(${(bundle.bytes / 1024).toFixed(1)} KB from ${sources.length} source files)`)}`,
   );
-
-  assertLoads(await createSandbox(), "Your bot", bundle.code);
-  io.out(`${green("✓")} loads in the sandbox`);
+  await runLocalChecks(io, bundle, sources);
 
   io.err(`\n${CHECKS_PENDING}`);
   return EXIT.failure;

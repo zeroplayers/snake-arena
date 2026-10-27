@@ -20,6 +20,8 @@ const FOOD_COLORS = ["#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#00
 /** Glow square side relative to the food radius (the original's 6× base size, padded). */
 const GLOW_SIZE_MULTIPLIER = 6 * SVG_PADDING;
 const GLOW_OPACITY = 0.75;
+/** Pellet radius the halo is tuned for (ambient food); bigger pellets get a tamer one. */
+const GLOW_BASE_RADIUS = 0.5;
 const PULSE_AMPLITUDE = 0.08;
 const PULSE_SPEED = 3; // rad/s
 
@@ -105,10 +107,11 @@ export class FoodRenderer {
     this.core.setMatrixAt(i, this.matrix);
     this.core.setColorAt(i, this.color);
 
-    const g = r * GLOW_SIZE_MULTIPLIER;
+    const glow = foodGlow(f.size);
+    const g = r * glow.scale;
     this.matrix.makeScale(g, g, 1).setPosition(x, y, -0.11);
     this.glow.setMatrixAt(i, this.matrix);
-    this.glow.setColorAt(i, this.color);
+    this.glow.setColorAt(i, this.color.multiplyScalar(glow.intensity));
   }
 
   private ensureCapacity(n: number): void {
@@ -161,6 +164,17 @@ export class FoodRenderer {
       mesh.dispose();
     }
   }
+}
+
+/**
+ * Halo of a pellet of radius `size`: its side relative to the drawn radius, and a brightness
+ * factor (the halo is additive). Pellets up to `GLOW_BASE_RADIUS` get the full halo; above it
+ * the halo only grows with √size and dims as 1/size, so a row of big pellets (a dead snake's
+ * remains) stays a row of glowing dots instead of merging into a white blob.
+ */
+export function foodGlow(size: number): { scale: number; intensity: number } {
+  const over = Math.max(1, size / GLOW_BASE_RADIUS);
+  return { scale: GLOW_SIZE_MULTIPLIER / Math.sqrt(over), intensity: 1 / over };
 }
 
 function nearestHead(

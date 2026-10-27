@@ -9,6 +9,7 @@ import {
   TICK_RATE,
 } from "@zerosnake/engine";
 import { type RenderFood, type RenderSnake, SNAKE_PALETTE } from "@zerosnake/renderer";
+import { foodDisplaySize } from "../food.ts";
 import type { Playback } from "../Playback.ts";
 import type { LifeInfo, MatchInfo, MatchSource, SnakeTick, TickSnapshot } from "../types.ts";
 import { DEFAULT_VISION_RADIUS } from "./LiveEngineSource.ts";
@@ -324,7 +325,7 @@ export class BroadcastSource implements MatchSource {
           id: f.id,
           x: f.x,
           y: f.y,
-          size: f.kind === "remains" ? config.remainsRadius : config.foodRadius,
+          size: foodDisplaySize(f.kind, config),
         };
         this.foodCache.set(f.id, r);
       }

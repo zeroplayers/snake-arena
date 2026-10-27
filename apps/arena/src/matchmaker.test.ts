@@ -297,6 +297,40 @@ describe("MatchmakerDO", () => {
     expect((await step(r)).joined.map((t) => t.versionId)).toEqual([versionId("quarantine")]);
   }, 60_000);
 
+  it("a bot or user ban alone stops its versions at the next poll", async () => {
+    // No full reconcile: only the `change_seq` poll can see the bans.
+    await setup({ openThreshold: 2, reconcileMs: DAY_MS });
+    await seedBots([
+      { author: "u-bot", bot: "botban" },
+      { author: "u-user", bot: "userban" },
+      { author: "u-user", bot: "userban2" },
+      { author: "u-steady", bot: "steady" },
+    ]);
+    await settle();
+    const [r] = await openRooms();
+    if (!r) throw new Error("no room");
+    // One snake per author: one of u-user's bots plays, the other waits.
+    const playing = (await lives(r)).map((l) => l.versionId);
+    expect(playing).toHaveLength(3);
+    const userLife = playing.find((v) => v.startsWith("userban"));
+    if (!userLife) throw new Error("no u-user life");
+
+    // Only `banned_at` changes (no version status), and no hint from the site.
+    await d1("UPDATE bots SET banned_at = 1 WHERE id = 'botban'");
+    await d1("UPDATE users SET banned_at = 1 WHERE id = 'u-user'");
+    await mm("tick");
+    const leaving = (await lives(r)).filter((l) => l.leaving).map((l) => l.versionId);
+    expect(leaving.sort()).toEqual([versionId("botban"), userLife].sort());
+    expect((await step(r)).joined).toEqual([]);
+    expect((await lives(r)).map((l) => l.versionId)).toEqual([versionId("steady")]);
+    expect((await status()).playable).toBe(1);
+
+    // Unbanned: both of u-user's bots may play again.
+    await d1("UPDATE users SET banned_at = NULL WHERE id = 'u-user'");
+    await mm("tick");
+    expect((await status()).playable).toBe(3);
+  }, 60_000);
+
   it("a quarantine reported by a room, or found when issuing, stops the version at once", async () => {
     await setup({ openThreshold: 0 });
     await seedBots([

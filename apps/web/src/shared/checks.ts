@@ -103,6 +103,7 @@ export const SOURCE_ARCHIVE_FORMAT = "zerosnake-sources@1";
 
 const CHECK_LABELS: Record<string, string> = {
   deploy: "Deploy",
+  limits: "Upload limits",
   loads: "Bundle loads",
   seeds: "Fixed seeds",
   qualification: "Qualification",

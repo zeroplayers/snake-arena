@@ -69,6 +69,7 @@ export interface Harness {
   settled(id: string, timeoutMs?: number): Promise<VersionState>;
   db: D1Database;
   bundles: R2Bucket;
+  sources: R2Bucket;
   /** The bindings apps/web's deploy API uses, on the same D1, buckets and queue. */
   web: {
     DB: D1Database;
@@ -238,6 +239,7 @@ export async function createHarness(): Promise<Harness> {
 
     db,
     bundles,
+    sources,
     web: { DB: db, BUNDLES: bundles, SOURCES: sources, CHECKS_QUEUE: { send } },
     dispose: () => mf.dispose(),
   };

@@ -12,6 +12,10 @@
   "compatibility_date": "2026-10-15",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // CPU time per invocation, the plan maximum; repeated in `env.staging`. The checks consumer
+  // needs it: in workerd the suite's own time cap never fires, so a slow bot is stopped only by
+  // this limit, and queue consumers default to 30 s (`packages/checks/README.md`, "Runtime").
+  "limits": { "cpu_ms": 300000 },
 
   // Shared by all environments.
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MatchmakerDO", "RoomDO"] }],
@@ -57,6 +61,7 @@
       // Deployed as `zerosnake-arena-staging`.
       "routes": [{ "pattern": "api.arena.surninsynergy.dev", "custom_domain": true }],
       "vars": { "ENVIRONMENT": "staging" },
+      "limits": { "cpu_ms": 300000 },
       "d1_databases": [
         {
           "binding": "DB",

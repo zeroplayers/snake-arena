@@ -122,7 +122,7 @@ export const STALE_AFTER_MS = 60 * 60 * 1000;
 /**
  * Rejects every version queued before `queuedBefore` (Unix ms) that is still `validating`: its
  * job was lost, or is stuck far longer than retries and the dead-letter queue take. Versions
- * not queued yet (`enqueued_at` null) belong to the deploy API, which ends them itself.
+ * not queued yet (`enqueued_at` null) are {@link rejectUnqueued}'s.
  */
 export async function rejectStale(
   db: D1Database,
@@ -137,6 +137,36 @@ export async function rejectStale(
        RETURNING id`,
     )
     .bind(queuedBefore, JSON.stringify(report), now)
+    .all<{ id: string }>();
+  return results.map((r) => r.id);
+}
+
+/**
+ * Unqueued `validating` versions this old were left by a deploy request that died before
+ * `send()`. The deploy API's `STALE_DEPLOY_MS`: after that, a retry with the same key takes the
+ * row over too.
+ */
+export const UNQUEUED_AFTER_MS = 60_000;
+
+/**
+ * Rejects every version created before `createdBefore` (Unix ms) that is still `validating` and
+ * was never queued, as the deploy API's `abandon` does: `enqueued_at` stays null, so it doesn't
+ * count against the daily quota, and the Idempotency-Key is released so a retry starts over.
+ * Without this, a deploy that died without a keyed retry would stay `validating` forever.
+ */
+export async function rejectUnqueued(
+  db: D1Database,
+  createdBefore: number,
+  report: VersionReport,
+  now: number,
+): Promise<string[]> {
+  const { results } = await db
+    .prepare(
+      `UPDATE versions SET status = 'rejected', report = ?2, idempotency_key = NULL, updated_at = ?3
+       WHERE status = 'validating' AND enqueued_at IS NULL AND created_at < ?1
+       RETURNING id`,
+    )
+    .bind(createdBefore, JSON.stringify(report), now)
     .all<{ id: string }>();
   return results.map((r) => r.id);
 }

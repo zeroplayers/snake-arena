@@ -520,12 +520,26 @@ describe("sweepReplays", () => {
     );
   });
 
-  it("alerts when the oldest chunk it deletes is far past the retention", async () => {
+  it("doesn't alert when it deletes chunks whose pin lapsed long after they were written", async () => {
+    // `pinned` is pinned now; a day later it's pushed out by a better life, and its chunks go
+    // once the pin has lapsed: 2 days after the last pin, 3 days after they were written.
+    await sweepReplays(env, now, { random: () => 0 });
+    await run(lifeSql("better", "v", { score: 9000, replayKey: key("room-t", 1) }));
+    await run("UPDATE lives SET score = 0 WHERE id = 'pinned'");
     const errors = vi.mocked(console.error);
+    const logs = vi.mocked(console.log);
     errors.mockClear();
-    await runReplaySweep(env, new Date(now + DAY_MS));
-    expect(errors).toHaveBeenCalledWith(
-      expect.objectContaining({ event: "replays.swept", alert: "replay_backlog" }),
+    logs.mockClear();
+    const sweep = await runReplaySweep(
+      env,
+      new Date(now + DAY_MS + REPLAY_RETENTION_DAYS * DAY_MS),
+    );
+    expect(sweep?.outcome).toBe("done");
+    expect(await keys()).not.toContain(key("room-a", 200));
+    expect(sweep?.oldestDeletedHours).toBeGreaterThan(REPLAY_RETENTION_DAYS * 24 + 6);
+    expect(errors).not.toHaveBeenCalled();
+    expect(logs).toHaveBeenCalledWith(
+      expect.objectContaining({ level: "info", event: "replays.swept", outcome: "done" }),
     );
   });
 });

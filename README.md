@@ -72,8 +72,8 @@ No lifecycle rule can express the exceptions, so don't add one: the site's cron 
 ~5,800 chunks a day each), and marks the lives that died in them (`lives.replay_expired_at`,
 migration `0012_replay_retention`). If it can't settle the pinned lives, or they shrank to less
 than half of the last run's, it deletes nothing. Each run logs `replays.swept` and writes the
-`replays.swept` metric: `outcome` `no_pins` or `failed`, or `oldestDeletedHours` well past 48
-(`alert: "replay_backlog"` in the log), means replays are piling up.
+`replays.swept` metric: `outcome` `no_pins` or `failed`, or `more` run after run, means replays are
+piling up (alerts and recovery in [`apps/web/README.md`](apps/web/README.md#alerts)).
 
 **Admins, rate limits, metrics and alerts**: see "Operations" in
 [`apps/web/README.md`](apps/web/README.md#operations). Set `ADMIN_USER_IDS` / `ADMIN_GITHUB_IDS`

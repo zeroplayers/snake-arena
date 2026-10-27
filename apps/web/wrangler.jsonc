@@ -24,7 +24,8 @@
   // Rating job every minute (src/server/ratings.ts), arena liveness check and revoked session
   // pruning every five (src/server/liveness.ts, session-store.ts), replay retention sweep every
   // thirty (src/server/replays.ts); src/server.ts dispatches on the expression. Locally:
-  // curl "http://localhost:3000/cdn-cgi/handler/scheduled?cron=*+*+*+*+*" (or ?cron=*/5+*+*+*+*).
+  // curl "http://localhost:3000/cdn-cgi/handler/scheduled?cron=*+*+*+*+*" (or ?cron=*/5+*+*+*+*,
+  // ?cron=*/30+*+*+*+*).
   "triggers": { "crons": ["* * * * *", "*/5 * * * *", "*/30 * * * *"] },
 
   // DEPLOYS_PER_DAY and BOTS_PER_AUTHOR override the CLI API's defaults (src/shared/deploy.ts).

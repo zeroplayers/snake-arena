@@ -76,9 +76,9 @@ export const METRICS = {
    * The replay retention sweep (apps/web cron every 30 minutes, `src/server/replays.ts`).
    * `outcome`: `done` (every room looked at), `more` (stopped at the per-run budget; the next run
    * carries on), `no_pins` (the pinned lives couldn't be read, so nothing was deleted) or
-   * `failed`. Alert on `no_pins` or `failed` lasting: replays pile up meanwhile.
-   * `oldestDeletedHours` is the age of the oldest chunk deleted: well above the retention (48 h)
-   * means the sweep falls behind.
+   * `failed`. Alert on any `no_pins` or `failed`, and on `more` in every run for hours (the sweep
+   * falls behind). `oldestDeletedHours`, the age of the oldest chunk deleted, is informational:
+   * a chunk whose pin lapsed is deleted 2 days after its last pin, however old it is.
    */
   "replays.swept": {
     source: "web",

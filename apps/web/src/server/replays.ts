@@ -15,8 +15,9 @@
  * - Bounded: `SWEEP_LISTS` list calls, `SWEEP_DELETES` deletions and `SWEEP_TIME_MS` per run,
  *   rooms taken from a random one on, so a run that stops early leaves different rooms for the
  *   next. Accelerated rooms write a chunk every ~15 s (~5,800 a day), so one run keeps up with a
- *   few hundred rooms. `oldestDeletedHours` (log and metric) grows past the retention when the
- *   sweep falls behind.
+ *   few hundred rooms. A sweep that falls behind ends every run with `outcome: "more"`: that's
+ *   what to alert on (apps/web README, "Alerts"). `oldestDeletedHours` is only informational: a
+ *   chunk whose pin lapsed is deleted 2 days after its last pin, however old it is.
  * - Idempotent: before deleting a batch of chunks it marks the lives that died in them
  *   (`lives.replay_expired_at`), so the site stops linking to them; a run that fails between the
  *   two does both again next time.
@@ -50,8 +51,6 @@ export const SWEEP_DELETES = 50_000;
 export const SWEEP_TIME_MS = 60_000;
 /** A run whose fresh pinned set is smaller than this share of the last run's deletes nothing. */
 export const PIN_SHRINK_GUARD = 0.5;
-/** `oldestDeletedHours` above this logs `alert: "replay_backlog"`: the sweep is falling behind. */
-export const BACKLOG_ALERT_HOURS = REPLAY_RETENTION_DAYS * 24 + 6;
 /** Keys per R2 delete call and per D1 batch of `UPDATE`s. */
 const FLUSH_KEYS = 1000;
 /** Keys per `UPDATE … IN (…)`: D1 binds at most 100 parameters per statement. */
@@ -266,7 +265,10 @@ export interface ReplaySweep {
   rooms: number;
   roomsSwept: number;
   lists: number;
-  /** Age of the oldest chunk deleted, in hours; 0 if none. Above the retention: a backlog. */
+  /**
+   * Age of the oldest chunk deleted, in hours; 0 if none. Informational: past the retention for
+   * chunks whose pin lapsed as well as when the sweep falls behind.
+   */
   oldestDeletedHours: number;
 }
 
@@ -436,14 +438,8 @@ export async function runReplaySweep(
     log("error", "replays.sweep_failed", { ...stats, outcome, error });
   }
   const durationMs = Date.now() - started;
-  const backlog = stats.oldestDeletedHours > BACKLOG_ALERT_HOURS;
-  if (outcome === "done" || outcome === "more") {
-    log(backlog ? "error" : "info", "replays.swept", {
-      ...stats,
-      durationMs,
-      ...(backlog && { alert: "replay_backlog" }),
-    });
-  }
+  if (outcome === "done" || outcome === "more")
+    log("info", "replays.swept", { ...stats, durationMs });
   writeMetric(env.METRICS, "replays.swept", {
     outcome,
     deleted: stats.deleted,

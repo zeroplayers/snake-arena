@@ -116,9 +116,8 @@ ties to the earlier life, among lives whose replay is still there). The sweep
 `GET /api/lives/:id/replay` also marks a life whose chunk is gone from R2 without the sweep, so it
 stops being linked and stops holding a pinned slot. An expired replay's page says so instead of
 loading the player (and its trace rows don't seek); the bot page shows "Expired" instead of a
-link, and `zerosnake logs` prints no replay URL. Each run logs `replays.swept` (at level `error`
-with `alert: "replay_backlog"` when the oldest chunk it deleted is over 54 hours old: the sweep is
-falling behind) or `replays.sweep_failed`, and writes the `replays.swept` metric. Locally:
+link, and `zerosnake logs` prints no replay URL. Each run logs `replays.swept` or
+`replays.sweep_failed` and writes the `replays.swept` metric (alerts below). Locally:
 `curl "http://localhost:3000/cdn-cgi/handler/scheduled?cron=*/30+*+*+*+*"`.
 
 ## Database
@@ -357,7 +356,8 @@ saving.
 | Site errors             | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'http.error'`                                                                                             | `> 0`     |
 | No lives recorded       | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'arena.liveness' AND blob3 = 'stalled'`                                                                   | `> 0`     |
 | Room crashed            | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'room.crashed' AND blob4 != 'restart'`                                                                    | `> 0`     |
-| Replay sweep failing    | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'replays.swept' AND (blob3 IN ('no_pins', 'failed') OR double10 > 54)`                                    | `> 0`     |
+| Replay sweep failing    | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'replays.swept' AND blob3 IN ('no_pins', 'failed')`                                                       | `> 0`     |
+| Replay sweep behind     | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'replays.swept' AND blob3 = 'more' AND timestamp > NOW() - INTERVAL '3' HOUR`                             | `> 5`     |
 | Auth failures spike     | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'auth.failure'`                                                                                           | `> 50`    |
 | Arena worker exceptions | the Workers logs dataset (`logs.workersLogs`) in the visual builder: script `zerosnake-arena-staging`, error-level logs or exception outcomes. Field names are listed by `cf sql datasets --include-columns` | `> 0`     |
 
@@ -376,3 +376,20 @@ ones whose bot hasn't used its `livesPerBotPerDay` lives today. With no `ready` 
 `arena.liveness`, at level `error` with `alert: "no_lives"` when stalled, so a Workers Logs alert
 works as well. Locally, trigger it with
 `curl "http://localhost:3000/cdn-cgi/handler/scheduled?cron=*/5+*+*+*+*"`.
+
+**Replay sweep failing / behind** come from the replay retention sweep (`*/30 * * * *`,
+[Replay retention](#replay-retention)). Behind is `outcome: "more"` in all 6 runs of 3 hours: more
+rooms or chunks than a run's budget. `oldestDeletedHours` isn't an alert: a chunk whose pin
+lapsed is deleted 2 days after its last pin, however old it is. Failing with `no_pins` is a
+pinned-lives query that failed, or the shrink guard: the fresh pinned set was less than half of
+the last run's (`replays.sweep_failed` logs both counts in its error). The guard keeps refusing
+until someone looks. If the shrink is expected (a mass ban, say), let the next run through by
+clearing the last run's marks, from `apps/web`:
+
+```bash
+pnpm exec wrangler d1 execute DB --env staging --remote --command "UPDATE lives SET replay_pinned_at = NULL WHERE replay_pinned_at = (SELECT max(replay_pinned_at) FROM lives WHERE replay_expired_at IS NULL)"
+```
+
+Lives that are still pinned get marked again by the next run; the others lose the rest of their
+2-day grace. If the shrink isn't expected, find out why the queries return too little first
+(`selectPinnedLives` in `src/server/replays.ts`): while the guard holds, nothing is deleted.

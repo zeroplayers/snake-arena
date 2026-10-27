@@ -124,12 +124,13 @@ export function emptyStats(): TickStats {
 
 /**
  * Plays one check match: an arena room run by RoomDO's rules (`room-rules.ts`), on the default
- * engine config. The room opens at a start tick far from 0. Snakes join only at batch
+ * engine config. The room opens at tick 0 or at an older room's tick. Snakes join only at batch
  * boundaries, tickets first (the candidate and the "users", house bots under user names), then
  * the house fill tops the room up to 5 authors. A batch lasts `batchTicks(bots, starts)` ticks.
  * The candidate's ticket arrives after a pre-roll, and after each death it rejoins at the next
  * batch, like the users. The match lasts `ticks` ticks from the candidate's first spawn. Names,
- * start tick and pre-roll come from {@link disguiseFor}, so nothing the bot sees says "check".
+ * start tick and pre-roll come from {@link disguiseFor}, so nothing the bot sees says "check"
+ * (tests pass their own `disguise` to play a room as the arena would set it up).
  *
  * House bots run natively (they are trusted and deterministic); only the candidate runs in the
  * sandbox, alone, so its OOM behaviour doesn't depend on anyone else. Stops early on the
@@ -139,8 +140,8 @@ export function playMatch(
   seat: Seat,
   { seed, ticks, opBudget }: MatchOptions,
   trace: RoomTrace = {},
+  disguise: Disguise = disguiseFor(seed),
 ): MatchResult {
-  const disguise = disguiseFor(seed);
   const world = createWorld({ seed });
   world.tick = disguise.startTick;
   const limits = { opBudget, logLimitBytes: LOG_LIMIT_BYTES };

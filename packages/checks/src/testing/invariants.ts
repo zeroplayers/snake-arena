@@ -2,25 +2,30 @@
  * `checkArena(state)`: throws "tell: …" when a bot's view breaks a rule every arena room
  * keeps (RoomDO, #56). Plain JS source, so a bot can run it in the sandbox:
  *
- * - deployed bots have UUID ids (life ids) and UUID authors (user ids);
+ * - deployed bots have UUID ids (life ids) and Better Auth authors (user ids: 32 letters and
+ *   digits);
  * - house bots are `house-<kind>-<tick>-<i>` by `house:<kind>` or `house:<kind>#<n>`, where
  *   `<i>` is the index in that tick's fill, so `<kind>` is the fill order at `<i>`;
- * - one snake per author; nobody spawned after the current tick; no room near tick 0.
+ * - one snake per author; nobody spawned after the current tick;
+ * - the tick is a whole number from 0 up (every room starts at 0), and the life no older than
+ *   the room.
  */
 export const ARENA_INVARIANTS = String.raw`
 function checkArena(state) {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  const user = /^[A-Za-z0-9]{32}$/;
   const order = ["medium", "easy", "hard", "chaos"];
   const tell = (what) => { throw new Error("tell: " + what); };
   if (!uuid.test(state.self.id)) tell("own id " + state.self.id);
-  if (state.tick < 50000) tell("tick " + state.tick);
+  if (!Number.isInteger(state.tick) || state.tick < 0) tell("tick " + state.tick);
+  if (state.lifeTick > state.tick) tell("life older than the room " + state.lifeTick);
   const authors = new Set();
   for (const s of state.snakes) {
     if (authors.has(s.author)) tell("author twice " + s.author);
     authors.add(s.author);
     const m = /^house-([a-z]+)-(\d+)-(\d+)$/.exec(s.id);
     if (!m) {
-      if (!uuid.test(s.id) || !uuid.test(s.author)) tell("snake " + s.id + " by " + s.author);
+      if (!uuid.test(s.id) || !user.test(s.author)) tell("snake " + s.id + " by " + s.author);
       continue;
     }
     const kind = m[1], t = Number(m[2]), i = Number(m[3]);

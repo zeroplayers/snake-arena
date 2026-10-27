@@ -64,9 +64,12 @@ export const BAD_BOTS = {
   missingExport: "export const bot = { tick() { return { turn: 0 }; } };",
   noTick: "export default { init() { return {}; } };",
   async: botWithTick("return { turn: 0 };", "async function later() {}"),
-  /** Loads fine for the load check (seed 0) but init() throws on some lives in the matches. */
+  /**
+   * init() throws on some lives: with the test seeds (101, 202, 303) the first life loads, so the
+   * load check passes, and the second throws.
+   */
   flakyInit: `export default {
-    init(info) { if (info.seed % 3 === 1) throw new Error("bad seed " + info.seed); return {}; },
+    init(info) { if (info.seed % 3 === 0) throw new Error("bad seed " + info.seed); return {}; },
     tick() { return { turn: 0.3 }; },
   };`,
 };

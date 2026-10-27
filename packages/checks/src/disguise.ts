@@ -5,10 +5,19 @@
 import { createRng, type Rng } from "@zerosnake/engine";
 import { HOUSE_FILL_ORDER, type HouseKind } from "./room-rules.ts";
 
-/** Lowest and highest world tick a check room starts at (rooms are persistent). */
-const START_TICK = { min: 50_000, max: 5_000_000 };
-/** Ticks the room runs before the candidate's ticket arrives, so it joins a room in progress. */
+/**
+ * Every arena room starts at tick 0 (RoomDO, #56: `createWorld({ seed })`) and its tick only
+ * grows, so a life can see any tick. A candidate often joins a young room: half the check rooms
+ * open at tick 0, the others are older rooms whose age is spread over 1 000–9 999 999 ticks,
+ * the same number of rooms for every power of ten.
+ */
+const FRESH_ROOMS = 2;
+/** Digits of an older room's start tick: 1 000–9 999, …, 1 000 000–9 999 999. */
+const OLD_ROOM_DIGITS = [4, 5, 6, 7];
+/** Ticks the room runs before the candidate's ticket arrives in an older room. */
 const PREROLL = { min: 100, max: 600 };
+/** The same in a young room, when a "user" opened it (otherwise the candidate's ticket did). */
+const YOUNG_PREROLL = { min: 100, max: 1_000 };
 /** Most house bots shown as some author's deployed bot instead (the rest come from the fill). */
 const MAX_USERS = 3;
 
@@ -34,28 +43,40 @@ export interface Disguise {
 
 /**
  * Start tick, pre-roll and identities of one check room, derived from its seed. The shapes follow
- * the arena (RoomDO, #56): a deployed bot's snake id is its life id and its author the user id,
- * both UUIDs. House bots are named by `houseFill` itself.
+ * the arena: a deployed bot's snake id is its life id (a UUID, RoomDO #56) and its author the
+ * user id (Better Auth's default id, apps/web/src/server/auth.ts). House bots are named by `houseFill` itself.
  */
 export function disguiseFor(seed: number): Disguise {
   // A stream of its own, so it doesn't shift the world's randomness.
   const rng = createRng((seed ^ 0x9e3779b9) >>> 0);
-  const startTick = START_TICK.min + rng.int(START_TICK.max - START_TICK.min);
-  const preroll = PREROLL.min + rng.int(PREROLL.max - PREROLL.min);
   const kinds: HouseKind[] = [...HOUSE_FILL_ORDER];
   for (let i = kinds.length - 1; i > 0; i--) {
     const j = rng.int(i + 1);
     [kinds[i], kinds[j]] = [kinds[j] as HouseKind, kinds[i] as HouseKind];
   }
-  const users = kinds
-    .slice(0, rng.int(MAX_USERS + 1))
-    .map((kind) => ({ kind, identity: userIdentity(rng) }));
+  const userKinds = kinds.slice(0, rng.int(MAX_USERS + 1));
+  let startTick = 0;
+  let preroll = 0;
+  if (rng.int(FRESH_ROOMS) === 0) {
+    // A room only starts when a ticket joins it, so with no users the candidate's ticket opened it.
+    if (userKinds.length > 0 && rng.int(2) === 0) preroll = between(rng, YOUNG_PREROLL);
+  } else {
+    const digits = OLD_ROOM_DIGITS[rng.int(OLD_ROOM_DIGITS.length)] as number;
+    startTick = between(rng, { min: 10 ** (digits - 1), max: 10 ** digits });
+    preroll = between(rng, PREROLL);
+  }
+  const users = userKinds.map((kind) => ({ kind, identity: userIdentity(rng) }));
   return { startTick, preroll, candidate: userIdentity(rng), users };
+}
+
+/** An integer in `[min, max)`. */
+function between(rng: Rng, { min, max }: { min: number; max: number }): number {
+  return min + rng.int(max - min);
 }
 
 /** A user id for the author and a fresh life id per spawn, all from `rng`. */
 function userIdentity(rng: Rng): Identity {
-  const author = uuid(rng);
+  const author = userId(rng);
   const lives = rng.fork();
   const ids: string[] = [];
   return {
@@ -65,6 +86,16 @@ function userIdentity(rng: Rng): Identity {
       return ids[n] as string;
     },
   };
+}
+
+const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+/**
+ * A user id as Better Auth makes them when `generateId` isn't set (apps/web): 32 characters
+ * drawn uniformly from a-z, A-Z and 0-9.
+ */
+export function userId(rng: Rng): string {
+  return Array.from({ length: 32 }, () => ID_ALPHABET[rng.int(ID_ALPHABET.length)]).join("");
 }
 
 /** A version 4 UUID, like `crypto.randomUUID()`, from `rng`. */

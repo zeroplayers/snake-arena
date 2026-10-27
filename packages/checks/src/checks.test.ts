@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { type CheckReport, checkSeeds, formatReport, LIMITS, runChecks } from "./index.ts";
+import { playInArena } from "./testing/arena.ts";
 import {
   BAD_BOTS,
   botWithTick,
@@ -141,7 +142,9 @@ describe("bad bots are rejected with a clear reason", () => {
       expect(report.qualify.status).toBe("fail");
       expect(report.qualify.score).toBeLessThan((report.qualify.bar as number) / 10);
       const wall = report.run.seeds.reduce((n, s) => n + (s.ends.wall ?? 0), 0);
-      expect(wall).toBeGreaterThan(report.run.seeds.length * 2);
+      const deaths = report.run.seeds.reduce((n, s) => n + s.lives - (s.ends.window ?? 0), 0);
+      expect(wall).toBeGreaterThan(deaths / 2);
+      expect(wall).toBeGreaterThan(report.run.seeds.length);
       expect(report.qualify.hint).toMatch(/deaths were into the wall/);
       expect(text).toContain("✗ Qualifies scores below easy");
     },
@@ -218,14 +221,14 @@ describe("formatReport", () => {
 
       ✓ Limits    1 source file, 131 B of source, bundle 131 B
       ✓ Loads     the bundle loads and default-exports a bot with tick()
-      ✗ Runs      killed on seed 443573865 at tick 1232234 (life 1): 3 ticks in a row over budget
+      ✗ Runs      killed on seed 443573865 at tick 6 (life 1): 3 ticks in a row over budget
                   What to fix: tick() ran longer than its budget (10 ops, a few milliseconds) 3 ticks in a
                   row. Look for a loop that never ends, or work that grows with the game: nested loops
                   over every food × every segment, path searches without a limit. Keep the search small
                   (only the nearest things), cache results in mem and spread big jobs over several ticks.
       - Qualifies skipped: fix the problems above first
 
-      Last log lines before it died (seed 443573865, tick 1232234):
+      Last log lines before it died (seed 443573865, tick 6):
           tick 0
           tick 1
           tick 2
@@ -250,6 +253,52 @@ describe("the check can't be told apart from the arena", () => {
     expect(report.run.stats.errorTicks).toBe(0);
     expect(report.run.status).toBe("pass");
   });
+
+  // Each detector is `easy` plus a throw whenever it sees a sign of the arena that the check used
+  // to lack. A bot keyed on it would misbehave in the arena; the check must see it misbehave too.
+  const ARENA_SIGNS: [string, string][] = [
+    ["a tick outside the old check range", "state.tick < 50000 || state.tick > 5010000"],
+    ["a Better Auth user id", "state.snakes.some((s) => /^[A-Za-z0-9]{32}$/.test(s.author))"],
+  ];
+  const ARENA_ROOMS = [
+    { seed: 7, ticks: 600, preroll: 0 },
+    { seed: 8, ticks: 600, preroll: 300 },
+  ];
+  const threw = (m: { fault: { reason: string } | null; stats: { errorTicks: number } }) =>
+    m.fault?.reason === "errors" || m.stats.errorTicks > 0;
+
+  it.each(ARENA_SIGNS)(
+    "a bot that throws on %s throws in the check as in the arena",
+    async (_, sign) => {
+      const detector = await easyWith(`if (${sign}) throw new Error("arena")`);
+      const arena = await Promise.all(ARENA_ROOMS.map((room) => playInArena(detector, room)));
+      expect(arena.map(threw)).toEqual([true, true]);
+      // The deploy configuration: the bundle's own seeds, full length.
+      const report = await runChecks(input(detector));
+      expect(threw(report.run)).toBe(true);
+      expect(report.passed).toBe(false);
+    },
+    FULL,
+  );
+
+  it(
+    "a bot that throws on authors the arena doesn't have, or on broken invariants, throws in neither",
+    async () => {
+      const checkOnly = "state.snakes.some((s) => !/^(house:|[A-Za-z0-9]{32}$)/.test(s.author))";
+      for (const body of [
+        `if (${checkOnly}) throw new Error("check")`,
+        `${ARENA_INVARIANTS}; checkArena(state)`,
+      ]) {
+        const detector = await easyWith(body);
+        for (const room of ARENA_ROOMS)
+          expect(threw(await playInArena(detector, room))).toBe(false);
+        const report = await runChecks(input(detector));
+        expect(threw(report.run)).toBe(false);
+        expect(report.run.status).toBe("pass");
+      }
+    },
+    FULL,
+  );
 
   it("seeds come from the bundle's hash: stable for one bundle, different for any edit", async () => {
     const bundle = BAD_BOTS.circler;

@@ -41,19 +41,24 @@ event and reports its seed, tick, life, the sandbox's message and the bot's last
 Each match is one arena room, run by RoomDO's own rules (`src/room-rules.ts`, a verbatim port
 of `houseFill` and `batchTicks` from `apps/arena`, PR #56):
 
-- The room opens at a tick between 50 000 and 5 000 000 and runs in batches. A batch lasts
-  `batchTicks(bots, starts)` ticks, the arena's worst-case sizing (~65–100 ticks for these
-  rooms).
+- Every arena room starts at tick 0 and its tick only grows, and a candidate often joins a
+  young room. So half the check rooms open at tick 0. The others are older rooms that open at a
+  tick from 1 000 to 9 999 999, the same share for each power of ten.
+- A room runs in batches. A batch lasts `batchTicks(bots, starts)` ticks, the arena's
+  worst-case sizing (~65–100 ticks for these rooms).
 - Snakes join only at batch boundaries:
   - first the tickets: deployed bots, in arrival order;
   - then `houseFill` tops the room up to 5 authors, in fill order (medium, easy, hard, chaos,
     then `house:medium#2`, …), with ids `house-<kind>-<tick>-<index in that fill>`.
   - Nobody respawns in the middle of a batch.
-- 0–3 of the house bots play as tickets under user names: UUID authors, a fresh UUID life id per
+- 0–3 of the house bots play as tickets under user names: Better Auth user ids as authors (32
+  letters and digits, what `apps/web` gets with no `generateId`), a fresh UUID life id per
   life. After a death they rejoin at the next batch, as a deployed bot's next life would.
-- The candidate's ticket arrives after a 100–600-tick pre-roll, so it joins a room in progress.
-  After each death it rejoins at the next batch. The match is the 1000 ticks from its first
-  spawn.
+- The candidate's ticket arrives after a pre-roll: 100–600 ticks in an older room. A room only
+  opens when a ticket joins it, so a young room with no users is one the candidate opened (no
+  pre-roll). A young room with users opened with their tickets, and the candidate comes at once
+  or after 100–1000 ticks. After each death it rejoins at the next batch. The match is the 1000
+  ticks from its first spawn.
 - Only the candidate runs in the sandbox, with a fresh `Sandbox` for every `runChecks` call. The
   house bots run natively: they are our own deterministic code. With the candidate alone in the
   sandbox, an OOM can't depend on what other bots do with the shared heap (the sandbox README
@@ -74,10 +79,11 @@ So nothing it can observe is specific to the check (`src/disguise.ts`, `src/room
   agree because the bundle is the same. A bot can't know them, because they depend on its own
   text, so it can't recognise the check by `info.seed` or by its first world. Any edit, even to
   a comment, gives other seeds.
-- **Names** are the arena's: UUID life ids and user ids for deployed bots (the candidate
-  included). House bots get whatever RoomDO's house fill would give them in that room.
-- **Time**: no tick near 0, joins only at batch boundaries of the arena's size, a room already in
-  progress when the candidate joins.
+- **Names** are the arena's: UUID life ids and Better Auth user ids for deployed bots (the
+  candidate included). House bots get whatever RoomDO's house fill would give them in that room.
+- **Time**: rooms open at tick 0 (young rooms) or at any older tick, joins happen only at batch
+  boundaries of the arena's size, and the candidate either opens the room or joins it in
+  progress.
 - **Load**: there is no separate probe life (it used to get `seed: 0`). The load check is the
   candidate's first life in the first match.
 
@@ -87,21 +93,39 @@ So nothing it can observe is specific to the check (`src/disguise.ts`, `src/room
 - the house kind matching the fill order at its index;
 - one author per snake;
 - no spawn in the future;
-- no tick near 0.
+- a whole tick from 0 up, and a life no older than its room.
 
 It runs clean. `invariants.test.ts` shows the same detector catches each tell the check used to
-have, including several house bots of one tick all numbered `-0`.
+have, including several house bots of one tick all numbered `-0`, UUID user ids, and
+(the other way round) a tick range far from 0.
+
+`checks.test.ts` also plays bots keyed on single signs of the arena in a room set up the way
+the arena sets one up (`src/testing/arena.ts`: tick 0, Better Auth ids made by Better Auth's own
+method) and in the deploy check. A bot that throws on a tick outside the old 50 000–5 010 000
+range, or on seeing a Better Auth author, throws in both. A bot that throws on an author the
+arena doesn't have, or on any broken invariant, throws in neither.
 
 Still different from a busy room:
 - **Room size**: a check room holds 5–6 snakes. Rooms that small exist when few bots are queued.
 - **Re-rolling**: since seeds move on every edit, a bot close to the bar can re-roll by
-  redeploying. With the full settings, medium and hard passed 8 of 8 bundle variants each, by 2×
-  or more, while chaos, near the bar, passed 6 of 8.
+  redeploying. With the full settings, medium and hard passed 8 of 8 bundle variants each
+  (medium by 1.1–3.1×, hard by 1.5–9×), while chaos, near the bar, passed 6 of 8.
 - **The ports**: `room-rules.ts` must follow RoomDO. `room-rules.test.ts` pins the current
   output, and moving both into a shared package would remove the copy (see the PR).
 
-The real protection against a bot that games the gate is re-qualification from arena ratings
-(#26): a version whose rating falls below `easy`'s should lose its place.
+### A sanity gate, not a perfect disguise
+
+The check stops broken and hopeless bots before they reach the arena. It can't be made
+perfectly indistinguishable from the arena, and it doesn't try: its seeds are fixed for a
+bundle, the house bots are open source and recognisable by how they play, its rooms are small
+(5–6 snakes), and every opponent is a house bot. A determined bot can still guess, from
+population signals like these, that it is probably in a check.
+
+The real defence against a bot that behaves differently in the arena is on the arena side:
+- ratings (#26): a version is ranked by what it does in real rooms, and re-qualification from
+  ratings should drop a version whose rating falls below `easy`'s;
+- the room backstop (RoomDO, #56): CPU and slow-tick strikes ban a version in the arena itself;
+- bans by hand for bots that abuse the room.
 
 ### The qualification metric: mean score per life
 
@@ -193,12 +217,12 @@ Checks failed: this bot would be rejected.
 
 ✓ Limits    1 source file, 131 B of source, bundle 131 B
 ✓ Loads     the bundle loads and default-exports a bot with tick()
-✗ Runs      killed on seed 443573865 at tick 1232152 (life 1): 3 ticks in a row over budget
+✗ Runs      killed on seed 443573865 at tick 6 (life 1): 3 ticks in a row over budget
             What to fix: tick() ran longer than its budget (10 ops, a few milliseconds) 3 ticks in a
             row. Look for a loop that never ends, or work that grows with the game: ...
 - Qualifies skipped: fix the problems above first
 
-Last log lines before it died (seed 443573865, tick 1232152):
+Last log lines before it died (seed 443573865, tick 6):
     tick 0
     ...
 ```

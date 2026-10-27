@@ -65,12 +65,13 @@ describe("a check room runs by RoomDO's rules", () => {
 
   it("varies its start, pre-roll, and the mix of house bots and deployed bots", () => {
     const rooms = [11, 12, 13, 14, 15, 16, 17, 18].map((seed) => record(seed).batches);
-    const starts = new Set(rooms.map((b) => b[0]?.tick));
+    const starts = rooms.map((b) => b[0]?.tick as number);
     const tickets = new Set(
       rooms.map((b) => b[0]?.spawns.filter((s) => !s.author.startsWith("house:")).length),
     );
-    expect(starts.size).toBe(8);
+    // Young rooms open at tick 0, like every RoomDO; older ones anywhere past 1000.
+    expect(starts).toContain(0);
+    expect(new Set(starts.filter((t) => t >= 1000)).size).toBeGreaterThan(1);
     expect(tickets.size).toBeGreaterThan(1);
-    for (const b of rooms) expect(b[0]?.tick).toBeGreaterThanOrEqual(50_000);
   });
 });

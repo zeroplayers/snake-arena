@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
+import { CLI_PUBLISHED, REPO } from "../../site";
 import { GithubLink } from "../GithubLink";
 import { ArenaHero } from "./ArenaHero";
 import { HERO_IS_LIVE } from "./heroLive";
@@ -75,7 +76,11 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
           <h2 id="start-title" className="subtitle">
             Start in a minute
           </h2>
-          <CopyButton text={quickstartScript()} />
+          {CLI_PUBLISHED ? (
+            <CopyButton text={quickstartScript()} />
+          ) : (
+            <span className="soon-tag">Coming at launch</span>
+          )}
         </div>
         <ol className="terminal">
           {QUICKSTART.map(({ cmd, note }) => (
@@ -107,15 +112,17 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
                 </li>
               ))}
             </ul>
-            <p className="small muted">
-              <Link
-                to="/docs/$slug"
-                params={{ slug: "getting-started" }}
-                hash="before-the-packages-are-published"
-              >
-                Running the CLI from a checkout
-              </Link>
-            </p>
+            {REPO.public && !CLI_PUBLISHED && (
+              <p className="small muted">
+                <Link
+                  to="/docs/$slug"
+                  params={{ slug: "getting-started" }}
+                  hash="before-the-packages-are-published"
+                >
+                  Running the CLI from a checkout
+                </Link>
+              </p>
+            )}
           </div>
         )}
       </section>

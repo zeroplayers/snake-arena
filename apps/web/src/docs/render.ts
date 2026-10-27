@@ -18,6 +18,11 @@ export interface RenderOptions {
   /** Repository files outside `docs/` link here: `<repoUrl>/blob/<branch>/<path>`. */
   readonly repoUrl: string;
   readonly branch: string;
+  /**
+   * Whether the repository is public. While it isn't, links into it (files, issues, pull requests)
+   * render as their plain text, and images from it as their alt text, instead of pointing at 404s.
+   */
+  readonly repoPublic: boolean;
 }
 
 /** `rules.md` → `rules`; `README.md` → `""`. */
@@ -35,7 +40,7 @@ export function docPath(slug: string): string {
  * (`html: false`), and markdown-it drops `javascript:`/`vbscript:`/`file:`/`data:` link targets,
  * so the output is safe to inject. Headings get GitHub's ids, so `page.md#anchor` links written
  * for GitHub keep working; links to other pages become site links, links to other repository files
- * point at GitHub.
+ * point at GitHub, or are plain text while the repository is private.
  */
 export function renderDoc(file: string, markdown: string, options: RenderOptions): DocPage {
   const md = new MarkdownIt({ html: false, linkify: false, typographer: false });
@@ -55,18 +60,41 @@ export function renderDoc(file: string, markdown: string, options: RenderOptions
         token.attrSet("id", id);
         anchors.push(id);
       }
-      for (const child of token.children ?? []) {
+      if (!token.children) return;
+      const children: Token[] = [];
+      // Links don't nest, so the next link_close closes the link being unwrapped.
+      let unwrapping = false;
+      for (const child of token.children) {
         if (child.type === "link_open") {
           const href = child.attrGet("href");
-          if (href === null) continue;
-          const to = rewriteHref(String(href), options);
-          child.attrSet("href", to);
-          if (/^https?:/.test(to)) child.attrSet("rel", "noreferrer");
+          if (href !== null) {
+            const to = rewriteHref(String(href), options);
+            if (hidden(to, options)) {
+              unwrapping = true;
+              continue;
+            }
+            child.attrSet("href", to);
+            if (/^https?:/.test(to)) child.attrSet("rel", "noreferrer");
+          }
+        } else if (child.type === "link_close" && unwrapping) {
+          unwrapping = false;
+          continue;
         } else if (child.type === "image") {
           const src = child.attrGet("src");
-          if (src !== null) child.attrSet("src", rewriteHref(String(src), options, "raw"));
+          if (src !== null) {
+            const to = rewriteHref(String(src), options, "raw");
+            if (hidden(to, options)) {
+              const alt = new state.Token("text", "", 0);
+              alt.content = child.content;
+              children.push(alt);
+              continue;
+            }
+            child.attrSet("src", to);
+          }
         }
+        children.push(child);
       }
+      token.children = children;
     });
   });
 
@@ -91,6 +119,11 @@ function plainText(tokens: readonly Token[]): string {
     .filter((t) => t.type === "text" || t.type === "code_inline")
     .map((t) => t.content)
     .join("");
+}
+
+/** Whether a rewritten link target is in the repository while it's private. */
+function hidden(to: string, options: RenderOptions): boolean {
+  return !options.repoPublic && (to === options.repoUrl || to.startsWith(`${options.repoUrl}/`));
 }
 
 const SCHEME = /^[a-z][a-z\d+.-]*:/i;

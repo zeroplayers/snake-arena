@@ -5,9 +5,15 @@ import { REPO } from "../site";
 import { docPath, githubSlug, renderDoc } from "./render";
 
 const DOCS_DIR = new URL("../../../../docs/", import.meta.url);
-const OPTIONS = { pages: ["README.md", "rules.md"], repoUrl: REPO.url, branch: "main" };
+const OPTIONS = {
+  pages: ["README.md", "rules.md"],
+  repoUrl: REPO.url,
+  branch: "main",
+  repoPublic: true,
+};
 
-const render = (markdown: string, file = "faq.md") => renderDoc(file, markdown, OPTIONS);
+const render = (markdown: string, file = "faq.md", repoPublic = true) =>
+  renderDoc(file, markdown, { ...OPTIONS, repoPublic });
 
 describe("renderDoc", () => {
   it("escapes raw HTML instead of passing it through", () => {
@@ -60,6 +66,37 @@ describe("renderDoc", () => {
     expect(html).toContain(`href="${REPO.url}/blob/main/docs/nope.md"`);
   });
 
+  it("renders links into a private repository as plain text", () => {
+    const markdown = [
+      "[rules](rules.md#food) [`config.ts`](../packages/engine/src/config.ts) [template](../template/)",
+      `merged ([#57](${REPO.url}/pull/57)), see [#21](${REPO.url}/issues/21) and <${REPO.url}>`,
+      `[site](https://claude.com/claude-code) [other](https://github.com/zeroplayers/other) ![shot](../shot.png)`,
+    ].join("\n");
+    const open = render(markdown, "faq.md", true).html;
+    const closed = render(markdown, "faq.md", false).html;
+
+    for (const href of [
+      `${REPO.url}/blob/main/packages/engine/src/config.ts`,
+      `${REPO.url}/blob/main/template`,
+      `${REPO.url}/pull/57`,
+      `${REPO.url}/issues/21`,
+    ])
+      expect(open).toContain(`href="${href}"`);
+    expect(open).toContain(`<img src="${REPO.url}/raw/main/shot.png" alt="shot">`);
+
+    expect(closed).not.toContain(`href="${REPO.url}`);
+    expect(closed).not.toContain("<img");
+    expect(closed).toContain("<code>config.ts</code> template");
+    expect(closed).toContain(
+      "merged (#57), see #21 and https://github.com/zeroplayers/snake-arena",
+    );
+    expect(closed).toContain("shot");
+    // Site pages and other sites stay links.
+    expect(closed).toContain('href="/docs/rules#food"');
+    expect(closed).toContain('href="https://claude.com/claude-code" rel="noreferrer"');
+    expect(closed).toContain('href="https://github.com/zeroplayers/other" rel="noreferrer"');
+  });
+
   it("wraps tables so they scroll on narrow screens", () => {
     expect(render("| a | b |\n| - | - |\n| 1 | 2 |").html).toContain(
       '<div class="table-scroll"><table class="table">',
@@ -104,6 +141,10 @@ describe("the docs/ pages", () => {
         links.push({ from: slug, href: m[1] as string });
     }
     expect(links.length).toBeGreaterThan(20);
+    // While the repository is private no page points into it (#57 and file paths stay as text).
+    const repoLinks = links.filter(({ href }) => href.startsWith(REPO.url));
+    if (REPO.public) expect(repoLinks.length).toBeGreaterThan(0);
+    else expect(repoLinks).toEqual([]);
     for (const { from, href } of links) {
       if (/^https?:\/\//.test(href)) continue;
       const [path = "", anchor] = href.split("#");

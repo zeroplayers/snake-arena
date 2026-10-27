@@ -10,7 +10,8 @@ import {
 } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { renderToString } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { REPO } from "../../site";
 import { DocArticle } from "../docs/DocArticle";
 import { Landing } from "./Landing";
 import { QUICKSTART, quickstartScript } from "./quickstart";
@@ -77,7 +78,7 @@ describe("landing page", () => {
         "#start",
         "/docs",
         "/leaderboard",
-        "/docs/getting-started#before-the-packages-are-published",
+        ...(REPO.public ? ["/docs/getting-started#before-the-packages-are-published"] : []),
       ]),
     );
     for (const href of links) {
@@ -95,6 +96,50 @@ describe("landing page", () => {
       if (sub) expect(guide, cmd).toContain(`npx zerosnake ${sub}`);
     }
     expect(quickstartScript().split("\n")).toHaveLength(QUICKSTART.length);
+  });
+});
+
+describe.each([
+  { cli: false, repo: false },
+  { cli: false, repo: true },
+  { cli: true, repo: false },
+  { cli: true, repo: true },
+])("landing page with CLI_PUBLISHED=$cli and REPO.public=$repo", ({ cli, repo }) => {
+  /** The page rendered against `site.ts` with these flags. */
+  async function render(): Promise<string> {
+    vi.resetModules();
+    vi.doMock("../../site", async (importOriginal) => {
+      const site = await importOriginal<typeof import("../../site")>();
+      return { ...site, CLI_PUBLISHED: cli, REPO: { ...site.REPO, public: repo } };
+    });
+    const { Landing } = await import("./Landing");
+    return renderAt("/", () => <Landing signedIn={false} onSignIn={() => {}} />);
+  }
+
+  afterEach(() => {
+    vi.doUnmock("../../site");
+  });
+
+  it(
+    cli ? "offers the commands to copy" : "shows the commands as coming at launch, with no copy",
+    async () => {
+      const html = await render();
+      for (const { cmd } of QUICKSTART) expect(html).toContain(cmd);
+      expect(html.includes(">Copy</button>")).toBe(cli);
+      expect(html.includes("Coming at launch")).toBe(!cli);
+      expect(html.includes("<code>npx</code>")).toBe(!cli);
+    },
+  );
+
+  it(repo ? "links the repository" : "doesn't link the private repository", async () => {
+    const html = await render();
+    const links = hrefs(html);
+    expect(links.some((href) => href.startsWith(REPO.url))).toBe(repo);
+    expect(links.includes("/docs/getting-started#before-the-packages-are-published")).toBe(
+      repo && !cli,
+    );
+    expect(html.includes("Running the CLI from a checkout")).toBe(repo && !cli);
+    expect(html.includes("from a checkout of the repository")).toBe(repo && !cli);
   });
 });
 

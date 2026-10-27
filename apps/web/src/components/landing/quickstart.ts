@@ -1,3 +1,5 @@
+import { CLI_PUBLISHED, REPO } from "../../site";
+
 /**
  * The "Start in a minute" commands, as `docs/getting-started.md` lists them and `packages/cli`
  * implements them (`zerosnake --help`). `landing.test.ts` checks each command exists in the CLI.
@@ -14,14 +16,19 @@ export const QUICKSTART: readonly { cmd: string; note?: string }[] = [
 
 /**
  * What doesn't work yet, as of `main`. Drop an entry when its piece lands; the list disappears
- * when it's empty.
+ * when it's empty. The npx entry goes by itself once `CLI_PUBLISHED` is set.
  */
 export const NOT_YET: readonly { what: string; detail: string }[] = [
-  {
-    what: "npx",
-    detail:
-      "The zerosnake package goes on npm at launch. Until then the CLI runs from a checkout of the repository.",
-  },
+  ...(CLI_PUBLISHED
+    ? []
+    : [
+        {
+          what: "npx",
+          detail: REPO.public
+            ? "The zerosnake package goes on npm at launch. Until then the CLI runs from a checkout of the repository."
+            : "The zerosnake package goes on npm at launch, and the repository opens with it. Until then these commands don't work yet.",
+        },
+      ]),
   {
     what: "test",
     detail:
@@ -34,7 +41,7 @@ export const NOT_YET: readonly { what: string; detail: string }[] = [
   },
 ];
 
-/** The commands as one shell snippet, for the copy button. */
+/** The commands as one shell snippet, for the copy button (shown once `CLI_PUBLISHED`). */
 export function quickstartScript(): string {
   return QUICKSTART.map((c) => c.cmd).join("\n");
 }

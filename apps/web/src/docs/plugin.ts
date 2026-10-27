@@ -27,6 +27,7 @@ export function docsPlugin(dir: string): Plugin {
       pages: files(),
       repoUrl: REPO.url,
       branch: REPO.branch,
+      repoPublic: REPO.public,
     });
 
   return {

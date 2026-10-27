@@ -159,8 +159,26 @@ describe("profile", () => {
     const profile = await getProfile(db, "Ada");
     expect(profile).toMatchObject({ username: "ada", avatarUrl: null });
     expect(profile?.bots).toEqual([
-      { id: "seed-greedy", name: "Greedy", activeVersion: 2, rating: 79.5, lives: 320 },
-      { id: "seed-coward", name: "Coward", activeVersion: 1, rating: 37, lives: 150 },
+      {
+        id: "seed-greedy",
+        name: "Greedy",
+        slug: "greedy",
+        activeVersion: 2,
+        rating: 79.5,
+        ratingCi: expect.closeTo(1.6, 2),
+        ratedLives: 200,
+        lives: 320,
+      },
+      {
+        id: "seed-coward",
+        name: "Coward",
+        slug: "coward",
+        activeVersion: 1,
+        rating: 37,
+        ratingCi: expect.closeTo(0.69, 2),
+        ratedLives: 150,
+        lives: 150,
+      },
     ]);
   });
 
@@ -190,7 +208,7 @@ describe("indexes", () => {
   it("serve the leaderboard in rating order without sorting", async () => {
     const query = leaderboardQuery(db).toSQL();
     const detail = await plan(query.sql, query.params);
-    expect(detail).toMatch(/ratings_mean_idx/);
+    expect(detail).toMatch(/ratings_rank_idx/);
     expect(detail).not.toMatch(/TEMP B-TREE/);
   });
 

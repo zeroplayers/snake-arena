@@ -4,6 +4,9 @@
   "private": true,
   "description": "Site: TanStack Start on Workers",
   "type": "module",
+  "exports": {
+    "./shared": "./src/shared/index.ts"
+  },
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
@@ -13,12 +16,15 @@
     "typecheck": "wrangler types >/dev/null && tsc -p .",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "wrangler d1 migrations apply DB --local --persist-to ../../.wrangler/state",
-    "db:seed": "wrangler d1 execute DB --local --persist-to ../../.wrangler/state --file seed/dev.sql",
+    "db:seed": "wrangler d1 execute DB --local --persist-to ../../.wrangler/state --file seed/dev.sql && node --experimental-transform-types --no-warnings seed/pages.ts",
     "db:reset": "rm -rf ../../.wrangler/state/v3/d1 && pnpm db:migrate && pnpm db:seed"
   },
   "dependencies": {
     "@tanstack/react-router": "^1.170.46",
     "@tanstack/react-start": "^1.169.4",
+    "@zerosnake/engine": "workspace:*",
+    "@zerosnake/renderer": "workspace:*",
+    "@zerosnake/viewer": "workspace:*",
     "better-auth": "^1.7.13",
     "drizzle-orm": "^0.45.4",
     "react": "^19.3.1",
@@ -31,6 +37,8 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "@zerosnake/house-bots": "workspace:*",
+    "@zerosnake/sdk": "workspace:*",
     "drizzle-kit": "^0.31.11",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",

@@ -1,0 +1,20 @@
+{
+  // Bot code only. No Node or DOM types on purpose: the bot runs in a bare QuickJS sandbox, so
+  // `setTimeout`, `fetch`, `process` and friends should not typecheck here. Tests: test/tsconfig.json.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "types": [],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src"]
+}

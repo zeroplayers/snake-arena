@@ -15,7 +15,13 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
 
-  "vars": { "ENVIRONMENT": "development", "BETTER_AUTH_URL": "http://localhost:3000" },
+  // DEPLOYS_PER_DAY and BOTS_PER_AUTHOR override the CLI API's defaults (src/shared/deploy.ts).
+  "vars": {
+    "ENVIRONMENT": "development",
+    "BETTER_AUTH_URL": "http://localhost:3000",
+    "DEPLOYS_PER_DAY": "20",
+    "BOTS_PER_AUTHOR": "3"
+  },
   "d1_databases": [
     // Same database as apps/arena. Local ID is arbitrary but must match apps/arena.
     // Migrations live here (src/db/schema.ts → `pnpm db:generate`) and are applied from here.
@@ -48,7 +54,12 @@
     "staging": {
       // Deployed as `zerosnake-web-staging`.
       "routes": [{ "pattern": "arena.surninsynergy.dev", "custom_domain": true }],
-      "vars": { "ENVIRONMENT": "staging", "BETTER_AUTH_URL": "https://arena.surninsynergy.dev" },
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "BETTER_AUTH_URL": "https://arena.surninsynergy.dev",
+        "DEPLOYS_PER_DAY": "20",
+        "BOTS_PER_AUTHOR": "3"
+      },
       "d1_databases": [
         {
           "binding": "DB",

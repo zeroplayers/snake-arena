@@ -4,8 +4,34 @@
   "private": true,
   "description": "npx zerosnake: init, sim, test, login, deploy",
   "type": "module",
-  "exports": "./src/index.ts",
+  "bin": {
+    "zerosnake": "./bin/zerosnake.js"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
+    "build": "node scripts/build.ts",
+    "prepack": "node scripts/build.ts",
     "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@jitl/quickjs-wasmfile-release-sync": "^0.32.0",
+    "esbuild": "^0.28.2",
+    "quickjs-emscripten-core": "^0.32.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@zerosnake/engine": "workspace:*",
+    "@zerosnake/house-bots": "workspace:*",
+    "@zerosnake/renderer": "workspace:*",
+    "@zerosnake/sandbox": "workspace:*",
+    "@zerosnake/sdk": "workspace:*",
+    "@zerosnake/viewer": "workspace:*",
+    "vitest": "^5.0.5"
   }
 }

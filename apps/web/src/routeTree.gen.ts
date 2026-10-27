@@ -10,26 +10,26 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as AtChar123usernameChar125RouteImport } from './routes/@{$username}'
 import { Route as DeviceRouteImport } from './routes/device'
 import { Route as LeaderboardRouteImport } from './routes/leaderboard'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as WelcomeRouteImport } from './routes/welcome'
+import { Route as AtChar123usernameChar125IndexRouteImport } from './routes/@{$username}/index'
+import { Route as AtChar123usernameChar125BotRouteImport } from './routes/@{$username}/$bot'
+import { Route as ApiBotsRouteImport } from './routes/api/bots'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
+import { Route as ApiMeRouteImport } from './routes/api/me'
+import { Route as ReplayIdRouteImport } from './routes/replay.$id'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiUsersUsernameRouteImport } from './routes/api/users/$username'
+import { Route as ApiBotsBotVersionsRouteImport } from './routes/api/bots/$bot/versions'
+import { Route as ApiBotsBotVersionsNRouteImport } from './routes/api/bots/$bot/versions/$n'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AtChar123usernameChar125Route =
-  AtChar123usernameChar125RouteImport.update({
-    id: '/@{$username}',
-    path: '/@{$username}',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 const DeviceRoute = DeviceRouteImport.update({
   id: '/device',
   path: '/device',
@@ -50,9 +50,36 @@ const WelcomeRoute = WelcomeRouteImport.update({
   path: '/welcome',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AtChar123usernameChar125IndexRoute =
+  AtChar123usernameChar125IndexRouteImport.update({
+    id: '/@{$username}/',
+    path: '/@{$username}/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const AtChar123usernameChar125BotRoute =
+  AtChar123usernameChar125BotRouteImport.update({
+    id: '/@{$username}/$bot',
+    path: '/@{$username}/$bot',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiBotsRoute = ApiBotsRouteImport.update({
+  id: '/api/bots',
+  path: '/api/bots',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
   id: '/api/health',
   path: '/api/health',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMeRoute = ApiMeRouteImport.update({
+  id: '/api/me',
+  path: '/api/me',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReplayIdRoute = ReplayIdRouteImport.update({
+  id: '/replay/$id',
+  path: '/replay/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
@@ -65,85 +92,135 @@ const ApiUsersUsernameRoute = ApiUsersUsernameRouteImport.update({
   path: '/api/users/$username',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiBotsBotVersionsRoute = ApiBotsBotVersionsRouteImport.update({
+  id: '/$bot/versions',
+  path: '/$bot/versions',
+  getParentRoute: () => ApiBotsRoute,
+} as any)
+const ApiBotsBotVersionsNRoute = ApiBotsBotVersionsNRouteImport.update({
+  id: '/$n',
+  path: '/$n',
+  getParentRoute: () => ApiBotsBotVersionsRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/@{$username}': typeof AtChar123usernameChar125Route
   '/device': typeof DeviceRoute
   '/leaderboard': typeof LeaderboardRoute
   '/settings': typeof SettingsRoute
   '/welcome': typeof WelcomeRoute
+  '/@{$username}/$bot': typeof AtChar123usernameChar125BotRoute
+  '/api/bots': typeof ApiBotsRouteWithChildren
   '/api/health': typeof ApiHealthRoute
+  '/api/me': typeof ApiMeRoute
+  '/replay/$id': typeof ReplayIdRoute
+  '/@{$username}/': typeof AtChar123usernameChar125IndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
+  '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
+  '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/@{$username}': typeof AtChar123usernameChar125Route
   '/device': typeof DeviceRoute
   '/leaderboard': typeof LeaderboardRoute
   '/settings': typeof SettingsRoute
   '/welcome': typeof WelcomeRoute
+  '/@{$username}/$bot': typeof AtChar123usernameChar125BotRoute
+  '/api/bots': typeof ApiBotsRouteWithChildren
   '/api/health': typeof ApiHealthRoute
+  '/api/me': typeof ApiMeRoute
+  '/replay/$id': typeof ReplayIdRoute
+  '/@{$username}': typeof AtChar123usernameChar125IndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
+  '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
+  '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/@{$username}': typeof AtChar123usernameChar125Route
   '/device': typeof DeviceRoute
   '/leaderboard': typeof LeaderboardRoute
   '/settings': typeof SettingsRoute
   '/welcome': typeof WelcomeRoute
+  '/@{$username}/$bot': typeof AtChar123usernameChar125BotRoute
+  '/api/bots': typeof ApiBotsRouteWithChildren
   '/api/health': typeof ApiHealthRoute
+  '/api/me': typeof ApiMeRoute
+  '/replay/$id': typeof ReplayIdRoute
+  '/@{$username}/': typeof AtChar123usernameChar125IndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/users/$username': typeof ApiUsersUsernameRoute
+  '/api/bots/$bot/versions': typeof ApiBotsBotVersionsRouteWithChildren
+  '/api/bots/$bot/versions/$n': typeof ApiBotsBotVersionsNRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/@{$username}'
     | '/device'
     | '/leaderboard'
     | '/settings'
     | '/welcome'
+    | '/@{$username}/$bot'
+    | '/api/bots'
     | '/api/health'
+    | '/api/me'
+    | '/replay/$id'
+    | '/@{$username}/'
     | '/api/auth/$'
     | '/api/users/$username'
+    | '/api/bots/$bot/versions'
+    | '/api/bots/$bot/versions/$n'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/@{$username}'
     | '/device'
     | '/leaderboard'
     | '/settings'
     | '/welcome'
+    | '/@{$username}/$bot'
+    | '/api/bots'
     | '/api/health'
+    | '/api/me'
+    | '/replay/$id'
+    | '/@{$username}'
     | '/api/auth/$'
     | '/api/users/$username'
+    | '/api/bots/$bot/versions'
+    | '/api/bots/$bot/versions/$n'
   id:
     | '__root__'
     | '/'
-    | '/@{$username}'
     | '/device'
     | '/leaderboard'
     | '/settings'
     | '/welcome'
+    | '/@{$username}/$bot'
+    | '/api/bots'
     | '/api/health'
+    | '/api/me'
+    | '/replay/$id'
+    | '/@{$username}/'
     | '/api/auth/$'
     | '/api/users/$username'
+    | '/api/bots/$bot/versions'
+    | '/api/bots/$bot/versions/$n'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AtChar123usernameChar125Route: typeof AtChar123usernameChar125Route
   DeviceRoute: typeof DeviceRoute
   LeaderboardRoute: typeof LeaderboardRoute
   SettingsRoute: typeof SettingsRoute
   WelcomeRoute: typeof WelcomeRoute
+  AtChar123usernameChar125BotRoute: typeof AtChar123usernameChar125BotRoute
+  ApiBotsRoute: typeof ApiBotsRouteWithChildren
   ApiHealthRoute: typeof ApiHealthRoute
+  ApiMeRoute: typeof ApiMeRoute
+  ReplayIdRoute: typeof ReplayIdRoute
+  AtChar123usernameChar125IndexRoute: typeof AtChar123usernameChar125IndexRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiUsersUsernameRoute: typeof ApiUsersUsernameRoute
 }
@@ -155,13 +232,6 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/@{$username}': {
-      id: '/@{$username}'
-      path: '/@{$username}'
-      fullPath: '/@{$username}'
-      preLoaderRoute: typeof AtChar123usernameChar125RouteImport
       parentRoute: typeof rootRouteImport
     }
     '/device': {
@@ -192,11 +262,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WelcomeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/@{$username}/': {
+      id: '/@{$username}/'
+      path: '/@{$username}'
+      fullPath: '/@{$username}/'
+      preLoaderRoute: typeof AtChar123usernameChar125IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/@{$username}/$bot': {
+      id: '/@{$username}/$bot'
+      path: '/@{$username}/$bot'
+      fullPath: '/@{$username}/$bot'
+      preLoaderRoute: typeof AtChar123usernameChar125BotRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/bots': {
+      id: '/api/bots'
+      path: '/api/bots'
+      fullPath: '/api/bots'
+      preLoaderRoute: typeof ApiBotsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/health': {
       id: '/api/health'
       path: '/api/health'
       fullPath: '/api/health'
       preLoaderRoute: typeof ApiHealthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/me': {
+      id: '/api/me'
+      path: '/api/me'
+      fullPath: '/api/me'
+      preLoaderRoute: typeof ApiMeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/replay/$id': {
+      id: '/replay/$id'
+      path: '/replay/$id'
+      fullPath: '/replay/$id'
+      preLoaderRoute: typeof ReplayIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/auth/$': {
@@ -213,17 +318,57 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiUsersUsernameRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/bots/$bot/versions': {
+      id: '/api/bots/$bot/versions'
+      path: '/$bot/versions'
+      fullPath: '/api/bots/$bot/versions'
+      preLoaderRoute: typeof ApiBotsBotVersionsRouteImport
+      parentRoute: typeof ApiBotsRoute
+    }
+    '/api/bots/$bot/versions/$n': {
+      id: '/api/bots/$bot/versions/$n'
+      path: '/$n'
+      fullPath: '/api/bots/$bot/versions/$n'
+      preLoaderRoute: typeof ApiBotsBotVersionsNRouteImport
+      parentRoute: typeof ApiBotsBotVersionsRoute
+    }
   }
 }
 
+interface ApiBotsBotVersionsRouteChildren {
+  ApiBotsBotVersionsNRoute: typeof ApiBotsBotVersionsNRoute
+}
+
+const ApiBotsBotVersionsRouteChildren: ApiBotsBotVersionsRouteChildren = {
+  ApiBotsBotVersionsNRoute: ApiBotsBotVersionsNRoute,
+}
+
+const ApiBotsBotVersionsRouteWithChildren =
+  ApiBotsBotVersionsRoute._addFileChildren(ApiBotsBotVersionsRouteChildren)
+
+interface ApiBotsRouteChildren {
+  ApiBotsBotVersionsRoute: typeof ApiBotsBotVersionsRouteWithChildren
+}
+
+const ApiBotsRouteChildren: ApiBotsRouteChildren = {
+  ApiBotsBotVersionsRoute: ApiBotsBotVersionsRouteWithChildren,
+}
+
+const ApiBotsRouteWithChildren =
+  ApiBotsRoute._addFileChildren(ApiBotsRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AtChar123usernameChar125Route: AtChar123usernameChar125Route,
   DeviceRoute: DeviceRoute,
   LeaderboardRoute: LeaderboardRoute,
   SettingsRoute: SettingsRoute,
   WelcomeRoute: WelcomeRoute,
+  AtChar123usernameChar125BotRoute: AtChar123usernameChar125BotRoute,
+  ApiBotsRoute: ApiBotsRouteWithChildren,
   ApiHealthRoute: ApiHealthRoute,
+  ApiMeRoute: ApiMeRoute,
+  ReplayIdRoute: ReplayIdRoute,
+  AtChar123usernameChar125IndexRoute: AtChar123usernameChar125IndexRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiUsersUsernameRoute: ApiUsersUsernameRoute,
 }

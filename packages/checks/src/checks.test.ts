@@ -310,7 +310,7 @@ describe("the check can't be told apart from the arena", () => {
   });
 });
 
-describe("suite budget (until the sandbox meters real cost, #60)", () => {
+describe("suite budget", () => {
   it("rejects a bot over the total op budget, deterministically", async () => {
     const heavy = await easyWith("let x = 0; for (let i = 0; i < 30000; i++) x += i * 0.5");
     const options = { ...QUICK, budget: { maxInterrupts: 500 } };
@@ -326,7 +326,9 @@ describe("suite budget (until the sandbox meters real cost, #60)", () => {
   it("the default caps leave honest bots far below them", async () => {
     const report = await runChecks(input(await houseBundle("hard")), QUICK);
     expect(report.run.status).toBe("pass");
-    expect(report.run.cost.interrupts).toBeLessThan(report.budget.maxInterrupts / 10);
+    // The sandbox's cost meter (#60) adds calls and branches, which QuickJS counts as it polls.
+    expect(report.run.cost.interrupts).toBeLessThan(report.budget.maxInterrupts / 4);
+    expect(report.run.cost.work).toBeLessThan(report.budget.maxWork / 5);
     expect(report.budget.maxInterrupts).toBe((3 * 400 * report.opBudget) / 2);
   });
 
@@ -344,23 +346,13 @@ describe("suite budget (until the sandbox meters real cost, #60)", () => {
     expect(report.run.hint).toContain("each op is very slow");
   });
 
-  it("catches a long straight-line loop body with the real clock", async () => {
+  // Before #60 only the wall clock stopped this bot (a second or more per tick, within the op
+  // budget). The per-tick budget now rejects it by itself, with the default settings, in seconds
+  // and the same way in Node and workerd (no wall clock involved). 200 statements keep the tick
+  // function under the sandbox's function size limit.
+  it("rejects a long straight-line loop body by the per-tick budget (#60)", async () => {
     const t0 = performance.now();
-    const report = await runChecks(input(await longBody(300, 20_000)), {
-      ...QUICK,
-      budget: { maxMillis: 1500 },
-    });
-    expect(report.run.overrun?.limit).toBe("maxMillis");
-    expect(report.run.stats.peakInterrupts).toBeLessThanOrEqual(report.opBudget);
-    // One tick of this bot can take a second or more, and the clock is read between ticks.
-    expect(performance.now() - t0).toBeLessThan(30_000);
-  }, 60_000);
-
-  // Enable once #60 lands: the per-tick budget must then reject this bot by itself, with the
-  // default settings, in seconds and the same way in Node and workerd (no wall clock involved).
-  it.skip("rejects a long straight-line loop body by the per-tick budget (#60)", async () => {
-    const t0 = performance.now();
-    const report = await runChecks(input(await longBody(300, 20_000)));
+    const report = await runChecks(input(await longBody(200, 20_000)));
     expect(report.run.fault?.reason).toBe("timeouts");
     expect(report.run.overrun).toBeNull();
     expect(performance.now() - t0).toBeLessThan(10_000);

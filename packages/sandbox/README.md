@@ -118,6 +118,20 @@ house bot, ~40 ms for 200 KB), and pays for its own code:
   arguments, `sort`), `String`/`Array`/`Function`/`Object`/`Error`/`RegExp` conversion methods,
   `lastIndex`, bound arguments. Iterables those built-ins would walk are read in the prelude first,
   so a replaced array iterator or a hand-written `next()` can't feed them unchecked values.
+- Numbers to strings: converting a number costs ~0.2–0.8 µs, but up to ~36 µs for one printed
+  with a 3-digit exponent (|x| < 1e-99 or ≥ 1e100; denormals are the slowest) and up to ~80 µs
+  in other radixes, and it was charged a flat amount (1.3 s per tick for `String(5e-324 * 7)` in
+  a loop, 3.5 s for a `Float64Array` join). Such a conversion always leaves that exponent at the
+  start or end of the string it builds, so every string a `+` or `+=` builds goes through the
+  prelude (`__zs_n`), which caps it and charges 40 000 units when it starts or ends with one
+  (this covers objects whose `valueOf` returns such a number). A property key (member, `in`,
+  computed keys in literals, classes and patterns) that isn't a string or an int32 goes through
+  `__zs_d`, which charges a number by value and converts an object once to the key it yields.
+  The prelude charges every built-in that converts a number: `String`, `Number.prototype`
+  methods, templates and string methods' arguments, `join`/`toLocaleString`/default `sort` (per
+  element), `JSON.stringify`, `parseInt`/`parseFloat`, error messages, `Symbol` descriptions,
+  `RegExp` patterns and inputs, key arguments (`hasOwnProperty`, `Reflect.get`, …),
+  `Object.fromEntries`/`groupBy` keys, `String.raw`.
 - Compound assignments and updates of a member whose object or key isn't a plain name go
   through a small accessor (`__zs_w(obj, key).v += x`), and `x += y` becomes `x = x + (y)`, so
   the string cap applies before anything is stored. Each inline check counts as 16 syntax
@@ -143,7 +157,9 @@ of the review of #62 took 29–156 s). On real game states the house bots use �
 and the template bot 4.4%. Their CPU per tick is ~2–11% over `main` for the code-shape metering
 and, on top of that, +7–21% (SDK example, easy), +37% (template) and +47–60% (medium, hard,
 chaos) for the string checks: member reads in arithmetic (`p.x - head.x`) can't be proven
-numeric, and each check costs about as much as the operation it guards.
+numeric, and each check costs about as much as the operation it guards. The number-to-string
+checks of the re-review add nothing measurable on top (−2% to +8% CPU per tick, within noise;
+the same charges and interrupts).
 
 ## Hardening (`src/prelude.ts`)
 
@@ -154,7 +170,7 @@ grows with its input:
 
 - Array and typed-array methods throw a `RangeError` above `maxArrayLength` (1e5).
 - Each call is charged to the per-tick cost meter (≈ 1 unit per ns: array element 100, typed-array
-  element 10, byte or char 1, plus ~800 for the wrapper itself). Over `opBudget × WORK_PER_OP` the
+  element 10 (150 to join), byte or char 1, plus ~800 for the wrapper itself). Over `opBudget × WORK_PER_OP` the
   tick times out like an interrupt-budget overrun (the bot can't catch it).
 - `concat`, `flat` and `flatMap` are reimplemented in JS (they read several arrays in one native call,
   so a getter could grow one after it was checked).
@@ -174,6 +190,17 @@ grows with its input:
   through `RegExp.prototype[Symbol.*]`). A replace is charged for its output: the replacement
   once per possible match, each ``$` `` or `$'` in it as the whole string, and whatever a
   replacer function returns.
+- `exec` charges each match it returns by the size of its captures (24 units per char for the
+  scan that found them, plus 1 per copy): lookahead captures overlap, so a global regex can
+  return n² / 2 chars (`'x'.repeat(4000).replace(/(?=(x*))/g, '$1')` took 217 ms per tick).
+  The `Symbol.*` methods call `exec` once per match and trust what it returns, and `split` and
+  `matchAll` build their regex through the species constructor and `flags`: they refuse to run
+  (`TypeError`) unless those are the built-ins. A replace charges each capture once more per
+  `$n` in its replacement.
+- `join`, `toLocaleString`, `String.raw` and sorting without a comparator convert elements in C:
+  the prelude converts them itself (charged) and hands the native strings, or supplies the
+  default comparator. `RegExp.escape` (copied from the native with the other statics) and
+  `RegExp.prototype.source` are capped like every other string builder.
 - Iterating a `Set` or `Map` (spread, `Array.from`, `new Set(set)`, `forEach`) is charged per
   entry up front.
 
@@ -218,8 +245,22 @@ batch with bots isolated, ban the version):
   call itself is bounded by the interrupt budget.
 - Weights are calibrated on an M1 (≈ 1 unit per ns at worst). Cloudflare runs QuickJS ~1.5×
   slower (spike #2), so the default budget there is ~15 ms of CPU at worst.
-- Work weights are worst cases measured on an M1 (≈ 1 unit per ns). Regex methods also poll
-  interrupts inside the regex engine, but a single poll can cover a few ms of match building.
+- **Regex steps below the engine's poll interval.** QuickJS's regex engine polls interrupts once
+  per 10 000 steps, and its counter starts again at every `exec`. Up to that many steps per call
+  are neither polled nor charged (a call costs ~1–2 K units), and a step can scan a string. So a
+  loop of cheap-looking calls runs long: `for (;;) /x*y/.test(s)` with a 60-char `s` takes
+  ~350 ms per tick, `/(?=x*)y/` on 100 chars ~800 ms, and `split` (one `exec` per position)
+  with `/x*y/` on 4 000 chars ~480 ms; a backreference (`/(x+)\1y/`) ~150 ms. Captures are
+  charged for their scan (above), steps that leave no trace are not. This was on `main` before
+  #60 too. Closing it needs the engine to count steps across calls (or a per-call charge of
+  ~10 000 steps, which would make honest global replaces on long strings too expensive).
+- Residual built-in costs per tick at the default budget, measured in the re-review of #62 and
+  accepted (the room's eviction of bots that keep hitting CPU limits is the progress guarantee):
+  `JSON.parse` of 16 K `1.5e-300` ~70 ms, `replaceAll('x', '$&$&')` ~64 ms, `normalize('NFKD')`
+  of U+FDFA ~46 ms, typed-array `values().toArray()` or `Iterator.concat` ~27–32 ms,
+  `new RegExp('(?:(?:a{1000}){1000})')` ~27 ms, `Object.keys` of a 16 K string ~22 ms,
+  `JSON.stringify` with an indent on deep nesting ~21–23 ms.
+- Work weights are worst cases measured on an M1 (≈ 1 unit per ns).
 - Which bot hits the shared heap cap first depends on the other bots in the sandbox, so OOM deaths
   are not reproducible across rooms (everything else is).
 - `JSON.stringify` with an array replacer emits keys in object order, not list order.

@@ -316,6 +316,13 @@ describe("cost meter: strings (review of #62)", () => {
     "JSON.stringify": "JSON.stringify('x'.repeat(N));",
     "String.fromCharCode": "String.fromCharCode(...new Array(N + 1).fill(65));",
     "a Symbol description": "Symbol('x'.repeat(N));",
+    // Re-review of #62: escape was copied from the native unguarded and grew a string 4× per
+    // call (16 K → 65 K → …).
+    "RegExp.escape": "RegExp.escape(' '.repeat(N / 4 + 1));",
+    "a RegExp source": "new RegExp('/'.repeat(N / 2 + 1)).source;",
+    "String.raw": "String.raw({ raw: ['x'.repeat(N), 'y'] }, '');",
+    "a join of numbers": "new Array(N / 2 + 1).fill(0).join();",
+    "a typed array join": "new Float64Array(N / 2 + 1).join();",
   };
   for (const [name, body] of Object.entries(tooLong)) {
     it(`caps strings built by ${name}`, () => {
@@ -356,6 +363,124 @@ describe("cost meter: strings (review of #62)", () => {
     );
     expect(report.action.turn).toBeCloseTo(N / 1e5);
   });
+});
+
+describe("cost meter: numbers to strings (re-review of #62)", () => {
+  // Converting a number to a string costs ~0.2–0.8 µs, but up to ~36 µs for a value printed
+  // with a 3-digit exponent (denormals) and ~80 µs in other radixes. It was charged a flat
+  // amount, so these ran until the interrupt backstop: up to 1.3 s per tick (3.5 s for a join).
+  const x = "const x = 5e-324 * 7; const big = 1.79e308; const o = {};";
+  const rows: Record<string, string> = {
+    String: "for (;;) String(x);",
+    toString: "for (;;) x.toString();",
+    "toString with a radix": "for (;;) x.toString(7);",
+    "toString(3) of a large number": "for (;;) big.toString(3);",
+    toFixed: "for (;;) big.toFixed(100);",
+    toPrecision: "for (;;) x.toPrecision(100);",
+    toExponential: "for (;;) x.toExponential(100);",
+    toLocaleString: "for (;;) x.toLocaleString();",
+    "a number key": "for (;;) o[x];",
+    "a number key through a temporary": "for (;;) o[x * 1];",
+    "a number key of a numeric local": "let k = x; for (;;) o[k];",
+    "in with a number": "for (;;) x in o;",
+    "a computed key in a literal": "for (;;) ({ [x]: 1 });",
+    "an object key whose toString returns a number":
+      "const k = { toString: () => x }; for (;;) o[k];",
+    "+ with a string": "let s; for (;;) s = '' + x;",
+    "+ with the number on the left": "let s; for (;;) s = x + '';",
+    "+= of a string": "let s; for (;;) { s = ''; s += x; }",
+    "+ with an object converting to a number":
+      "const v = { valueOf: () => x }; let s; for (;;) s = v + '';",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: bot code with a template literal
+    "a template": "let s; for (;;) s = `${x}`;",
+    "a typed array join": "const t = new Float64Array(200).fill(x); for (;;) t.join();",
+    "a typed array toString": "const t = new Float64Array(200).fill(x); for (;;) t.toString();",
+    "a typed array toLocaleString":
+      "const t = new Float64Array(200).fill(x); for (;;) t.toLocaleString();",
+    "an array join": "const a = new Array(200).fill(x); for (;;) a.join();",
+    "an array join of objects":
+      "const a = new Array(200).fill({ toString: () => x }); for (;;) a.join();",
+    "an array toLocaleString": "const a = new Array(200).fill(x); for (;;) a.toLocaleString();",
+    "a sort without a comparator": "const a = new Array(200).fill(x); for (;;) a.sort();",
+    "Array.prototype.join on a typed array":
+      "const t = new Float64Array(200).fill(x); for (;;) Array.prototype.join.call(t);",
+    "JSON.stringify": "const a = new Array(200).fill(x); for (;;) JSON.stringify(a);",
+    "JSON.stringify of Number objects":
+      "const a = new Array(200).fill(new Number(x)); for (;;) JSON.stringify(a);",
+    "a string method's argument": "for (;;) 'a'.indexOf(x);",
+    "padStart's filler": "for (;;) 'a'.padStart(2, x);",
+    concat: "for (;;) 'a'.concat(x);",
+    parseInt: "for (;;) parseInt(x);",
+    "Number.parseFloat": "for (;;) Number.parseFloat(x);",
+    "an Error message": "for (;;) new Error(x);",
+    "a Symbol description": "for (;;) Symbol(x);",
+    "a RegExp pattern": "for (;;) new RegExp(x);",
+    "a regex input": "const re = /y/; for (;;) re.test(x);",
+    hasOwnProperty: "for (;;) o.hasOwnProperty(x);",
+    "Reflect.get": "for (;;) Reflect.get(o, x);",
+    "Object.fromEntries": "const e = [[x, 1]]; for (;;) Object.fromEntries(e);",
+    "Object.groupBy": "const a = [1]; for (;;) Object.groupBy(a, () => x);",
+    "String.raw": "const t = { raw: ['a', 'b'] }; for (;;) String.raw(t, x);",
+    "a native callback": "const a = new Array(200).fill(x); for (;;) a.map(String);",
+    "console.log": "for (;;) log(x);",
+  };
+  for (const [name, body] of Object.entries(rows)) {
+    it(`stops ${name} within one tick`, () => {
+      const report = tickOnce(`${body}\nreturn { turn: 0.5 };`, x);
+      expectStopped(report, name);
+    });
+  }
+
+  it("charges a number key's conversion by value", () => {
+    const keys = (k: string) =>
+      tickOnce(
+        `const o = {}; let k = ${k}; for (let i = 0; i < 100; i++) o[k]; return { turn: 0 };`,
+      ).work;
+    const int = keys("7");
+    expect(keys("0.5") - int).toBeGreaterThan(100 * 700);
+    expect(keys("5e-324") - int).toBeGreaterThan(100 * 39_000);
+  });
+});
+
+describe("cost meter: regex output (re-review of #62)", () => {
+  // Lookahead captures overlap, so a global regex returns n² / 2 chars of captures, built (and
+  // scanned for) without interrupt polls: 81–300 ms per tick before.
+  const prefix = "const s = 'x'.repeat(4000); const h = 'x'.repeat(2000);";
+  const rows: Record<string, string> = {
+    "replace with overlapping captures": "for (;;) s.replace(/(?=(x*))/g, '$1');",
+    "split with overlapping captures": "for (;;) s.split(/(?=(x*))/);",
+    "matchAll with overlapping captures": "for (;;) [...h.matchAll(/(?=(x*))/g)];",
+    "match with overlapping captures": "for (;;) s.match(/(?=(x*))/g);",
+    "a replace function given overlapping captures": "for (;;) s.replace(/(?=(x*))/g, () => '');",
+    "exec of overlapping captures":
+      "const re = /(?=(x*))/g; for (;;) { re.lastIndex = 0; for (let i = 0; i < 4000; i++) re.exec(s); }",
+  };
+  for (const [name, body] of Object.entries(rows)) {
+    it(`stops ${name} within one tick`, () => {
+      const report = tickOnce(`${body}\nreturn { turn: 0.5 };`, prefix);
+      expectStopped(report, name);
+    });
+  }
+
+  // The Symbol methods trust what exec returns, and split and matchAll construct their regex
+  // through the species constructor: a bot's versions could feed them huge captures.
+  const replaced: Record<string, string> = {
+    "a replaced exec":
+      "RegExp.prototype.exec = function () { return null; }; 'a'.replace(/a/g, 'b');",
+    "an own exec": "const re = /a/g; re.exec = () => null; 'a'.replace(re, 'b');",
+    "a subclass with its own exec":
+      "class R extends RegExp { exec() { return null; } } 'a'.match(new R('a', 'g'));",
+    "a species constructor": "class R extends RegExp {} 'abc'.split(new R('b'));",
+    "a replaced flags getter":
+      "Object.defineProperty(RegExp.prototype, 'flags', { get: () => 'g' }); 'a'.split(/a/);",
+  };
+  for (const [name, body] of Object.entries(replaced)) {
+    it(`refuses ${name}`, () => {
+      const report = tickOnce(`${body}\nreturn { turn: 0.5 };`);
+      expect(report.outcome, name).toBe("error");
+      expect(report.error, name).toMatch(/^TypeError: sandbox: RegExp methods need the built-in/);
+    });
+  }
 });
 
 describe("cost meter: honest bots", () => {

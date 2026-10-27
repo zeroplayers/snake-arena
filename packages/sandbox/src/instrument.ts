@@ -93,8 +93,13 @@ const W_CHECK = 2;
  * function full of checks costs that much more per frame.
  */
 const CHECK_NODES = 16;
-/** `+` results up to this length skip the prelude's cap check (they can't be over it). */
-const SHORT_STRING = 64;
+/**
+ * Converting a number to a string (a property key): ≈ 0.2–0.8 µs, but up to ≈ 36 µs for a value
+ * printed with a 3-digit exponent. Int32 values are checked inline and skip the helper; the
+ * prelude charges the rest by value (same rates as `DTOA` and `DTOA_MAX` in prelude.ts).
+ */
+const DTOA_UNITS = 800;
+const DTOA_MAX_UNITS = 40_000;
 
 /** Charged for each caught exception, plus the per-char backtrace cost below. */
 const EXCEPTION_UNITS = 4000;
@@ -117,6 +122,7 @@ const CAUGHT_VAR = "__zs_e";
 const TEMP = "__zs_t";
 const NEW_STRING = "__zs_n";
 const NEW_KEY = "__zs_y";
+const KEY = "__zs_d";
 const MEMBER = "__zs_w";
 const SPREAD_ARGS = "__zs_a";
 const LEAVING = "__zs_r";
@@ -275,7 +281,7 @@ class Instrumenter {
     const exception = EXCEPTION_UNITS + this.maxParamWeight * UNITS_PER_WEIGHT;
     const header =
       `var ${COUNTER}=0,${TEMP};const{o:${OVERRUN},k:${KEYS},f:${FOR_IN},x:${CAUGHT},` +
-      `n:${NEW_STRING},y:${NEW_KEY},w:${MEMBER},a:${SPREAD_ARGS},r:${LEAVING}}=` +
+      `n:${NEW_STRING},y:${NEW_KEY},w:${MEMBER},a:${SPREAD_ARGS},r:${LEAVING},d:${KEY}}=` +
       `${METER_GLOBAL}(function(n){${COUNTER}=n},function(){return ${COUNTER}},` +
       `${Math.ceil(tick)},${Math.ceil(load)},${exception});` +
       chargeStatement(Math.ceil(top.weight * UNITS_PER_WEIGHT));
@@ -1001,6 +1007,10 @@ class Instrumenter {
    */
   private check(node: Node, rate: number, helper?: string): void {
     const n = node as AnyNode;
+    if (rate === K_KEY) {
+      this.checkKey(n, helper);
+      return;
+    }
     if (this.nonString(n)) return;
     const length = staticLength(n);
     if (length !== undefined) {
@@ -1028,6 +1038,53 @@ class Instrumenter {
     this.edits.push({
       pos: n.end,
       text: `${seq ? ")" : ""},typeof ${TEMP}==="string"&&${tail(TEMP)},${TEMP})`,
+      close: true,
+      span,
+    });
+  }
+
+  /**
+   * A property key: a string is charged by length (or capped and charged through `helper`), an
+   * int32 number passes, anything else goes through the prelude's `__zs_d`, which charges a
+   * number's conversion by value and converts an object (once) to the key it yields.
+   */
+  private checkKey(n: AnyNode, helper?: string): void {
+    if (n.type === "Literal" && typeof n.value === "number") {
+      this.add(Math.ceil(literalKeyUnits(n.value) / UNITS_PER_WEIGHT));
+      return;
+    }
+    const length = staticLength(n);
+    if (length !== undefined) {
+      this.add(Math.ceil((length * K_KEY) / UNITS_PER_WEIGHT));
+      return;
+    }
+    if (n.type === "Literal" && !n.regex) return;
+    this.addCheck();
+    const span = n.end - n.start;
+    if (OBJECT_EXPRESSIONS.has(n.type) || n.type === "Literal") {
+      this.edits.push({ pos: n.start, text: `${KEY}(`, close: false, span });
+      this.edits.push({ pos: n.end, text: ")", close: true, span });
+      return;
+    }
+    const numeric = this.types.numeric(n);
+    const tail = (v: string) => {
+      const int = `(${v}|0)===${v}?${v}:${KEY}(`;
+      if (numeric) return int;
+      const str = helper ? `${helper}(${v})` : chargeText(v, K_KEY);
+      return `typeof ${v}==="string"?(${str},${v}):typeof ${v}==="number"&&${int}`;
+    };
+    if (n.type === "Identifier" || n.type === "ThisExpression") {
+      const v = n.type === "ThisExpression" ? "this" : this.source.slice(n.start, n.end);
+      this.edits.push({ pos: n.start, text: `(${tail(v)}`, close: false, span });
+      this.edits.push({ pos: n.end, text: "))", close: true, span });
+      return;
+    }
+    const seq = n.type === "SequenceExpression";
+    this.fn.temp = true;
+    this.edits.push({ pos: n.start, text: `(${TEMP}=${seq ? "(" : ""}`, close: false, span });
+    this.edits.push({
+      pos: n.end,
+      text: `${seq ? ")" : ""},${tail(TEMP)}${TEMP}))`,
       close: true,
       span,
     });
@@ -1323,13 +1380,23 @@ function chargeText(v: string, rate: number): string {
 }
 
 /**
- * The end of `(__zs_t=a+b` …: long results go through the prelude's cap. `numeric`: the result
- * is stored where a string becomes a number (`a[i] += s`), so it is charged for that too.
+ * The end of `(__zs_t=a+b` …: a string result goes through the prelude (`__zs_n`), which caps
+ * it and charges a slow number conversion it finds in it. `numeric`: the result is stored where
+ * a string becomes a number (`a[i] += s`), so it is charged for that too.
  */
 function plusTail(numeric: boolean): string {
-  const cap = `${TEMP}.length>${SHORT_STRING}&&${NEW_STRING}(${TEMP})`;
+  const cap = `${NEW_STRING}(${TEMP})`;
   const check = numeric ? `(${cap},${chargeText(TEMP, K_NUMBER)})` : cap;
   return `,typeof ${TEMP}==="string"&&${check},${TEMP})`;
+}
+
+/** What converting a number literal used as a key costs (see `dtoaCost` in prelude.ts). */
+function literalKeyUnits(v: number): number {
+  if (v === (v | 0)) return 0;
+  const a = Math.abs(v);
+  return (a >= 1e100 && a !== Number.POSITIVE_INFINITY) || (a < 1e-99 && a !== 0)
+    ? DTOA_MAX_UNITS
+    : DTOA_UNITS;
 }
 
 /** Whether a store to this member may convert the value to a number (typed array, length). */

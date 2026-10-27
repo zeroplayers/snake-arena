@@ -2,10 +2,9 @@ import type { TickReport } from "@zerosnake/sandbox";
 
 /**
  * Caps on what the candidate may cost over the whole suite, on top of the sandbox's per-tick
- * budget. They exist because that budget doesn't bound CPU yet: it counts QuickJS interrupt
- * polls, which come once per ~4,300 loop iterations however long the loop body is, so a bot can
- * stay "within budget" and still take seconds per tick (#60). Until the sandbox meters code by
- * its real cost, these keep a check from running for hours.
+ * budget. Before #60 that budget only counted QuickJS interrupt polls, so a bot could stay
+ * "within budget" and still take seconds per tick; the sandbox now charges real cost, and the
+ * wall clock remains the backstop for its known gaps (see the sandbox README).
  */
 export interface SuiteBudget {
   /**
@@ -17,7 +16,7 @@ export interface SuiteBudget {
   maxMillis: number;
   /** Interrupt polls over all of the candidate's ticks (deterministic). */
   maxInterrupts: number;
-  /** Native work units over all of the candidate's ticks (deterministic). */
+  /** Cost units over all of the candidate's ticks (deterministic). */
   maxWork: number;
 }
 
@@ -44,8 +43,7 @@ export interface Cost {
 
 /**
  * Adds up the candidate's cost across the suite and tells when a cap is hit. This is the one
- * place that reads costs out of a `TickReport`: when the sandbox gets a real per-opcode meter
- * (#60), its unit is charged here, and the API and report shape stay as they are.
+ * place that reads costs out of a `TickReport`.
  */
 export class CostMeter {
   readonly cost: Cost = { interrupts: 0, work: 0 };

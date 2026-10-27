@@ -69,11 +69,16 @@ export const PRELUDE = String.raw`
   const bindNative = Function.prototype.bind;
   const regexpGlobal = getOwnPropertyDescriptor(RegExp.prototype, "global").get;
   const regexpFlags = getOwnPropertyDescriptor(RegExp.prototype, "flags").get;
+  const speciesKey = Symbol.species;
+  const regexpSpecies = getOwnPropertyDescriptor(RegExp, speciesKey).get;
   const TypedArray = getPrototypeOf(Uint8Array);
   const TypedArrayProto = TypedArray.prototype;
   const taTag = getOwnPropertyDescriptor(TypedArrayProto, Symbol.toStringTag).get;
   const taLength = getOwnPropertyDescriptor(TypedArrayProto, "length").get;
   const regexpSource = getOwnPropertyDescriptor(RegExp.prototype, "source").get;
+  const objectToString = Object.prototype.toString;
+  const numberValueOf = Number.prototype.valueOf;
+  const toStringTagKey = Symbol.toStringTag;
   const abByteLength = getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength").get;
   const MAX_LENGTH = 9007199254740991;
 
@@ -100,6 +105,9 @@ export const PRELUDE = String.raw`
   // match at (spreading a global matchAll builds a match per char: 320 ns).
   const PIECE = 80;
   const MATCH = 400;
+  // Per char of a capture exec returns: the regex engine stepped over at least that much to find
+  // it (~10–30 ns per char in a lookahead) without polling interrupts (see chargeMatch).
+  const SCAN = 24;
   // Per entry of a Set or Map walked by an iterator (spreading a Map: 192 ns).
   const ENTRY = 250;
 
@@ -109,6 +117,17 @@ export const PRELUDE = String.raw`
   const HASH = 4;
   const COMPARE = 1;
   const CREATE = 1;
+
+  // Converting a number to a string (dtoa, radix 10): ~0.2–0.8 µs, but up to ~36 µs for a value
+  // printed with a 3-digit exponent (|x| < 1e-99 or ≥ 1e100; denormals are the slowest). Other
+  // radixes: up to ~80 µs outside 1e-20..1e21. Int32 values take a fast path.
+  const DTOA = 800;
+  const DTOA_MAX = 40000;
+  const DTOA_RADIX = 100000;
+  // Per element of a typed array joined into a string (an integer: ~0.1 µs).
+  const TYPED_JOIN = 150;
+  // A call of the prelude's comparator for a sort without one (~0.3 µs).
+  const SORT_CALL = 400;
 
   // Copying one own property (object spread and rest, for-in: 50–130 ns).
   const KEY = 150;
@@ -215,7 +234,7 @@ export const PRELUDE = String.raw`
     perChar = charLoad;
     exceptionUnits = exception;
     return { o: overrun, k: chargeSpread, f: chargeForIn, x: chargeCaught, n: newString,
-      y: newKey, w: member, a: spreadArgs, r: chargeLeaving };
+      y: newKey, w: member, a: spreadArgs, r: chargeLeaving, d: propertyKey };
   }
 
   // ---- strings ----
@@ -227,10 +246,83 @@ export const PRELUDE = String.raw`
     if (typeof v === "string" && v.length > maxString) tooLongString(v.length);
     return v;
   }
-  // A string the bot code built with + (only called above a short length).
+  // ---- numbers to strings ----
+
+  function dtoaCost(v) {
+    if (v === (v | 0)) return 0;
+    const a = v < 0 ? -v : v;
+    return (a >= 1e100 && a !== Infinity) || (a < 1e-99 && a !== 0) ? DTOA_MAX : DTOA;
+  }
+  function radixCost(v) {
+    if (v === (v | 0)) return 0;
+    const a = v < 0 ? -v : v;
+    return (a >= 1e-20 && a < 1e21) || a !== a || a === Infinity ? DTOA : DTOA_RADIX;
+  }
+  // A slow conversion always prints a 3-digit exponent ("3.5e-323"): a string built from one
+  // starts or ends with it (instrument.ts sends every string a + builds here).
+  function hugeExponentAt(s, i) {
+    const sign = s[i + 1];
+    const a = s[i - 1];
+    const b = s[i + 2];
+    const c = s[i + 3];
+    const d = s[i + 4];
+    return s[i] === "e" && (sign === "-" || sign === "+") && a >= "0" && a <= "9" &&
+      b >= "0" && b <= "9" && c >= "0" && c <= "9" && d >= "0" && d <= "9";
+  }
+  function endsWithHugeExponent(s) {
+    return s.length >= 6 && s[s.length - 5] === "e" && hugeExponentAt(s, s.length - 5);
+  }
+  function startsWithHugeExponent(s) {
+    let i = s[0] === "-" ? 1 : 0;
+    if (!(s[i] >= "0" && s[i] <= "9")) return false;
+    i++;
+    if (s[i] === ".") {
+      const end = i + 18;
+      for (i++; i < end && s[i] >= "0" && s[i] <= "9"; i++);
+    }
+    return hugeExponentAt(s, i);
+  }
+  // String(v) for a value a native is about to convert, with the conversion charged. Symbols are
+  // left for the native to reject. An object can convert through a number (a valueOf or toString
+  // returning one), so its result is charged by its shape.
+  function toStr(v) {
+    if (typeof v === "string" || typeof v === "symbol") return v;
+    if (typeof v === "number") {
+      charge(dtoaCost(v));
+      return StringCtor(v);
+    }
+    const s = StringCtor(v);
+    if (endsWithHugeExponent(s)) charge(DTOA_MAX);
+    return s;
+  }
+  // A property key that isn't a string or an int32 number (instrument.ts checks those inline).
+  // An object is converted here, once, so its conversion can be charged; the key is returned.
+  function propertyKey(v) {
+    if (typeof v === "number") {
+      charge(dtoaCost(v));
+    } else if ((typeof v === "object" || typeof v === "function") && v !== null) {
+      const k = ownKeysNative({ [v]: 0 })[0];
+      if (typeof k === "string") {
+        charge(k.length * HASH);
+        if (endsWithHugeExponent(k)) charge(DTOA_MAX);
+      }
+      return k;
+    }
+    return v;
+  }
+
+  // A string the bot code built with +.
+  // Few branches on the common path (QuickJS counts them toward its interrupt polls too): most
+  // strings start with a letter and don't end in an exponent.
   function newString(s) {
-    if (s.length > maxString) tooLongString(s.length);
-    charge(s.length * CREATE);
+    const n = s.length;
+    if (n > 64) {
+      if (n > maxString) tooLongString(n);
+      charge(n * CREATE);
+    }
+    if (s[n - 5] === "e" || s[0] <= "9") {
+      if (endsWithHugeExponent(s) || startsWithHugeExponent(s)) charge(DTOA_MAX);
+    }
   }
   // A computed key in an object literal or class: it may become a function's name.
   function newKey(s) {
@@ -473,42 +565,83 @@ export const PRELUDE = String.raw`
   // O(1) or already interrupt-checked per element: push, pop and at. Iterators are charged too:
   // they are how spread, for-of and destructuring walk an array.
   const ARRAY_CHEAP = new SetCtor(["constructor", "push", "pop", "at", "concat", "flat",
-    "flatMap"]);
-  // Sorting without a comparator compares strings: each one about log2(n) times.
+    "flatMap", "join", "toLocaleString"]);
+  // Sorting without a comparator compares the elements' strings, converting them in C on every
+  // comparison. The same comparator is supplied here, so each conversion is charged (a number,
+  // an object's toString), and so is comparing two long strings.
+  function defaultCompare(a, b) {
+    const x = typeof a === "string" ? a : toStr(a);
+    const y = typeof b === "string" ? b : toStr(b);
+    if (x.length > 64 && y.length > 64) charge((x.length < y.length ? x.length : y.length) * COMPARE);
+    return x < y ? -1 : x > y ? 1 : 0;
+  }
   const sortCost = (self, args, name) => {
-    const len = arrayLength(self);
-    nlogn(arrayLength, ARRAY)(self, args, name);
-    if (args[0] === undefined && isArray(self)) {
-      let chars = 0;
-      for (let i = 0; i < len; i++) {
-        const v = self[i];
-        if (typeof v === "string") chars += v.length;
-      }
-      charge(chars * COMPARE * (len > 2 ? log2(len) : 1));
-    }
-  };
-  // join copies its elements into one string: refuse before the copy if that is over the cap.
-  const joinCost = (self, args, name) => {
-    linearWithStrings(arrayLength, ARRAY)(self, args, name);
-    if (!isArray(self)) return;
-    const sep = args[0] === undefined ? 1 : typeof args[0] === "string" ? args[0].length : 0;
-    let chars = self.length > 0 ? (self.length - 1) * sep : 0;
-    for (let i = 0; i < self.length; i++) {
-      const v = self[i];
-      if (typeof v === "string") chars += v.length;
-    }
-    if (chars > maxString) tooLongString(chars);
+    const own = args[0] !== undefined;
+    nlogn(arrayLength, own ? ARRAY : ARRAY + SORT_CALL)(self, args, name);
+    if (!own) args[0] = defaultCompare;
   };
   for (const name of Reflect.ownKeys(ArrayProto)) {
     if (ARRAY_CHEAP.has(name)) continue;
     let cost;
     if (name === "sort" || name === "toSorted") cost = sortCost;
-    else if (name === "join" || name === "toString" || name === "toLocaleString") cost = joinCost;
+    // Calls this.join.
+    else if (name === "toString") cost = () => {};
     else cost = linearWithStrings(arrayLength, ARRAY);
     guard(ArrayProto, name, CALLBACK_METHODS.has(name) ? withCallback(0, cost) : cost);
   }
   arrayValues = ArrayProto[iteratorKey];
   arrayNext = ArrayIteratorProto.next;
+
+  function toObject(v, name) {
+    if (v === null || v === undefined) throw new TypeErrorCtor(name + " called on null or undefined");
+    return ObjectCtor(v);
+  }
+  // join converts every element in C: they are converted here instead (charged) and the native
+  // joins the strings. It is refused before the copy if the result would be over the cap.
+  replaceMethod(ArrayProto, "join", (native) => ({
+    join(separator) {
+      charge(WRAP);
+      const o = toObject(this, "Array.prototype.join");
+      const len = arrayLength(o);
+      checked("join", len, ARRAY);
+      const sep = separator === undefined ? "," : toStr(separator);
+      if (typeof sep !== "string") throw new TypeErrorCtor("cannot convert a Symbol to a string");
+      let chars = len > 1 ? (len - 1) * sep.length : 0;
+      if (chars > maxString) tooLongString(chars);
+      const parts = [];
+      for (let i = 0; i < len; i++) {
+        const v = o[i];
+        const s = typeof v === "string" ? v : v === undefined || v === null ? ""
+          : typeof v === "number" && v === (v | 0) ? "" + v : toStr(v);
+        if (typeof s === "string") chars += s.length;
+        if (chars > maxString) tooLongString(chars);
+        define(parts, i, s);
+      }
+      return apply(native, parts, [sep]);
+    },
+  }).join);
+  // toLocaleString calls each element's toLocaleString and converts the result in C: done here.
+  function localeJoin(o, len) {
+    let out = "";
+    for (let i = 0; i < len; i++) {
+      if (i > 0) out += ",";
+      const v = o[i];
+      if (v === undefined || v === null) continue;
+      const s = toStr(v.toLocaleString());
+      if (out.length + s.length > maxString) tooLongString(out.length + s.length);
+      out += s;
+    }
+    return out;
+  }
+  replaceMethod(ArrayProto, "toLocaleString", () => ({
+    toLocaleString() {
+      charge(WRAP);
+      const o = toObject(this, "Array.prototype.toLocaleString");
+      const len = arrayLength(o);
+      checked("toLocaleString", len, ARRAY);
+      return localeJoin(o, len);
+    },
+  }).toLocaleString);
 
   function define(a, i, v) {
     defineProperty(a, i, { value: v, writable: true, enumerable: true, configurable: true });
@@ -602,13 +735,40 @@ export const PRELUDE = String.raw`
 
   // ---- typed arrays and buffers ----
 
-  const TYPED_CHEAP = new SetCtor(["constructor", "at", "subarray"]);
+  const TYPED_CHEAP = new SetCtor(["constructor", "at", "subarray", "toLocaleString"]);
+  const FLOATS = new SetCtor(["Float16Array", "Float32Array", "Float64Array"]);
+  // join converts every element in C (see DTOA). The separator is converted first, so no bot code
+  // runs between counting and joining; every element prints at least one char.
+  const typedJoinCost = (self, args, name) => {
+    if (args[0] !== undefined) args[0] = toStr(args[0]);
+    const len = typedLength(self);
+    const sep = args[0] === undefined ? 1 : typeof args[0] === "string" ? args[0].length : 0;
+    const least = len > 0 ? len + (len - 1) * sep : 0;
+    if (least > maxString) tooLongString(least);
+    checked(name, len, TYPED_JOIN);
+    if (!FLOATS.has(apply(taTag, self, []))) return;
+    let units = 0;
+    for (let i = 0; i < len; i++) {
+      const v = self[i];
+      if (v !== (v | 0)) units += dtoaCost(v);
+    }
+    charge(units);
+  };
   for (const name of Reflect.ownKeys(TypedArrayProto)) {
     if (TYPED_CHEAP.has(name)) continue;
     const sorting = name === "sort" || name === "toSorted";
-    const cost = (sorting ? nlogn : linear)(typedLength, TYPED);
+    const cost = name === "join" ? typedJoinCost : (sorting ? nlogn : linear)(typedLength, TYPED);
     guard(TypedArrayProto, name, CALLBACK_METHODS.has(name) ? withCallback(0, cost) : cost);
   }
+  replaceMethod(TypedArrayProto, "toLocaleString", () => ({
+    toLocaleString() {
+      charge(WRAP);
+      if (!isTypedArray(this)) throw new TypeErrorCtor("not a TypedArray");
+      const len = typedLength(this);
+      checked("toLocaleString", len, TYPED_JOIN);
+      return localeJoin(this, len);
+    },
+  }).toLocaleString);
   guard(TypedArray, "from", (_self, args, name) => {
     args[1] = checkedCallback(args[1]);
     typedSource(name, args, 0);
@@ -697,13 +857,14 @@ export const PRELUDE = String.raw`
   const UNDEFINED_OK = new SetCtor(["split", "match", "matchAll", "search"]);
   const PER_CHAR = { toLowerCase: CASE, toUpperCase: CASE, toLocaleLowerCase: CASE,
     toLocaleUpperCase: CASE, normalize: NORMALIZE };
+  const HTML_ARG = { anchor: true, fontcolor: true, fontsize: true, link: true };
   function guardString(name, cost) {
     replaceMethod(StringProto, name, (native) => ({
       m(...args) {
         charge(WRAP);
         // Convert once here, so the native gets a primitive and cannot run bot code (a
         // toString returning a different string) after we measured it.
-        const s = this === null || this === undefined ? this : StringCtor(this);
+        const s = this === null || this === undefined ? this : toStr(this);
         if (typeof s === "string") cost(s, args);
         return capString(apply(native, s, args));
       },
@@ -726,9 +887,9 @@ export const PRELUDE = String.raw`
         // Naive search is O(haystack × needle).
         let needle = args[0];
         if (typeof needle === "object" && needle !== null) {
-          if (!isRegExp(needle)) needle = args[0] = StringCtor(needle);
-        } else if (typeof needle !== "symbol" && !(needle === undefined && UNDEFINED_OK.has(name))) {
-          needle = args[0] = StringCtor(needle);
+          if (!isRegExp(needle)) needle = args[0] = toStr(needle);
+        } else if (!(needle === undefined && UNDEFINED_OK.has(name))) {
+          needle = args[0] = toStr(needle);
         }
         const m = typeof needle === "string" && needle.length > 1 ? needle.length : 1;
         charge(s.length * m * CHAR);
@@ -744,15 +905,25 @@ export const PRELUDE = String.raw`
       });
     } else if (name === "localeCompare") {
       guardString(name, (s, args) => {
-        args[0] = StringCtor(args[0]);
-        charge((s.length + args[0].length) * NORMALIZE);
+        const that = args[0] = toStr(args[0]);
+        if (typeof that === "string") charge((s.length + that.length) * NORMALIZE);
       });
     } else if (name === iteratorKey) {
       // Spreading a string ([...s], Array.from(s)) builds one string per char in a native loop.
       guardString(name, (s) => charge(s.length * PIECE));
     } else if (hasOwn(PER_CHAR, name)) {
       const weight = PER_CHAR[name];
-      guardString(name, (s) => charge(s.length * weight));
+      guardString(name, (s, args) => {
+        // normalize(form)
+        if (args.length > 0 && args[0] !== undefined) args[0] = toStr(args[0]);
+        charge(s.length * weight);
+      });
+    } else if (hasOwn(HTML_ARG, name)) {
+      // anchor(name), link(url), …: the argument is converted and quoted into the result.
+      guardString(name, (s, args) => {
+        args[0] = toStr(args[0]);
+        charge((s.length + (typeof args[0] === "string" ? args[0].length * 6 : 0)) * CHAR);
+      });
     } else if (name === "repeat") {
       guardString(name, (s, args) => {
         const n = s.length * (args[0] = num(args[0]));
@@ -763,6 +934,7 @@ export const PRELUDE = String.raw`
     } else if (name === "padStart" || name === "padEnd") {
       guardString(name, (s, args) => {
         const n = toLength(args[0] = num(args[0]));
+        if (args.length > 1 && args[1] !== undefined) args[1] = toStr(args[1]);
         if (n > maxString && n <= MAX_STRING) tooLongString(n);
         if (n <= MAX_STRING) charge((s.length + n) * CHAR);
       });
@@ -771,8 +943,8 @@ export const PRELUDE = String.raw`
       guardString(name, (s, args) => {
         let n = s.length;
         for (let i = 0; i < args.length; i++) {
-          args[i] = StringCtor(args[i]);
-          n += args[i].length;
+          const a = args[i] = toStr(args[i]);
+          if (typeof a === "string") n += a.length;
         }
         if (n > maxString) tooLongString(n);
         charge(n * CHAR);
@@ -783,20 +955,22 @@ export const PRELUDE = String.raw`
   }
 
   // The output of a replace is the replacement once per match. "$" patterns expand to the
-  // matched text or a capture (together at most the string, assuming captures don't overlap)
-  // or to the text before or after the match (up to the whole string, per match). A replacer
+  // matched text (at most the string in total), the text before or after the match (up to the
+  // whole string, per match) or a capture. Captures can overlap (lookahead), so they are charged
+  // as exec returns them, once more per such "$": returns how many there are. A replacer
   // function runs as bytecode, but the native copies whatever it returns.
   function chargeReplacement(s, args, matches) {
     const r = args[1];
     if (typeof r === "function") {
       args[1] = function (...a) {
-        const out = StringCtor(apply(r, this, a));
-        charge(out.length * CHAR);
+        const out = toStr(apply(r, this, a));
+        if (typeof out === "string") charge(out.length * CHAR);
         return out;
       };
-      return;
+      return 0;
     }
-    const repl = args[1] = StringCtor(r);
+    const repl = args[1] = toStr(r);
+    if (typeof repl !== "string") return 0;
     let around = 0;
     let other = 0;
     for (let i = apply(indexOfString, repl, ["$"]); i >= 0;
@@ -806,6 +980,7 @@ export const PRELUDE = String.raw`
       else other++;
     }
     charge((matches * (repl.length + around * s.length) + other * s.length) * CHAR);
+    return other;
   }
 
   // Regex methods with many matches build a match or piece per char. The regex engine polls
@@ -837,22 +1012,86 @@ export const PRELUDE = String.raw`
     const d = getOwnPropertyDescriptor(self, "lastIndex");
     if (d !== undefined) chargeNumber(d.value);
   };
-  guard(RegExpProto, "exec", lastIndexCost);
-  guard(RegExpProto, "test", lastIndexCost);
+  // exec builds the match: a copy of every capture. Lookahead captures can overlap, so a global
+  // regex can return n² / 2 chars in total: each match is charged by size when exec returns it,
+  // and for the scan that found it (the engine polls interrupts only after 10 000 steps per
+  // call). The Symbol methods below call exec once per match (split: once per position); a
+  // replace copies each capture again per "$" in its replacement (captureCopies).
+  let captureCopies = 1;
+  function chargeMatch(m) {
+    if (!isArray(m)) return;
+    let chars = 0;
+    for (let i = 0; i < m.length; i++) {
+      const c = m[i];
+      if (typeof c === "string") chars += c.length;
+    }
+    if (m.groups !== undefined) chars *= 2;
+    charge(m.length * ARRAY + chars * (SCAN + CREATE * captureCopies));
+  }
+  replaceMethod(RegExpProto, "exec", (native) => ({
+    exec(str) {
+      charge(WRAP);
+      lastIndexCost(this);
+      const m = apply(native, this, [toStr(str)]);
+      chargeMatch(m);
+      return m;
+    },
+  }).exec);
+  const regexpExecWrapped = RegExpProto.exec;
+  guard(RegExpProto, "test", (self, args) => {
+    lastIndexCost(self);
+    args[0] = toStr(args[0]);
+  });
+
+  // The descriptor a property lookup finds, without running getters.
+  function lookup(o, key) {
+    for (let p = o; p !== null; p = getPrototypeOf(p)) {
+      const d = getOwnPropertyDescriptor(p, key);
+      if (d !== undefined) return d;
+    }
+    return undefined;
+  }
+  // The Symbol methods trust what exec returns (a bot's exec could hand them huge captures, or
+  // numbers to convert), and split and matchAll build their regex with the species constructor
+  // and the flags: these must be the built-ins.
+  let regexpCtor;
+  function builtinRegExp(rx, species) {
+    const e = lookup(rx, "exec");
+    const f = lookup(rx, "flags");
+    let ok = e !== undefined && e.value === regexpExecWrapped && f !== undefined &&
+      f.get === regexpFlags;
+    if (ok && species) {
+      const c = lookup(rx, "constructor");
+      const sp = c !== undefined && c.value === regexpCtor ? lookup(regexpCtor, speciesKey) : undefined;
+      ok = sp !== undefined && sp.get === regexpSpecies;
+    }
+    if (!ok) {
+      throw new TypeErrorCtor("sandbox: RegExp methods need the built-in exec, flags and constructor");
+    }
+  }
   for (const key of [Symbol.match, Symbol.matchAll, Symbol.split, Symbol.replace]) {
     const once = key === Symbol.match || key === Symbol.replace;
+    const species = key === Symbol.split || key === Symbol.matchAll;
     replaceMethod(RegExpProto, key, (native) => ({
       m(...args) {
         charge(WRAP);
-        const s = args[0] = StringCtor(args[0]);
+        builtinRegExp(this, species);
+        const s = args[0] = toStr(args[0]);
+        const n = typeof s === "string" ? s.length : 0;
         const many = !once || isGlobal(this);
-        if (many) charge(s.length * MATCH);
-        if (key === Symbol.replace) chargeReplacement(s, args, many ? s.length + 1 : 1);
-        return capString(apply(native, this, args));
+        if (many) charge(n * MATCH);
+        let copies = 1;
+        if (key === Symbol.replace) copies += chargeReplacement(s, args, many ? n + 1 : 1);
+        const saved = captureCopies;
+        captureCopies = copies;
+        try {
+          return capString(apply(native, this, args));
+        } finally {
+          captureCopies = saved;
+        }
       },
     }).m);
   }
-
 
   // ---- calls, JSON, object enumeration ----
 
@@ -894,6 +1133,16 @@ export const PRELUDE = String.raw`
     }
   }
 
+  // Whether stringify will convert v with ToNumber (it has a Number's internal slot). A
+  // Symbol.toStringTag anywhere on its chain hides that: charged as if it did.
+  function numberObject(v) {
+    if (lookup(v, toStringTagKey) !== undefined) {
+      charge(DTOA_MAX);
+      return false;
+    }
+    return apply(objectToString, v, []) === "[object Number]";
+  }
+
   // The replacer runs in bytecode for every value, so stringify is interrupt-checked; it also
   // checks each array right before stringify walks it, and charges each key and string before
   // stringify quotes it (in one native call, however long the string). An array replacer (a key
@@ -910,7 +1159,7 @@ export const PRELUDE = String.raw`
       keep = new SetCtor();
       for (let i = 0; i < replacer.length; i++) {
         const k = replacer[i];
-        if (typeof k === "string" || typeof k === "number") keep.add(StringCtor(k));
+        if (typeof k === "string" || typeof k === "number") keep.add(toStr(k));
       }
       replacer = undefined;
     }
@@ -919,9 +1168,14 @@ export const PRELUDE = String.raw`
       if (keep !== undefined && key !== "" && !isArray(this) && !keep.has(key)) return undefined;
       if (user !== undefined) v = apply(user, this, [key, v]);
       quoteCost(key);
-      // Stringify turns a String object into its string itself; do it here so it is charged.
-      if (typeof v === "object" && v !== null && isStringObject(v)) v = StringCtor(v);
+      // Stringify turns a String object into its string itself, and a Number object into a
+      // number (through its valueOf, maybe bot code); do it here so it is charged.
+      if (typeof v === "object" && v !== null) {
+        if (isStringObject(v)) v = StringCtor(v);
+        else if (!isArray(v) && !isTypedArray(v) && numberObject(v)) v = NumberCtor(v);
+      }
       if (typeof v === "string") quoteCost(v);
+      else if (typeof v === "number") charge(dtoaCost(v));
       else if (isArray(v)) checked("JSON.stringify", v.length, ARRAY);
       else if (isTypedArray(v)) checked("JSON.stringify", typedLength(v), TYPED);
       return v;
@@ -1001,8 +1255,8 @@ export const PRELUDE = String.raw`
       args[i] = copy;
     }
   });
-  guard(Object, "defineProperty", (_self, args) => ownStringValues(args[2]));
-  guard(Reflect, "defineProperty", (_self, args) => ownStringValues(args[2]));
+  guardKey(Object, "defineProperty", 1, (_self, args) => ownStringValues(args[2]));
+  guardKey(Reflect, "defineProperty", 1, (_self, args) => ownStringValues(args[2]));
   guard(Object, "defineProperties", (_self, args) => descriptorValues(args[1]));
   guard(Object, "create", (_self, args) => descriptorValues(args[1]));
   // Reimplemented: the native reads the iterable and hashes every key.
@@ -1016,31 +1270,82 @@ export const PRELUDE = String.raw`
       if ((typeof e !== "object" && typeof e !== "function") || e === null) {
         throw new TypeErrorCtor("Object.fromEntries: each entry must be an object");
       }
-      const k = e[0];
+      let k = e[0];
       const v = e[1];
       if (typeof k === "string") charge(k.length * HASH);
+      else k = propertyKey(k);
       define(out, k, v);
     }
     return out;
   }
   defineProperty(Object, "fromEntries", { value: ({ fromEntries }).fromEntries, writable: true,
     configurable: true });
-  for (const target of [Object, Map]) {
+  // Object.groupBy turns what the callback returns into property keys.
+  guard(Object, "groupBy", (_self, args) => {
+    const f = checkedCallback(args[1]);
+    args[1] = typeof f !== "function" ? f : (v, i) => {
+      const k = f(v, i);
+      return typeof k === "string" ? k : propertyKey(k);
+    };
+  });
+  for (const target of [Map, Set]) {
     if (typeof target.groupBy === "function") guard(target, "groupBy", withCallback(1, () => {}));
   }
-  guard(String, "raw", (_self, args) => {
-    const strings = args[0];
-    if (typeof strings === "object" && strings !== null) {
-      const raw = strings.raw;
-      if (typeof raw === "object" && raw !== null) {
-        noIteratorGetter(raw);
-        checked("String.raw", arrayLength(raw), ARRAY);
+  // Functions that convert a property key argument (see propertyKey).
+  function guardKey(obj, name, i, cost) {
+    guard(obj, name, (self, args) => {
+      if (args.length > i && typeof args[i] !== "string") args[i] = propertyKey(args[i]);
+      if (cost !== undefined) cost(self, args);
+    });
+  }
+  for (const name of ["getOwnPropertyDescriptor", "hasOwn"]) guardKey(Object, name, 1);
+  for (const name of ["get", "set", "has", "deleteProperty", "getOwnPropertyDescriptor"]) {
+    guardKey(Reflect, name, 1);
+  }
+  for (const name of ["hasOwnProperty", "propertyIsEnumerable", "__defineGetter__",
+    "__defineSetter__", "__lookupGetter__", "__lookupSetter__"]) {
+    guardKey(Object.prototype, name, 0);
+  }
+  // Reimplemented: the native converts every piece and substitution in C.
+  function raw(template, ...subs) {
+    charge(WRAP + subs.length * ARRAY);
+    const literals = toObject(toObject(template, "String.raw").raw, "String.raw");
+    const len = arrayLength(literals);
+    checked("String.raw", len, ARRAY);
+    let out = "";
+    for (let i = 0; i < len; i++) {
+      const piece = toStr(literals[i]);
+      if (out.length + piece.length > maxString) tooLongString(out.length + piece.length);
+      out += piece;
+      if (i + 1 < len && i < subs.length) {
+        const sub = toStr(subs[i]);
+        if (out.length + sub.length > maxString) tooLongString(out.length + sub.length);
+        out += sub;
       }
     }
-    charge(args.length * ARRAY);
-  });
+    return out;
+  }
+  defineProperty(String, "raw", { value: ({ raw }).raw, writable: true, configurable: true });
   for (const name of ["fromCharCode", "fromCodePoint"]) {
     guard(String, name, (_self, args) => charge(args.length * ARRAY));
+  }
+  // String(v) and new String(v) convert v.
+  installConstructor("String", StringCtor, function (...args) {
+    charge(WRAP);
+    if (args.length > 0) args[0] = toStr(args[0]);
+    if (new.target === undefined) return apply(StringCtor, this, args);
+    return construct(StringCtor, args, new.target);
+  }, []);
+  // Number to string: charged by value (see DTOA). The value is read the way the natives do
+  // (a Number object's own value, never bot code); anything else makes them throw.
+  const NumberProto = NumberCtor.prototype;
+  for (const name of ["toString", "toLocaleString", "toFixed", "toPrecision", "toExponential"]) {
+    guard(NumberProto, name, (self, args) => {
+      const v = apply(numberValueOf, self, []);
+      let r = 10;
+      if (name === "toString" && args[0] !== undefined) r = args[0] = num(args[0]);
+      charge(r >= 10 && r < 11 ? dtoaCost(v) : radixCost(v));
+    });
   }
   guard(Array, "of", (_self, args) => charge(args.length * ARRAY));
   // Function names: "bound " + name, capped. A bound native stays a native; bound to strings,
@@ -1078,21 +1383,55 @@ export const PRELUDE = String.raw`
   const GLOBAL_PER_CHAR = { parseInt: NUMBER, parseFloat: NUMBER, isNaN: NUMBER, isFinite: NUMBER,
     escape: ENCODE, encodeURI: ENCODE, encodeURIComponent: ENCODE, unescape: DECODE,
     decodeURI: DECODE, decodeURIComponent: DECODE };
+  // isNaN and isFinite convert to a number; the others to a string (a number too: see DTOA).
+  // Number.parseInt and Number.parseFloat are separate natives.
+  const globalPerChar = (name, weight) => (_self, args) => {
+    if (args.length === 0) return;
+    if (name === "isNaN" || name === "isFinite") {
+      if (typeof args[0] === "number" || typeof args[0] === "symbol") return;
+      args[0] = StringCtor(args[0]);
+    } else {
+      args[0] = toStr(args[0]);
+    }
+    if (typeof args[0] === "string") charge(args[0].length * weight);
+  };
   for (const name of ObjectCtor.keys(GLOBAL_PER_CHAR)) {
-    const weight = GLOBAL_PER_CHAR[name];
-    guard(g, name, (_self, args) => {
-      if (args.length > 0 && typeof args[0] !== "number") {
-        args[0] = typeof args[0] === "symbol" ? args[0] : StringCtor(args[0]);
-        if (typeof args[0] === "string") charge(args[0].length * weight);
-      }
-    });
+    guard(g, name, globalPerChar(name, GLOBAL_PER_CHAR[name]));
   }
-  // Compiling a pattern is linear in its length.
-  guardConstructor("RegExp", (args) => {
+  for (const name of ["parseInt", "parseFloat"]) guard(NumberCtor, name, globalPerChar(name, NUMBER));
+  // Compiling a pattern is linear in its length. The pattern and flags are converted here
+  // (charged), except a regex-like object (Symbol.match), which the native reads itself: its
+  // source and flags may be numbers to convert.
+  const regexpArgs = (args) => {
+    const p = args[0];
+    if ((typeof p === "object" || typeof p === "function") && p !== null && !isRegExp(p)) {
+      if (lookup(p, Symbol.match) === undefined) args[0] = toStr(p);
+      else charge(2 * DTOA_MAX);
+    } else if (typeof p === "number") {
+      args[0] = toStr(p);
+    }
     if (typeof args[0] === "string") charge(args[0].length * CHAR);
+    if (args.length > 1 && args[1] !== undefined) args[1] = toStr(args[1]);
+  };
+  guardConstructor("RegExp", regexpArgs);
+  regexpCtor = g.RegExp;
+  guard(RegExp.prototype, "compile", (_self, args) => regexpArgs(args));
+  // Statics come from the native as they are (see installConstructor); escape builds a string up
+  // to 6 times as long as its argument (a string, never converted).
+  guard(regexpCtor, "escape", (_self, args) => {
+    if (typeof args[0] === "string") charge(args[0].length * ENCODE);
   });
-  guard(RegExp.prototype, "compile", (_self, args) => {
-    if (typeof args[0] === "string") charge(args[0].length * CHAR);
+  // source escapes "/" and line breaks: up to twice the pattern.
+  defineProperty(RegExpProto, "source", {
+    get: getOwnPropertyDescriptor({
+      get source() {
+        const out = capString(apply(regexpSource, this, []));
+        if (typeof out === "string") charge(out.length * CHAR);
+        return out;
+      },
+    }, "source").get,
+    enumerable: false,
+    configurable: true,
   });
 
   const setSize = getOwnPropertyDescriptor(Set.prototype, "size").get;
@@ -1191,7 +1530,7 @@ export const PRELUDE = String.raw`
   const NativeSymbol = Symbol;
   const symbolDescription = (d) => {
     if (d === undefined) return d;
-    const s = StringCtor(d);
+    const s = toStr(d);
     if (s.length > maxString - 8) tooLongString(s.length);
     return s;
   };
@@ -1223,7 +1562,10 @@ export const PRELUDE = String.raw`
   for (const name of ERROR_NAMES) {
     const Native = g[name];
     if (typeof Native !== "function") continue;
+    // The message is converted (AggregateError(errors, message), SuppressedError(e, s, message)).
+    const m = name === "AggregateError" ? 1 : name === "SuppressedError" ? 2 : 0;
     installConstructor(name, Native, function (...args) {
+      if (args.length > m && args[m] !== undefined) args[m] = toStr(args[m]);
       const e = new.target === undefined ? apply(Native, this, args) : construct(Native, args, new.target);
       chargeCaught(e);
       dropWrapperFrames(e);
@@ -1297,7 +1639,7 @@ export const PRELUDE = String.raw`
     } catch (e) {
       chargeCaught(e);
     }
-    return StringCtor(arg);
+    return typeof arg === "symbol" ? StringCtor(arg) : toStr(arg);
   }
   function log(...args) {
     charge(WRAP);

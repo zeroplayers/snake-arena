@@ -381,7 +381,97 @@ describe("wrapped built-ins still behave", () => {
     ["String('ab'.match(undefined)[0].length) + 'a.b'.search('.')", "00"],
     ["[...'a1b2'.matchAll(/\\d/g)].map((m) => m[0]).join()", "1,2"],
     ["/b/g[Symbol.replace]('abcb', '-')", "a-c-"],
-    ["new (class R extends RegExp {})('b', 'g')[Symbol.split]('abc').join()", "a,c"],
+    ["new (class R extends RegExp {})('b', 'g')[Symbol.replace]('abcb', '-')", "a-c-"],
+    ["'xay'.replace(/(?<n>a)/, '[$<n>$1]') + 'aa'.replace(/(?=(a))/g, '$1')", "x[aa]yaaaa"],
+    ["[...'abab'.matchAll(/(?=(ab))/g)].map((m) => m[1] + m.index).join()", "ab0,ab2"],
+    [
+      "'a1b22c'.split(/(\\d+)/).join('|') + /a/.exec('ba').index + /(a)/.test(1)",
+      "a|1|b|22|c1false",
+    ],
+    ["String(new RegExp(1.5)) + new RegExp('x', { toString: () => 'g' }).flags", "/1.5/g"],
+    ["RegExp.escape('a.b') + new RegExp('/').source", "\\x61\\.b\\/"],
+    // Joins, conversions and sorts the prelude does itself.
+    [
+      "[1, 'a', null, undefined, [2, 3], { toString: () => 'o' }, 0.5].join('-')",
+      "1-a---2,3-o-0.5",
+    ],
+    [
+      "[1, 2].join({ toString: () => '+' }) + Array.prototype.join.call({ length: 2, 0: 'x' })",
+      "1+2x,",
+    ],
+    ["Array.prototype.join.call(new Float64Array([0.5, 1e300, 5e-324]), ' ')", "0.5 1e+300 5e-324"],
+    [
+      "new Float32Array([1.5, 2]).join() + new Int8Array([-1, 2]).join(';') + new Uint8Array(2)",
+      "1.5,2-1;20,0",
+    ],
+    [
+      "[1.5, 'a', null, { toLocaleString: () => 7 }].toLocaleString() + new Float64Array([0.25]).toLocaleString()",
+      "1.5,a,,70.25",
+    ],
+    [
+      "[10, 9, 1, 'b', undefined, 'a', , 2e-7].sort().join() + [3, 20, 100].toSorted()",
+      "1,10,2e-7,9,a,b,,100,20,3",
+    ],
+    ["(() => { const a = [3, 1, 2]; return a.sort() === a && a.join() === '1,2,3'; })()", "true"],
+    [
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: bot code with a template literal
+      "String.raw`a${1.5}b${'c'}d` + String.raw({ raw: ['x', 'y', 'z'] }, 1, 2, 3) + String.raw({ raw: [] })",
+      "a1.5bcdx1y2z",
+    ],
+    [
+      "String(0.1) + String(5e-324) + String(Symbol('s')) + new String(2.5).length + String()",
+      "0.15e-324Symbol(s)3",
+    ],
+    [
+      "(1e21).toString(36).length + (0.5).toString(2) + (255).toString(16) + (1.005).toFixed(2) + (1234.5).toPrecision(2) + (0.5).toExponential(1)",
+      "140.1ff1.001.2e+35.0e-1",
+    ],
+    [
+      "Number.parseFloat(1.5) + Number.parseInt(' 12px') + parseInt(0.0000005) + parseFloat({ toString: () => '2.5' })",
+      "21",
+    ],
+    [
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: bot code with a template literal
+      "`${1e-7}|${0.5}|${2}` + 'x'.concat(1.5, null) + 'a'.padEnd(4, 0.5) + 'x'.anchor(1.5)",
+      '1e-7|0.5|2x1.5nulla0.5<a name="1.5">x</a>',
+    ],
+    [
+      "new Error(1.5).message + new AggregateError([], 2.5).message + Symbol(0.5).description + Symbol.for(1.25).description",
+      "1.52.50.51.25",
+    ],
+    [
+      "JSON.stringify([0.5, 1e300, new Number(2.5), { a: new Number(3) }, Object(5e-324)])",
+      '[0.5,1e+300,2.5,{"a":3},5e-324]',
+    ],
+    [
+      "JSON.stringify({ 1.5: 'a', b: 2 }, [1.5]) + JSON.stringify(new Map([[1, 2]]))",
+      '{"1.5":"a"}{}',
+    ],
+    // Property keys converted by the instrumented code and by the prelude.
+    [
+      "(() => { const o = { [1.5]: 'a', [{ toString: () => 'k' }]: 'b' }; return o['1.5'] + o[1.5] + o.k + (2.5 in o) + ('k' in o); })()",
+      "aabfalsetrue",
+    ],
+    [
+      "(() => { const o = {}; o[0.5] = 1; o[{ toString: () => 'x' }] = 2; const k = 0.5; o[k] += 1; return o['0.5'] + o.x; })()",
+      "4",
+    ],
+    [
+      "(() => { const o = { 1.5: 1 }; return o.hasOwnProperty(1.5) && Object.hasOwn(o, 1.5) && Reflect.has(o, 1.5) && Reflect.get(o, 1.5); })()",
+      "1",
+    ],
+    [
+      "(() => { const o = {}; Object.defineProperty(o, 0.5, { value: 1, enumerable: true }); Reflect.set(o, 2.5, 2); return Object.keys(o).join() + Object.getOwnPropertyDescriptor(o, 2.5).value; })()",
+      "0.5,2.52",
+    ],
+    [
+      "JSON.stringify(Object.groupBy([1, 2, 3], (x) => x / 2)) + Object.keys(Object.fromEntries([[0.5, 1], [{ toString: () => 'k' }, 2]])).join()",
+      '{"1":[2],"0.5":[1],"1.5":[3]}0.5,k',
+    ],
+    [
+      "(() => { const { [0.5]: a, [{ toString: () => 'b' }]: b } = { 0.5: 1, b: 2 }; class C { static [1.5]() { return 3; } } return a + b + C[1.5](); })()",
+      "6",
+    ],
     ["'ÄB'.toLowerCase() + 'ß'.toUpperCase() + 'e\\u0301'.normalize('NFC').length", "äbSS1"],
     ["'a'.localeCompare('b') + 'b'.localeCompare('a')", "0"],
     ["[...'héllo'].length + Array.from('ab').join('')", "5ab"],

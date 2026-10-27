@@ -12,11 +12,11 @@ it.runIf(process.env.BENCH)(
       ["hard", await houseBundle("hard")],
       ["suicidal", BAD_BOTS.suicidal],
       ["infinite loop", BAD_BOTS.infiniteLoop],
-      // About 90% of the op budget on every tick: the slowest bot that still passes.
-      ["near budget", await easyWith("let x = 0; for (let i = 0; i < 40000; i++) x += i * 0.5")],
-      // Within the op budget but slow per op (#60): only the wall-clock cap stops it in Node.
+      // About 80% of the op budget on every tick: rejected by the suite's average cap.
+      ["near budget", await easyWith("let x = 0; for (let i = 0; i < 25000; i++) x += i * 0.5")],
+      // Slow per interrupt poll: before #60 only the wall-clock cap stopped these in Node.
       ["8-stmt body", await longBody(8, 30_000)],
-      ["300-stmt body", await longBody(300, 20_000)],
+      ["200-stmt body", await longBody(200, 20_000)],
     ];
     await runChecks(input(bots[0]?.[1] ?? "")); // warm up, and fill the baseline cache
     for (const [name, bundle] of bots) {

@@ -249,7 +249,8 @@ export interface RoomRpc {
   /**
    * Retires a life at the next batch (e.g. its version was archived): it ends `retired`. A ticket
    * that hasn't spawned yet is dropped instead (`MatchmakerRpc.lifeDropped`). False if the room
-   * doesn't hold it (any more).
+   * can't now: it doesn't hold it (yet, or any more), or the batch in progress is spawning it. The
+   * matchmaker asks again while the life is in flight.
    */
   leave(lifeId: string): Promise<boolean>;
   setMode(mode: RoomMode): Promise<void>;

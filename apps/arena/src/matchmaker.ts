@@ -4,6 +4,8 @@ import { arenaPaused, recordQuarantine } from "./db.ts";
 import {
   DAY_MS,
   DEFAULT_MATCHMAKER_CONFIG,
+  LEAVE_RETRY_MAX_MS,
+  LEAVE_RETRY_MS,
   LEAVES_PER_ALARM,
   type MatchmakerConfig,
   NEXT_LIFE_ATTEMPTS,
@@ -32,7 +34,10 @@ import type {
   RoomRpc,
   RoomStatus,
 } from "./protocol.ts";
-import { EVICTIONS_TO_QUARANTINE } from "./room/backstop.ts";
+import { EVICTIONS_TO_QUARANTINE, VERSION_KILL_WINDOW_MS } from "./room/backstop.ts";
+
+/** Evictions of a version count toward its quarantine for this long (like its named kills). */
+const EVICTION_WINDOW_MS = VERSION_KILL_WINDOW_MS;
 
 export interface MatchmakerStatus {
   /** The arena's kill switch, as last read. */
@@ -76,12 +81,14 @@ export interface MatchmakerStatus {
  *     rollbacks, archives, bans, quarantines), a page at a time; every `reconcileMs` it re-reads
  *     all playable versions (paged) and stops bots it didn't see (deleted accounts);
  *  3. asks rooms to retire lives of versions that can't play any more (`RoomRpc.leave`), or of
- *     every version while the arena is stopped (rooms then close by themselves);
+ *     every version while the arena is stopped (rooms then close by themselves), again with
+ *     backoff while a room can't act on it yet;
  *  4. opens rooms when more lives wait than `openThreshold` (one if lives wait and none is open),
- *     filling each with up to `maxSnakes` lives of distinct authors;
+ *     filling each with up to `maxSnakes` lives of distinct authors, after a fresh read of the
+ *     kill switch (none if it can't be read);
  *  5. compares rooms' lives with the ledger (`status()`), so a life nobody reported for
  *     `lostAfterMs` frees its bot;
- *  6. forgets ledger rows older than yesterday.
+ *  6. forgets ledger rows older than yesterday, and evictions older than `EVICTION_WINDOW_MS`.
  *
  * Rooms close by themselves when only house bots remain and `nextLife` has nothing for them.
  */
@@ -209,14 +216,28 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
 
   async lifeEnded(result: LifeResult): Promise<void> {
     const now = this.now();
+    const since = now - EVICTION_WINDOW_MS;
     const evictions = this.store.transaction(() => {
       if (!this.store.endLife(result.lifeId, result.deathCause, now)) {
         console.warn("matchmaker: lifeEnded for a life it didn't issue", result.lifeId);
       }
-      if (result.deathCause !== "evicted") return 0;
-      return this.store.addEviction(result.lifeId, result.versionId, result.roomId, now);
+      if (result.deathCause !== "evicted") return null;
+      const at = Math.min(result.endedAt, now);
+      const counted = this.store.addEviction(
+        result.lifeId,
+        result.versionId,
+        result.roomId,
+        at,
+        since,
+      );
+      // A redelivered report quarantines only if the first one's quarantine didn't go through
+      // (the version still plays): its count can't have grown.
+      const quarantine =
+        counted.count >= EVICTIONS_TO_QUARANTINE &&
+        (counted.added || this.store.plays(result.versionId));
+      return quarantine ? counted.count : null;
     });
-    if (evictions >= EVICTIONS_TO_QUARANTINE) await this.quarantineEvicted(result, evictions, now);
+    if (evictions !== null) await this.quarantineEvicted(result, evictions, since, now);
   }
 
   async lifeDropped(drop: LifeDrop): Promise<void> {
@@ -264,7 +285,7 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
     if (!this.store.meta().paused && (await this.openRooms(c))) more = true;
     await this.checkRooms(c);
     const now = this.now();
-    this.store.prune(utcDay(now), now, PRUNE_ROWS);
+    this.store.prune(utcDay(now), now, now - EVICTION_WINDOW_MS, PRUNE_ROWS);
     return { more };
   }
 
@@ -293,7 +314,7 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
     if (!last) return false;
     this.store.transaction(() => {
       const gen = this.store.meta().gen;
-      for (const row of rows) this.store.applyVersion(row, gen);
+      for (const row of rows) this.store.applyVersion(row, gen, this.now());
       this.store.updateMeta((m) => {
         m.cursor = last.changeSeq;
       });
@@ -320,7 +341,7 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
     const full = page.length === PAGE_ROWS && last !== undefined;
     this.store.transaction(() => {
       const gen = this.store.meta().gen;
-      for (const row of page) this.store.applyVersion(row, gen);
+      for (const row of page) this.store.applyVersion(row, gen, this.now());
       if (full) {
         this.store.updateMeta((m) => {
           m.sweep = { after: last.botId };
@@ -338,22 +359,29 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
   }
 
   /**
-   * Asks rooms to retire lives that can't go on. Returns whether more are left (failures retry
-   * at the next alarm, not right away).
+   * Asks rooms to retire lives that can't go on. A room that can't act on it yet (false: the
+   * ticket hasn't reached it, or the batch in progress is spawning it), or a failed call, is
+   * asked again with backoff until the life is reported (`lifeEnded`, `lifeDropped`) or lost.
+   * Returns whether more are due now.
    */
   private async sendLeaves(): Promise<boolean> {
-    const leaves = this.store.leaves(LEAVES_PER_ALARM);
+    const leaves = this.store.leaves(this.now(), LEAVES_PER_ALARM);
     let failed = 0;
     await Promise.all(
-      leaves.map(async ({ lifeId, roomId }) => {
+      leaves.map(async ({ lifeId, roomId, tries }) => {
+        let left = false;
         try {
-          // False: the room no longer holds it; its report (or the room check) settles it.
-          await this.room(roomId).leave(lifeId);
-          this.store.leaveSent(lifeId);
+          left = await this.room(roomId).leave(lifeId);
         } catch (e) {
           failed++;
           console.error("matchmaker: leave failed", roomId, lifeId, e);
         }
+        if (left) {
+          this.store.leaveSent(lifeId);
+          return;
+        }
+        const wait = Math.min(LEAVE_RETRY_MS * 2 ** tries, LEAVE_RETRY_MAX_MS);
+        this.store.leaveLater(lifeId, this.now() + wait);
       }),
     );
     return leaves.length === LEAVES_PER_ALARM && failed === 0;
@@ -364,18 +392,21 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
    * failed). Returns whether more rooms may be needed right away.
    */
   private async openRooms(c: MatchmakerConfig): Promise<boolean> {
-    for (const r of this.store.rooms(["opening"]).slice(0, c.roomsPerAlarm)) {
+    const retries = this.store.rooms(["opening"]).slice(0, c.roomsPerAlarm);
+    const wanted = () =>
+      roomsToOpen(
+        this.store.countWaiting(utcDay(this.now()), c.livesPerBotPerDay),
+        this.store.rooms().length,
+        c,
+      );
+    if (retries.length === 0 && wanted() === 0) return false;
+    // The contract asks for a fresh read before starting a room; one that fails starts none.
+    if (await this.readArenaControl(c, true, true)) return false;
+    for (const r of retries) {
       if (await this.startRoom(r.roomId, c)) await this.fill(r.roomId, c);
     }
-    const day = utcDay(this.now());
-    const n = roomsToOpen(
-      this.store.countWaiting(day, c.livesPerBotPerDay),
-      this.store.rooms().length,
-      c,
-    );
+    const n = wanted();
     if (n === 0) return false;
-    // The contract asks for a fresh read before starting a room.
-    if (await this.readArenaControl(c, true)) return false;
     let opened = 0;
     for (; opened < n; opened++) {
       const roomId = crypto.randomUUID();
@@ -504,7 +535,7 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
         if (!version?.playable) {
           this.store.transaction(() => {
             this.store.unreserve(lifeId);
-            if (version) this.store.applyVersion(version, this.store.meta().gen);
+            if (version) this.store.applyVersion(version, this.store.meta().gen, this.now());
             else this.store.disableVersion(bot.versionId);
           });
           return null;
@@ -533,8 +564,13 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
   }
 
   /** A version's lives were evicted `evictions` times across rooms: quarantine it in D1. */
-  private async quarantineEvicted(r: LifeResult, evictions: number, now: number): Promise<void> {
-    const rooms = this.store.evictionRooms(r.versionId);
+  private async quarantineEvicted(
+    r: LifeResult,
+    evictions: number,
+    since: number,
+    now: number,
+  ): Promise<void> {
+    const rooms = this.store.evictionRooms(r.versionId, since);
     const record: QuarantineRecord = {
       versionId: r.versionId,
       author: r.author,
@@ -561,9 +597,13 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
   /**
    * The kill switch (`arena_control.paused`), re-read when older than `arenaControlPollMs` (or
    * `force`d). Stopping retires every life in flight; resuming reconciles from D1 as after a
-   * restart. A failed read keeps the last answer.
+   * restart. A failed read keeps the last answer, or says stopped if `failClosed`.
    */
-  private async readArenaControl(c: MatchmakerConfig, force: boolean): Promise<boolean> {
+  private async readArenaControl(
+    c: MatchmakerConfig,
+    force: boolean,
+    failClosed = false,
+  ): Promise<boolean> {
     const meta = this.store.meta();
     const now = this.now();
     if (!force && now - meta.pausedReadAt < c.arenaControlPollMs) return meta.paused;
@@ -572,7 +612,7 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
       paused = await arenaPaused(this.env.DB);
     } catch (e) {
       console.error("matchmaker: arena control read failed", e);
-      return meta.paused;
+      return failClosed || meta.paused;
     }
     this.store.transaction(() => {
       const was = this.store.meta().paused;

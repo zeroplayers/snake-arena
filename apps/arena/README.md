@@ -23,13 +23,16 @@ room checks):
 - **Queue.** One row per bot with a playable version: `ready`, not quarantined, bot and owner
   neither archived nor banned. A bot has at most one life at a time; when it ends, the bot's next
   life goes to the back of the queue, so bots take turns. A bot skipped for a room because its
-  author is there keeps its place.
+  author is there keeps its place, and so does a bot changing versions (a deploy or rollback,
+  even if the poll sees the old version archived before the new one is ready).
 - **Changes.** Versions changed after its `change_seq` cursor are applied in commit order:
   activations by the checks consumer, rollbacks, archives, bans, quarantines. Every 10 minutes it
   re-reads all playable versions (paged) and stops bots it didn't see (deleted accounts). The
   site's `activeVersionChanged` / `arenaControlChanged` only run the loop at once. Lives of a
-  version that can't play any more are retired in their rooms (`RoomRpc.leave`); a bot that
-  switched versions plays the new one next.
+  version that can't play any more are retired in their rooms (`RoomRpc.leave`), asked again
+  with backoff (1 s doubling to 1 min) while the room can't act on it yet (the ticket hasn't
+  reached it, or its batch is spawning it) until the life is reported; a bot that switched
+  versions plays the new one next.
 - **Quotas.** `ARENA_LIMITS.livesPerBotPerDay` (100) lives per bot per UTC day, exact: a life
   counts when it is issued, and stops counting only if the room reports it never started
   (`lifeDropped`). Every report is at least once and keyed by `lifeId`, and a life's state only
@@ -39,15 +42,18 @@ room checks):
   `excludeAuthors` plus the ledger's lives in it). When more than `openThreshold` (10) lives wait,
   the matchmaker opens `ceil((waiting − 10) / 20)` rooms (one if lives wait and no room is open)
   and fills each with up to 20 lives of distinct authors; house bots top rooms up to 5 authors.
-  A room closes by itself when only house bots remain and `nextLife` has nothing for it. With
-  fewer bots than a room holds, a room may close right after all its snakes died, before their
-  reports (sent once their replay chunk is in R2) put the bots back in the queue; the next
-  alarm opens a new room for them.
-- **Kill switch.** While `arena_control.paused` is set (read every 30 s, and before opening a
-  room), `nextLife` returns nothing, no room opens, and every life in flight is retired; rooms
-  then close. On resume the matchmaker reconciles from D1 and opens rooms again.
-- **Quarantine.** Evicted lives are counted per version across rooms; at
-  `EVICTIONS_TO_QUARANTINE` the matchmaker quarantines the version in D1. A room's own quarantine
+  A room closes by itself when only house bots remain and `nextLife` has nothing for it, except
+  that while reports of its finished lives are still in its outbox (they wait for their replay
+  chunk to be in R2) it keeps going for up to a chunk of real time plus a minute: those bots come
+  back to it rather than to a new room (a lone bot plays all its lives in one room).
+- **Kill switch.** While `arena_control.paused` is set (read every 30 s, and afresh before
+  starting rooms: if that read fails, none starts), `nextLife` returns nothing, no room opens,
+  and every life in flight is retired; rooms then close. On resume the matchmaker reconciles
+  from D1 and opens rooms again.
+- **Quarantine.** Evicted lives are counted per version across rooms, over the last 7 days and
+  since the version last started playing (lifting a quarantine starts the count afresh, so late
+  or redelivered reports of old evictions don't put it back); at `EVICTIONS_TO_QUARANTINE` of
+  them the matchmaker quarantines the version in D1. A room's own quarantine
   (`versionQuarantined`) and one found in D1 stop the version at once too. Before issuing a life
   it re-reads the version in D1, so a change the poll hasn't seen yet doesn't start a life.
 - **Lost lives.** Every minute it compares each room's lives (`status()`) with its ledger; a life

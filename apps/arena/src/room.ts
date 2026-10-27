@@ -94,6 +94,13 @@ import {
 } from "./room/store.ts";
 
 const TICK_MS = 1000 / TICK_RATE;
+/**
+ * With no real lives left and nothing from the matchmaker, a room whose finished lives' reports
+ * haven't reached it yet (they wait for their replay chunk) waits for them up to a chunk of real
+ * time plus this before closing: those bots may come back here, so a lone bot doesn't get a new
+ * room per life.
+ */
+const REPORT_GRACE_MS = 60_000;
 
 /**
  * One persistent room of up to 20 snakes (SPEC §4–5), simulated in batches of ticks from
@@ -107,7 +114,8 @@ const TICK_MS = 1000 / TICK_RATE;
  *  3. run it (engine + one QuickJS life per snake, recorded by `ReplayRecorder`);
  *  4. in one transaction: save the world, the open replay chunk and the roster, queue the side
  *     effects (replay chunks for R2, finished lives for D1 and the matchmaker), clear the marker;
- *  5. deliver the outbox, ask the matchmaker for replacements, schedule the next alarm.
+ *  5. deliver the outbox, ask the matchmaker for replacements, schedule the next alarm (or close
+ *     when only house bots are left and no reports that could bring bots back are pending).
  *
  * Backstop (`room/backstop.ts`): a marker left over means the batch died. If too little wall time
  * passed for it to have been the CPU limit, it was a restart: the batch runs again and counts for
@@ -209,7 +217,11 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       return true;
     }
     const ticket = this.store.pending().find((p) => p.lifeId === lifeId);
-    if (!ticket || !this.store.removePendingLife(lifeId)) return false;
+    if (!ticket) return false;
+    // The batch in progress (or one that died, to run again) may spawn it: dropping it now would
+    // report a life that's about to run. Once in the roster, the matchmaker's retry retires it.
+    if (ticket.seq <= (this.store.marker()?.maxPendingSeq ?? 0)) return false;
+    if (!this.store.removePendingLife(lifeId)) return false;
     this.dropTicket(ticket, "left");
     return true;
   }
@@ -310,8 +322,16 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       }
       await this.drain();
       const queueEmpty = this.paused || (await this.refill());
-      if (queueEmpty && !this.hasRealLives()) await this.close();
-      else await this.scheduleNext();
+      const idle = queueEmpty && !this.hasRealLives();
+      if (idle && !this.awaitingReports()) await this.close();
+      else {
+        if (!idle && this.store.meta()?.idleSince) {
+          this.store.updateMeta((m) => {
+            m.idleSince = 0;
+          });
+        }
+        await this.scheduleNext();
+      }
     } finally {
       this.busy = false;
     }
@@ -708,10 +728,12 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
               const life = JSON.parse(item.json) as LifeResult;
               await insertLives(this.env.DB, [life]);
               await this.matchmaker().lifeEnded(life);
+              this.askAgain();
               break;
             }
             case "dropped":
               await this.matchmaker().lifeDropped(JSON.parse(item.json) as LifeDrop);
+              this.askAgain();
               break;
             case "quarantine": {
               const record = JSON.parse(item.json) as QuarantineRecord;
@@ -806,6 +828,31 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       excludeAuthors.push(ticket.author);
     }
     return false;
+  }
+
+  /** A report freed a bot: the next refill asks the matchmaker at once. */
+  private askAgain(): void {
+    if (!this.store.meta()?.nextLifeAfter) return;
+    this.store.updateMeta((m) => {
+      m.nextLifeAfter = 0;
+    });
+  }
+
+  /**
+   * Idle (only house bots, nothing from the matchmaker), but reports of real lives that ended
+   * here are still in the outbox: keep running for `REPORT_GRACE_MS` past a replay chunk, since
+   * those bots are likely to come back here once the matchmaker hears of them.
+   */
+  private awaitingReports(): boolean {
+    if (this.paused || !this.store.hasReports()) return false;
+    const meta = this.store.meta();
+    if (!meta) return false;
+    const now = Date.now();
+    if (!meta.idleSince) {
+      meta.idleSince = now;
+      this.store.setMeta(meta);
+    }
+    return now - meta.idleSince < meta.limits.chunkTicks * TICK_MS + REPORT_GRACE_MS;
   }
 
   private hasRealLives(): boolean {

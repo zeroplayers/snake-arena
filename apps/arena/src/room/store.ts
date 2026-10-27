@@ -58,6 +58,11 @@ export interface Meta {
   watch: WatchWindow;
   /** Start tick of the replay chunk still being recorded (not in R2 yet), or null. */
   openChunkTick: number | null;
+  /**
+   * Wall ms the room went idle while reports it holds could bring bots back (see
+   * `RoomDO.awaitingReports`); 0 (or missing) otherwise.
+   */
+  idleSince?: number;
   /** The kill window (see `backstop.ts`). Missing in rooms saved before it existed. */
   kills: NamedKill[];
   /** The version tally (see `backstop.ts`). Missing in rooms saved before it existed. */
@@ -393,6 +398,14 @@ export class RoomStore {
       )
       .one();
     return { size: r.size, failing: r.failing ?? 0, nextAt: r.next_at };
+  }
+
+  /** Whether reports of real lives (ended or dropped) wait in the outbox. */
+  hasReports(): boolean {
+    return (
+      this.sql.exec("SELECT 1 FROM outbox WHERE kind IN ('life', 'dropped') LIMIT 1").toArray()
+        .length > 0
+    );
   }
 
   done(seq: number): void {

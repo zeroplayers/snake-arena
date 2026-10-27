@@ -1,7 +1,8 @@
 /**
  * The matchmaker's Durable Object SQLite storage: the queue (one row per bot with a playable
  * version), the ledger of every life it issued, quota usage per bot and UTC day, the rooms it
- * opened, and evicted lives per version.
+ * opened, and evicted lives per version (with when each version last started playing, which
+ * restarts its count).
  *
  * All methods are synchronous; writes made without an `await` in between commit together, so
  * each method is atomic with respect to the object's other requests.
@@ -74,7 +75,8 @@ CREATE INDEX IF NOT EXISTS bots_queue_idx ON bots (queue_seq)
 CREATE TABLE IF NOT EXISTS lives (life_id TEXT PRIMARY KEY, bot_id TEXT NOT NULL,
   version_id TEXT NOT NULL, author TEXT NOT NULL, room_id TEXT NOT NULL, day INTEGER NOT NULL,
   issued_at INTEGER NOT NULL, state TEXT NOT NULL, cause TEXT, ended_at INTEGER,
-  leave INTEGER NOT NULL DEFAULT 0);
+  leave INTEGER NOT NULL DEFAULT 0, leave_at INTEGER NOT NULL DEFAULT 0,
+  leave_tries INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS lives_issued_room_idx ON lives (room_id) WHERE state = 'issued';
 CREATE INDEX IF NOT EXISTS lives_issued_version_idx ON lives (version_id) WHERE state = 'issued';
 CREATE INDEX IF NOT EXISTS lives_day_idx ON lives (day);
@@ -85,9 +87,14 @@ CREATE TABLE IF NOT EXISTS rooms (room_id TEXT PRIMARY KEY, state TEXT NOT NULL,
 CREATE TABLE IF NOT EXISTS evictions (life_id TEXT PRIMARY KEY, version_id TEXT NOT NULL,
   room_id TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS evictions_version_idx ON evictions (version_id);
+CREATE INDEX IF NOT EXISTS evictions_at_idx ON evictions (at);
+CREATE TABLE IF NOT EXISTS eviction_resets (version_id TEXT PRIMARY KEY, at INTEGER NOT NULL);
 `;
 
-/** `lives.leave`: none asked; to ask the room (`RoomRpc.leave`); asked. */
+/**
+ * `lives.leave`: none asked; to ask the room (`RoomRpc.leave`, again at `leave_at` while the room
+ * can't act on it yet); the room took it.
+ */
 const LEAVE_NONE = 0;
 const LEAVE_WANTED = 1;
 const LEAVE_SENT = 2;
@@ -163,13 +170,15 @@ export class MatchmakerStore {
   // --- Bots (the queue) --------------------------------------------------------------------
 
   /**
-   * Applies a version's current state from D1. Playable: it becomes its bot's version (a bot
-   * new to the queue, or back after having none, joins at the back; a bot changing versions
-   * keeps its place). Not playable: its bot has no version any more, if this was it. Either way,
+   * Applies a version's current state from D1. Playable: it becomes its bot's version (a bot new
+   * to the queue joins at the back; a bot changing versions keeps its place, also when it had
+   * none for a while, as between a deploy's archive of the old version and the new one's
+   * activation), and its evictions count afresh (an admin lifted its quarantine, or it was
+   * activated again). Not playable: its bot has no version any more, if this was it. Either way,
    * lives of versions that can't play any more are retired (`leave`). Returns whether the bot's
    * version changed.
    */
-  applyVersion(v: VersionRow, gen: number): boolean {
+  applyVersion(v: VersionRow, gen: number, now: number): boolean {
     if (!v.playable) {
       this.retireVersion(v.versionId);
       return (
@@ -206,17 +215,21 @@ export class MatchmakerStore {
     }
     const was = bot.value.version_id;
     this.sql.exec(
-      `UPDATE bots SET author = ?, version_id = ?, bundle_key = ?, seen_gen = ?,
-         queue_seq = coalesce(?, queue_seq)
-       WHERE bot_id = ?`,
+      "UPDATE bots SET author = ?, version_id = ?, bundle_key = ?, seen_gen = ? WHERE bot_id = ?",
       v.author,
       v.versionId,
       v.bundleKey,
       gen,
-      was === null ? this.nextQueueSeq() : null,
       v.botId,
     );
-    return was !== v.versionId;
+    if (was === v.versionId) return false;
+    this.sql.exec(
+      `INSERT INTO eviction_resets (version_id, at) VALUES (?1, ?2)
+       ON CONFLICT(version_id) DO UPDATE SET at = ?2`,
+      v.versionId,
+      now,
+    );
+    return true;
   }
 
   /** The version can't play any more: its bot stops, and its lives in rooms are retired. */
@@ -269,6 +282,14 @@ export class MatchmakerStore {
         limitPerDay,
       )
       .one().n;
+  }
+
+  /** Whether `versionId` is its bot's version. */
+  plays(versionId: string): boolean {
+    return (
+      this.sql.exec("SELECT 1 FROM bots WHERE version_id = ? LIMIT 1", versionId).toArray().length >
+      0
+    );
   }
 
   countPlayable(): number {
@@ -462,13 +483,14 @@ export class MatchmakerStore {
     );
   }
 
-  /** Lives to ask their rooms to retire. */
-  leaves(limit: number): { lifeId: string; roomId: string }[] {
+  /** Lives to ask their rooms to retire now. */
+  leaves(now: number, limit: number): { lifeId: string; roomId: string; tries: number }[] {
     return this.sql
-      .exec<{ lifeId: string; roomId: string }>(
-        `SELECT life_id AS lifeId, room_id AS roomId FROM lives
-         WHERE state = 'issued' AND leave = ? LIMIT ?`,
+      .exec<{ lifeId: string; roomId: string; tries: number }>(
+        `SELECT life_id AS lifeId, room_id AS roomId, leave_tries AS tries FROM lives
+         WHERE state = 'issued' AND leave = ? AND leave_at <= ? LIMIT ?`,
         LEAVE_WANTED,
+        now,
         limit,
       )
       .toArray();
@@ -478,28 +500,58 @@ export class MatchmakerStore {
     this.sql.exec("UPDATE lives SET leave = ? WHERE life_id = ?", LEAVE_SENT, lifeId);
   }
 
-  // --- Evictions ---------------------------------------------------------------------------
-
-  /** Counts an evicted life (once per life); returns the version's evictions across rooms. */
-  addEviction(lifeId: string, versionId: string, roomId: string, now: number): number {
+  /**
+   * The room couldn't retire the life (yet): ask again at `at`, as long as it is in flight (a
+   * ticket the room is still joining, or one its batch is spawning; once reported, it's settled).
+   */
+  leaveLater(lifeId: string, at: number): void {
     this.sql.exec(
-      "INSERT INTO evictions (life_id, version_id, room_id, at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
+      "UPDATE lives SET leave_at = ?, leave_tries = leave_tries + 1 WHERE life_id = ? AND leave = ?",
+      at,
       lifeId,
-      versionId,
-      roomId,
-      now,
+      LEAVE_WANTED,
     );
-    return this.sql
-      .exec<{ n: number }>("SELECT count(*) AS n FROM evictions WHERE version_id = ?", versionId)
-      .one().n;
   }
 
-  /** Rooms where the version's lives were evicted. */
-  evictionRooms(versionId: string): string[] {
+  // --- Evictions ---------------------------------------------------------------------------
+
+  /**
+   * Counts an evicted life that ended at `at` (once per life). Returns whether it was new, and
+   * the version's evictions across rooms that count: since `since`, and since the version last
+   * started playing (an admin lifting its quarantine starts the count afresh, so a late or
+   * redelivered report of an older eviction doesn't put it straight back).
+   */
+  addEviction(
+    lifeId: string,
+    versionId: string,
+    roomId: string,
+    at: number,
+    since: number,
+  ): { added: boolean; count: number } {
+    const added =
+      this.sql.exec(
+        `INSERT INTO evictions (life_id, version_id, room_id, at) VALUES (?, ?, ?, ?)
+         ON CONFLICT DO NOTHING`,
+        lifeId,
+        versionId,
+        roomId,
+        at,
+      ).rowsWritten > 0;
+    return { added, count: this.evictionsSince(versionId, since).length };
+  }
+
+  /** Rooms where the version's lives were evicted, as `addEviction` counts them. */
+  evictionRooms(versionId: string, since: number): string[] {
+    return [...new Set(this.evictionsSince(versionId, since))].sort();
+  }
+
+  private evictionsSince(versionId: string, since: number): string[] {
     return this.sql
       .exec<{ room_id: string }>(
-        "SELECT DISTINCT room_id FROM evictions WHERE version_id = ? ORDER BY room_id",
+        `SELECT room_id FROM evictions WHERE version_id = ?1 AND at >= max(?2,
+           coalesce((SELECT at FROM eviction_resets WHERE version_id = ?1), 0))`,
         versionId,
+        since,
       )
       .toArray()
       .map((r) => r.room_id);
@@ -564,10 +616,11 @@ export class MatchmakerStore {
   // --- Housekeeping ------------------------------------------------------------------------
 
   /**
-   * Forgets settled lives and usage from before yesterday, and rooms closed over a day ago with
-   * nothing in flight. Returns the rows deleted (at most about `limit` per table).
+   * Forgets settled lives and usage from before yesterday, rooms closed over a day ago with
+   * nothing in flight, and evictions (and count restarts) from before `evictionsSince`. Returns
+   * the rows deleted (at most about `limit` per table).
    */
-  prune(day: number, now: number, limit: number): number {
+  prune(day: number, now: number, evictionsSince: number, limit: number): number {
     let n = 0;
     n += this.sql.exec(
       `DELETE FROM lives WHERE life_id IN (SELECT life_id FROM lives
@@ -585,6 +638,17 @@ export class MatchmakerStore {
          AND closed_at < ? AND NOT EXISTS
            (SELECT 1 FROM lives l WHERE l.room_id = r.room_id AND l.state = 'issued') LIMIT ?)`,
       now - 86_400_000,
+      limit,
+    ).rowsWritten;
+    n += this.sql.exec(
+      "DELETE FROM evictions WHERE life_id IN (SELECT life_id FROM evictions WHERE at < ? LIMIT ?)",
+      evictionsSince,
+      limit,
+    ).rowsWritten;
+    n += this.sql.exec(
+      `DELETE FROM eviction_resets WHERE version_id IN
+         (SELECT version_id FROM eviction_resets WHERE at < ? LIMIT ?)`,
+      evictionsSince,
       limit,
     ).rowsWritten;
     return n;

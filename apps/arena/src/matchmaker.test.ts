@@ -128,6 +128,35 @@ function ended(ticket: LifeTicket, roomId: string, deathCause: LifeResult["death
 const nextLife = (roomId: string, excludeAuthors: string[] = []) =>
   mm<LifeTicket | null>("nextLife", { roomId, excludeAuthors });
 
+async function mustLife(roomId: string, excludeAuthors: string[] = []): Promise<LifeTicket> {
+  const ticket = await nextLife(roomId, excludeAuthors);
+  if (!ticket) throw new Error(`no life for ${roomId}`);
+  return ticket;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** The ledger's row of a life. */
+async function ledger(
+  lifeId: string,
+): Promise<{ state: string; cause: string | null; leave: number }> {
+  const [row] = await query<{ state: string; cause: string | null; leave: number }>(
+    "SELECT state, cause, leave FROM lives WHERE life_id = ?",
+    lifeId,
+  );
+  if (!row) throw new Error(`no ledger row for ${lifeId}`);
+  return row;
+}
+
+async function quarantinedAt(id: string): Promise<number | null> {
+  const db = await harness().d1();
+  const row = await db
+    .prepare("SELECT quarantined_at FROM versions WHERE id = ?")
+    .bind(id)
+    .first<{ quarantined_at: number | null }>();
+  return row?.quarantined_at ?? null;
+}
+
 /** Lives the ledger counts toward each bot's quota (issued, ended, lost; not dropped). */
 async function counted(): Promise<Map<string, number>> {
   const rows = await query<{ bot_id: string; n: number }>(
@@ -475,6 +504,123 @@ describe("MatchmakerDO", () => {
     // The lost life still counts: it may have run.
     expect((await counted()).get(`b${gone.author.slice(1)}`)).toBe(2);
   }, 60_000);
+
+  it("asks again for a leave that reached the room before the ticket did", async () => {
+    await setup({ maxRooms: 0 });
+    await seedBots([{ author: "late", bot: "late" }]);
+    await settle();
+    await room("r1", "start", { roomId: "r1" });
+    const t = await mustLife("r1");
+    // Archived while the room still checks the ticket (before `join` completes): the room
+    // doesn't hold it yet and says so.
+    await d1("UPDATE versions SET status = 'archived' WHERE id = ?", versionId("late"));
+    await settle();
+    expect(await ledger(t.lifeId)).toMatchObject({ state: "issued", leave: 1 });
+    expect(await room("r1", "join", t)).toEqual({ ok: true });
+    // The retry (after its backoff) reaches the room, which now holds it.
+    await mm("advance", 2_000);
+    await settle();
+    expect(await lives("r1")).toMatchObject([{ lifeId: t.lifeId, leaving: true }]);
+    expect((await ledger(t.lifeId)).leave).toBe(2);
+    await step("r1");
+    expect(await ledger(t.lifeId)).toMatchObject({ state: "ended", cause: "retired" });
+    // Settled: nothing more to ask.
+    await mm("advance", 120_000);
+    expect((await mm<TickReport>("tick")).more).toBe(false);
+  }, 60_000);
+
+  it("a lifted quarantine isn't put back by old evictions, which age out", async () => {
+    await setup({ maxRooms: 0, livesPerBotPerDay: 100 });
+    await seedBots([{ author: "burner", bot: "burner" }]);
+    await settle();
+    const id = versionId("burner");
+    /** Evicts a new life of the bot, `offset` ms into the matchmaker's clock. */
+    const evict = async (roomId: string, offset = 0) => {
+      const result = ended(await mustLife(roomId), roomId, "evicted");
+      result.endedAt += offset;
+      await mm("lifeEnded", result);
+      return result;
+    };
+    const first: LifeResult[] = [];
+    for (let i = 0; i < EVICTIONS_TO_QUARANTINE; i++) first.push(await evict(`room-${i}`));
+    expect(await quarantinedAt(id)).not.toBeNull();
+
+    // An admin lifts it. Redelivered reports of the evictions that led to it don't put it back.
+    await d1(
+      "UPDATE versions SET quarantined_at = NULL, quarantine_reason = NULL WHERE id = ?",
+      id,
+    );
+    await settle();
+    for (const r of first) await mm("lifeEnded", r);
+    expect(await quarantinedAt(id)).toBeNull();
+    // The count starts afresh: one new eviction isn't enough.
+    await evict("room-a");
+    expect(await quarantinedAt(id)).toBeNull();
+
+    // A week on, that one aged out (and was forgotten): one more still isn't enough...
+    const week = 8 * DAY_MS;
+    await mm("advance", week);
+    await settle();
+    expect(await query("SELECT life_id FROM evictions")).toEqual([]);
+    await evict("room-b", week);
+    expect(await quarantinedAt(id)).toBeNull();
+    // ...but two within the window are.
+    await evict("room-c", week);
+    expect(await quarantinedAt(id)).not.toBeNull();
+  }, 60_000);
+
+  it("a deploy or a rollback keeps the bot's place in the queue", async () => {
+    await setup({ maxRooms: 0 });
+    await seedBots([
+      { author: "a", bot: "a" },
+      { author: "b", bot: "b", versions: 2 },
+      { author: "c", bot: "c" },
+    ]);
+    await settle();
+    // a's turn: the queue is then b, c, a.
+    const t = await mustLife("r");
+    expect(t.author).toBe("a");
+    await mm("lifeEnded", ended(t, "r", "wall"));
+    // b deploys: the site archives v1, and the poll may see that before v2 is ready.
+    await d1("UPDATE versions SET status = 'archived' WHERE id = ?", versionId("b"));
+    await settle();
+    expect((await status()).playable).toBe(2);
+    await d1("UPDATE versions SET status = 'ready' WHERE id = ?", versionId("b", 2));
+    await settle();
+    expect((await mustLife("r")).versionId).toBe(versionId("b", 2));
+    expect((await mustLife("r2", ["b"])).author).toBe("c");
+  }, 60_000);
+
+  it("starts no room without a fresh read of the stop switch, and none if it can't be read", async () => {
+    // The switch as read stays cached for an hour, unless the matchmaker reads it before a start.
+    await setup({ openThreshold: 0, maxSnakes: 2, arenaControlPollMs: 3_600_000 });
+    await settle();
+    // A room whose start failed earlier, to be retried.
+    await query("INSERT INTO rooms (room_id, state, opened_at) VALUES ('stuck', 'opening', 0)");
+    await d1("ALTER TABLE arena_control RENAME TO arena_control_away");
+    await seedBots(Array.from({ length: 4 }, (_, i) => ({ author: `a${i}`, bot: `b${i}` })));
+    await settle();
+    expect((await status()).waiting).toBe(4);
+    expect(await openRooms()).toEqual([]);
+    expect(await room<RoomStatus>("stuck", "status")).toMatchObject({ state: "new" });
+
+    // Readable again (and not stopped): the retry and a new room start.
+    await d1("ALTER TABLE arena_control_away RENAME TO arena_control");
+    await settle();
+    expect(await openRooms()).toHaveLength(2);
+    expect(await lives("stuck")).toHaveLength(2);
+
+    // Stopped without the site's hint, while the cached answer says running: more lives wait,
+    // and the read before starting a room for them finds the switch on.
+    await d1("UPDATE arena_control SET paused = 1, reason = 'test' WHERE id = 1");
+    await seedBots([{ author: "a9", bot: "b9" }]);
+    await settle();
+    await mm("tick");
+    const s = await status();
+    expect(s.paused).toBe(true);
+    expect(s.rooms.filter((r) => r.state !== "closed")).toHaveLength(2);
+    expect((await lives("stuck")).every((l) => l.leaving)).toBe(true);
+  }, 60_000);
 });
 
 describe("MatchmakerDO with real rooms", () => {
@@ -539,5 +685,58 @@ describe("MatchmakerDO with real rooms", () => {
     expect(m.rooms.map((x) => [x.state, x.lives])).toEqual([...seen].map(() => ["closed", 0]));
     expect(m.issued).toBe(0);
     expect([...(await counted()).values()]).toEqual(Array(6).fill(2));
+  }, 120_000);
+
+  it("a lone bot plays all its lives in one room", async () => {
+    await setup(
+      { livesPerBotPerDay: 4, room: { manual: true, limits: { batchTicks: 20, chunkTicks: 40 } } },
+      "RoomDO",
+    );
+    await seedBots([{ author: "solo", bot: "solo" }], BOTS.thrower);
+    await settle();
+    const [r] = await openRooms();
+    if (!r) throw new Error("no room");
+    // Each life ends long before its report (sent once its replay chunk is in R2): the room waits
+    // for it instead of closing, and gets the bot's next life.
+    for (let i = 0; i < 40; i++) {
+      const s = await room<RoomStatus>(r, "runBatch");
+      await settle();
+      if (s.state === "closed") break;
+    }
+    expect((await status()).rooms).toEqual([{ roomId: r, state: "closed", lives: 0 }]);
+    expect((await counted()).get("solo")).toBe(4);
+    const db = await harness().d1();
+    const rows = await db.prepare("SELECT room FROM lives").all<{ room: string }>();
+    expect(rows.results.map((x) => x.room)).toEqual(Array(4).fill(r));
+  }, 120_000);
+
+  it("a leave while the room's batch spawns the ticket retires the life, not drops it", async () => {
+    await setup({ room: { manual: true, limits: { batchTicks: 5, chunkTicks: 10 } } }, "RoomDO");
+    await seedBots([{ author: "ann", bot: "ann" }]);
+    await settle();
+    const [r] = await openRooms();
+    if (!r) throw new Error("no room");
+    const [lifeId] = (await room<RoomStatus>(r, "status")).pending;
+    if (!lifeId) throw new Error("no ticket");
+    // The batch that spawns it takes a while (instrumenting its bundle), and the version is
+    // archived meanwhile.
+    await room(r, "slowInstrument", 3_000);
+    const batch = room<RoomStatus>(r, "runBatch");
+    await sleep(500);
+    await d1("UPDATE versions SET status = 'archived' WHERE id = ?", versionId("ann"));
+    await settle();
+    // The room said it can't yet (dropping the ticket would report a life about to run).
+    expect((await ledger(lifeId)).leave).toBe(1);
+    expect((await batch).snakes.map((x) => x.lifeId)).toContain(lifeId);
+    // It runs, so it isn't dropped: the matchmaker's retry retires it.
+    expect((await ledger(lifeId)).state).toBe("issued");
+    await mm("advance", 2_000);
+    await settle();
+    expect((await ledger(lifeId)).leave).toBe(2);
+    for (let i = 0; i < 10 && (await ledger(lifeId)).state === "issued"; i++) {
+      await room(r, "runBatch");
+    }
+    expect(await ledger(lifeId)).toMatchObject({ state: "ended", cause: "retired" });
+    expect((await counted()).get("ann")).toBe(1);
   }, 120_000);
 });

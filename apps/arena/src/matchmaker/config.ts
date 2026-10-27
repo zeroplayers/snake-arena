@@ -62,6 +62,13 @@ export const DEFAULT_MATCHMAKER_CONFIG: MatchmakerConfig = {
 export const PAGE_ROWS = 500;
 /** Most `RoomRpc.leave` calls per alarm. */
 export const LEAVES_PER_ALARM = 50;
+/**
+ * A `leave` the room couldn't act on yet (the ticket hadn't reached it, or its batch was spawning
+ * it) or that failed is asked again after this, doubling up to `LEAVE_RETRY_MAX_MS`, while the
+ * life is in flight.
+ */
+export const LEAVE_RETRY_MS = 1_000;
+export const LEAVE_RETRY_MAX_MS = 60_000;
 /** Most rooms whose `status()` one alarm checks. */
 export const ROOM_CHECKS_PER_ALARM = 4;
 /** Most old ledger rows one alarm deletes. */

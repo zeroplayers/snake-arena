@@ -1,8 +1,12 @@
+import { cpSync, mkdirSync, symlinkSync } from "node:fs";
+import { join } from "node:path";
 import { createSandbox, DEFAULT_OP_BUDGET } from "@zerosnake/sandbox";
 import { LOG_LIMIT_BYTES } from "@zerosnake/sdk";
 import { afterAll, describe, expect, it } from "vitest";
+import { sdkDir } from "./assets.ts";
 import { bundleBot } from "./bundle.ts";
 import { CliError } from "./errors.ts";
+import { copySdk } from "./template.ts";
 import { cleanUp, GOOD_BOT, makeProject, TUNING } from "./testing/project.ts";
 
 afterAll(cleanUp);
@@ -107,5 +111,34 @@ describe("bundleBot", () => {
     });
     const bot = await bundleBot("src/bot.ts", { cwd: dir });
     expect(bot.code).not.toContain("async");
+  });
+
+  it("gives the same bytes for the same sources in any folder, with or without the SDK installed", async () => {
+    // The check seeds come from the bundle's hash, so `test` here and the server must agree.
+    const files = { "src/bot.ts": GOOD_BOT, "src/tuning.ts": TUNING };
+    // No install: the SDK comes from the CLI, wherever the CLI is.
+    const bare = makeProject(files);
+    // `zerosnake init` + `npm install`, deeper down: the vendored SDK, linked into node_modules.
+    const vendored = join(makeProject({}), "some", "deeper", "folder", "my-snake");
+    cpSync(bare, vendored, { recursive: true });
+    copySdk(sdkDir(), join(vendored, "vendor/zerosnake-sdk"), "A vendored copy.");
+    mkdirSync(join(vendored, "node_modules/@zerosnake"), { recursive: true });
+    symlinkSync(
+      join(vendored, "vendor/zerosnake-sdk"),
+      join(vendored, "node_modules/@zerosnake/sdk"),
+    );
+    // A plain copy in node_modules, as npm installs a published package.
+    const installed = makeProject(files);
+    cpSync(sdkDir(), join(installed, "node_modules/@zerosnake/sdk"), { recursive: true });
+
+    const bots = await Promise.all(
+      [bare, vendored, installed].map((cwd) => bundleBot("src/bot.ts", { cwd })),
+    );
+    for (const bot of bots) {
+      expect(bot.code).toBe(bots[0]?.code);
+      expect(bot.inputs.sort()).toEqual(["src/bot.ts", "src/tuning.ts"]);
+    }
+    expect(bots[0]?.code).toContain("// pkg:@zerosnake/sdk@");
+    expect(bots[0]?.code).not.toMatch(/\.\.\/|zerosnake-cli-/);
   });
 });

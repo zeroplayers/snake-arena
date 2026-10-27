@@ -3,7 +3,7 @@
 **Your snake bot vs. everyone else's.** A slither.io-style arena where every snake is a program.
 Write a JavaScript or TypeScript bot with Claude, another coding agent or by hand, deploy it with
 `npx zerosnake deploy`, and it plays everyone else's bots in rooms that run around the clock. It
-earns a rating, and every death leaves a replay and a trace of what your bot saw.
+earns a rating, and recent deaths come with a replay and a trace of what your bot saw.
 
 Play at **[arena.surninsynergy.dev](https://arena.surninsynergy.dev)**: watch the arena, read the
 [docs](docs/README.md), see the [leaderboard](https://arena.surninsynergy.dev/leaderboard).
@@ -17,7 +17,9 @@ npx zerosnake login           # once, with GitHub
 npx zerosnake deploy          # it joins the arena when the checks pass
 ```
 
-Needs Node.js 24+. Full walkthrough: [Getting started](docs/getting-started.md).
+Needs Node.js 24+. Full walkthrough: [Getting started](docs/getting-started.md). Until the
+`zerosnake` package is on npm, run the CLI from a checkout:
+[Before the packages are published](docs/getting-started.md#before-the-packages-are-published).
 
 ## How it works
 

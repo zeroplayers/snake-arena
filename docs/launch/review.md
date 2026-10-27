@@ -46,22 +46,26 @@ wasn't offered, and nothing said that "getting in" means GitHub sign-in, done by
   short English prompt for Claude Code or any coding agent, to paste in an empty folder:
   `npx zerosnake init my-snake`, read `CLAUDE.md` and the skills, explain in 3–4 sentences what a
   bot sees and returns, ask for (or suggest) a strategy and write it, `sim --headless`, `test`,
-  then ask the person to run `login` themselves (it opens the browser for GitHub sign-in and a
-  device code; the first time they pick a username; in Claude Code `! npx zerosnake login`), then
+  then ask the person to run `login` themselves in another terminal (it opens the browser for
+  GitHub sign-in and a device code; the first time they pick a username; in Claude Code
+  `! npx zerosnake login` works too, though its output may only show when it finishes), then
   `deploy` and give the bot page link it prints. It follows the template's rules: never the
   blocking `sim` viewer, never invented output. `login` is left to the person because it opens
   their browser and waits for them.
-- The button says "Copied! Paste in Claude" for 3 s. Where the Clipboard API is missing or denied
-  (some phones, in-app browsers), it falls back to `execCommand("copy")`; if that fails too, it
-  opens the prompt, scrolls to it and selects it ("Selected below: copy it"). Checked in the
-  browser with the Clipboard API removed.
-- The quick start now starts with **"Start with Claude"**: what the prompt does and an expandable
-  "Read the prompt" block, so people can read it before copying, with its own copy button. "Or by
-  hand" follows with the commands.
+- The button says "Copied! Paste in Claude" for 3 s, in a live region. Where the Clipboard API is
+  missing or denied (some phones, in-app browsers), it falls back to `execCommand("copy")` (an
+  off-screen-safe 16 px textarea, focus restored); if that fails too, it opens the prompt, scrolls
+  to it and selects it ("Selected below: copy it"). Checked in the browser with the Clipboard API
+  removed. "Copy first steps" uses the same button.
+- The quick start now starts with **"Start with Claude"** (`#claude`): what the prompt does and an
+  expandable "Read the prompt" block, so people can read it before copying, with its own copy
+  button. "Or by hand" (`#by-hand`) follows with the commands.
 - **The way in is above the fold** on desktop and phone: three steps under the hero's buttons
-  ("Paste the prompt into Claude Code in an empty folder, or run `npx zerosnake init` yourself" ·
-  "Watch your snake play the house bots on your machine. No account needed." · "Deploy it:
-  `zerosnake login` opens your browser to sign in with GitHub"). The header's sign-in button has
+  ("Paste the prompt into Claude Code in an empty folder, or run `npx zerosnake init my-snake`
+  yourself" · "Watch your snake play the house bots on your machine. No account needed." ·
+  "Deploy it: `npx zerosnake login` opens your browser to sign in with GitHub"). Before launch
+  step 1 reads "Create a bot with `npx zerosnake init my-snake`, or with one prompt to Claude
+  Code. Both open at launch, when the CLI goes on npm." The header's sign-in button has
   the GitHub mark, so "Sign in" on phones still says GitHub. The quick start's `login` note says
   "opens your browser: sign in with GitHub".
 - Tests: the prompt's commands exist in the CLI; it uses `sim --headless` and leaves `login` to
@@ -69,14 +73,15 @@ wasn't offered, and nothing said that "getting in" means GitHub sign-in, done by
 
 **Launch flags.** The prompt is correct in every state:
 
-| `CLI_PUBLISHED` | `REPO.public` | Hero button                      | Prompt                                                                                |
-| --------------- | ------------- | -------------------------------- | ------------------------------------------------------------------------------------- |
-| false           | false (today) | "Start with Claude" → the prompt | shown as it will read on launch day, "Coming at launch", no copy button               |
-| false           | true          | "Copy prompt for Claude"         | clones the repo, builds the CLI (`pnpm --filter zerosnake build`), runs it from there |
-| true            | any (launch)  | "Copy prompt for Claude"         | `npx zerosnake …` throughout                                                          |
+| `CLI_PUBLISHED` | `REPO.public` | Hero buttons                                 | Prompt                                                                                       |
+| --------------- | ------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| false           | false (today) | "Build your bot" (`#start`), "Read the docs" | not shown: "Start with Claude" says it comes at launch                                       |
+| false           | true          | "Copy prompt for Claude", "Build it by hand" | clones the repo, builds the CLI (`npx pnpm@11 --filter zerosnake build`), runs it from there |
+| true            | any (launch)  | "Copy prompt for Claude", "Build it by hand" | `npx zerosnake …` throughout                                                                 |
 
-No copy while nothing is public, for the same reason as the quick start: `zerosnake` isn't
-registered on npm, so a pasted `npx zerosnake` could run anyone's package.
+No prompt at all while nothing is public: `zerosnake` isn't registered on npm, so a runnable
+`npx zerosnake` prompt could run whatever package squats the name. The quick start's commands
+stay visible (they're documentation) but have no copy button, as before.
 
 **"Open in Claude" link: skipped.** `claude.ai/new?q=…` prefills a chat on claude.ai, but a chat
 can't run `npx`, create files or open the CLI's login; the prompt is for Claude Code (or another
@@ -121,10 +126,12 @@ CLI (kit checklist).
   Lead → "A slither.io-style arena where every snake is a program. Describe a strategy to Claude
   Code, Cursor or any coding agent, or write the TypeScript yourself. `npx zerosnake deploy` puts
   it in rooms that run around the clock, with no server for you to host. It earns a rating, and
-  every death leaves a replay of what killed it." This answers "is it Claude-only", "do I host
+  recent deaths come with a replay and a trace of what killed it." (Replays are kept for recent
+  and top lives only, so not "every death".) This answers "is it Claude-only", "do I host
   it" (the Battlesnake comparison) and "why come back", and says "slither.io-style" rather than
   "is slither.io".
-- CTAs: "Build your bot" (→ `#start`) and "Read the docs". The hero's Leaderboard button is gone
+- CTAs before launch: "Build your bot" (→ `#start`) and "Read the docs"; on launch day "Copy prompt
+  for Claude" and "Build it by hand" (see the feedback section). The hero's Leaderboard button is gone
   (it's in the nav, and empty on day one). On phones the buttons sit between the H1 and the
   arena, so the first screen has an action.
 - How it works: "Write it" / "Ship it" / "Watch it, fix it". Names other agents and hand-coding,
@@ -235,8 +242,10 @@ Ordered by how badly launch day goes without them.
 
 - _Renderer / arena shape_ (square-arena, remains-size): name labels over snakes (the "my bot is
   there" moment); a poster frame behind the canvas so phones don't show a black box while three.js
-  loads (do it after the square arena lands, or the poster will show the old round one); regenerate
-  `og.jpg` from the new arena (`apps/web/og/`); `antialias` and pixel ratio on phones.
+  loads (do it after the square arena lands, or the poster will show the old round one);
+  **regenerate `og.jpg` again once the square arena lands** (it was regenerated from `main` after
+  #79 and #83, so it shows the new remains and smoothed bodies, but still the round arena;
+  `apps/web/og/og.html` has the command); `antialias` and pixel ratio on phones.
 - _Replay page_ (replay-retention): a Share button; per-replay `og:title` ("viper died to …");
   canonical and description.
 - _Rules / engine_ (owner decisions, raised by the Battlecode veteran): a fresh `author` token

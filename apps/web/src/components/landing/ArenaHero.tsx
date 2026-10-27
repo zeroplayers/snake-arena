@@ -149,7 +149,6 @@ export function ArenaHero() {
           type="button"
           className="button ghost small"
           disabled={state !== "playing" && state !== "paused"}
-          aria-pressed={state === "paused"}
           aria-label={state === "paused" ? "Play the arena" : "Pause the arena"}
           onClick={() => toggle.current()}
         >

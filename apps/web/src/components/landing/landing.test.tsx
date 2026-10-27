@@ -11,7 +11,7 @@ import {
 import type { ReactNode } from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { REPO } from "../../site";
+import { REPO, SITE_URL } from "../../site";
 import { DocArticle } from "../docs/DocArticle";
 import { claudePrompt } from "./claudePrompt";
 import { Landing } from "./Landing";
@@ -128,7 +128,7 @@ describe.each([
     async () => {
       const html = await render();
       for (const { cmd } of QUICKSTART_COMMANDS) expect(html).toContain(cmd);
-      expect(html.includes(">Copy first steps</button>")).toBe(cli);
+      expect(html.includes("Copy first steps")).toBe(cli);
       expect(html.includes("Coming at launch")).toBe(!cli);
       // On launch day nothing is left in the "not yet" box, so it's gone.
       expect(html.includes("Not on npm yet")).toBe(!cli);
@@ -138,11 +138,12 @@ describe.each([
   it(
     cli || repo
       ? "offers the Claude prompt to copy, and to read first"
-      : "shows the Claude prompt to read, with no copy",
+      : "says the Claude prompt comes at launch, and shows no prompt",
     async () => {
       const html = await render();
-      expect(html).toContain("Read the prompt");
-      expect(html).toContain("init my-snake");
+      // No runnable prompt before it can work: `npx zerosnake` isn't ours on npm yet.
+      expect(html.includes("Read the prompt")).toBe(cli || repo);
+      expect(html.includes("Help me build a snake bot")).toBe(cli || repo);
       expect(html.includes("Copy prompt for Claude")).toBe(cli || repo);
       // The first three steps, sign-in included, are in the hero either way.
       expect(html).toContain("opens your browser to sign in");
@@ -183,7 +184,8 @@ describe("Claude prompt", () => {
   it("builds the CLI from source while it isn't on npm but the repository is public", () => {
     const prompt = claudePrompt({ cli: false, repo: true });
     expect(prompt).toContain(`git clone ${REPO.url}`);
-    expect(prompt).toContain("pnpm --filter zerosnake build");
+    expect(prompt).toContain("npx pnpm@11 --filter zerosnake build");
+    expect(prompt).not.toContain("corepack");
     expect(prompt).not.toContain("npx zerosnake");
     for (const [, sub] of commands(prompt)) expect(cli).toContain(`case "${sub}":`);
   });
@@ -192,6 +194,13 @@ describe("Claude prompt", () => {
     expect(claudePrompt({ cli: false, repo: false })).toBe(
       claudePrompt({ cli: true, repo: false }),
     );
+  });
+});
+
+describe("site URL", () => {
+  it("is the CLI's default server, so links in previews and the CLI agree", () => {
+    const config = read("packages/cli/src/remote/config.ts");
+    expect(config).toContain(`export const DEFAULT_URL = "${SITE_URL}";`);
   });
 });
 

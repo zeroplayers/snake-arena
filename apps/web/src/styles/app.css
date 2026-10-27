@@ -812,8 +812,8 @@ button.button:disabled {
 /* Landing */
 
 /*
- * Phones: headline and buttons, the arena, then the pitch, so the first screen has an action.
- * Wide: text and buttons left, arena right.
+ * Headline, buttons and first steps, the arena, then the pitch, in DOM order: on phones the first
+ * screen has an action; wide, the text column is left of the arena.
  */
 .landing-hero {
   display: grid;
@@ -869,7 +869,7 @@ button.button:disabled {
 
 @media (min-width: 860px) {
   .landing-hero {
-    grid-template-areas: "head arena" "body arena" "cta arena";
+    grid-template-areas: "head arena" "cta arena" "body arena";
     grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
     grid-template-rows: auto auto 1fr;
     gap: 24px 48px;

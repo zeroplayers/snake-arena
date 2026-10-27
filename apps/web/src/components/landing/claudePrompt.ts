@@ -17,7 +17,7 @@ export function claudePrompt(
   // The CLI as run inside the bot's folder.
   const cli = fromCheckout ? "node ../snake-arena/packages/cli/bin/zerosnake.js" : "npx zerosnake";
   const setup = fromCheckout
-    ? `1. The zerosnake CLI isn't on npm yet, so build it from source here: \`git clone ${REPO.url}\`, then in \`snake-arena\` run \`corepack enable\`, \`pnpm install\` and \`pnpm --filter zerosnake build\`. Back here, run \`node snake-arena/packages/cli/bin/zerosnake.js init my-snake\` and work inside \`my-snake\`.`
+    ? `1. The zerosnake CLI isn't on npm yet, so build it from source here: \`git clone ${REPO.url}\`, then in \`snake-arena\` run \`npx pnpm@11 install\` and \`npx pnpm@11 --filter zerosnake build\`. Back here, run \`node snake-arena/packages/cli/bin/zerosnake.js init my-snake\` and work inside \`my-snake\`.`
     : "1. Run `npx zerosnake init my-snake` here, then work inside `my-snake`.";
   return `Help me build a snake bot for ZeroSnake Arena (${SITE_URL}) and get it into the arena. It's a slither.io-style game where bots written in TypeScript play each other. It needs Node.js 24+.
 
@@ -26,7 +26,7 @@ ${setup}
 3. Ask me what kind of snake I want, or suggest two ideas, then change \`src/bot.ts\` to play it.
 4. Run \`${cli} sim --headless\` and tell me how it did. I can watch a match myself with \`${cli} sim\` (it opens my browser).
 5. Run \`${cli} test\`, the same checks the server runs, and fix anything that fails.
-6. Ask me to run \`${cli} login\` myself (in Claude Code I can type \`! ${cli} login\`). It opens my browser to sign in with GitHub and shows a code to confirm; the first time, I pick a username. Wait until I say it's done.
+6. Ask me to run \`${cli} login\` myself in another terminal in this folder (or in Claude Code with \`! ${cli} login\`, though its output may only show when it finishes). It opens my browser to sign in with GitHub and shows a code to confirm; the first time, I pick a username. Wait until I say it's done.
 7. Run \`${cli} deploy\` and give me the link to my bot's page that it prints.
 
 Don't invent command output. If a step fails, show me the error and fix it.`;

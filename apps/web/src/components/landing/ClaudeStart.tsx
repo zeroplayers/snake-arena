@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { claudePrompt, claudePromptWorks } from "./claudePrompt";
 
 /** The prompt block's `<details>` and `<pre>`, so a failed copy can show and select the text. */
@@ -18,11 +18,13 @@ export async function copyText(text: string): Promise<boolean> {
   } catch {
     // Denied or unavailable: try the old way.
   }
+  const focused = document.activeElement;
   try {
     const area = document.createElement("textarea");
     area.value = text;
     area.setAttribute("readonly", "");
-    area.style.position = "fixed";
+    // In view and at 16px, so iOS neither scrolls to it nor zooms in.
+    Object.assign(area.style, { position: "fixed", top: "0", left: "0", fontSize: "16px" });
     area.style.opacity = "0";
     document.body.append(area);
     area.select();
@@ -32,6 +34,8 @@ export async function copyText(text: string): Promise<boolean> {
     return ok;
   } catch {
     return false;
+  } finally {
+    if (focused instanceof HTMLElement) focused.focus();
   }
 }
 
@@ -49,48 +53,91 @@ function showPromptSelected() {
   selection?.addRange(range);
 }
 
-/** "Copy prompt for Claude": copies the prompt, or shows it selected when copying fails. */
-export function CopyPromptButton({ className }: { className: string }) {
-  const [state, setState] = useState<"idle" | "copied" | "manual">("idle");
+/**
+ * A button that copies `text` and says so for a few seconds, in a live region. When copying
+ * fails it says `failed` (after `onFail`, which can show the text to copy by hand).
+ */
+export function CopyButton({
+  text,
+  label,
+  copied = "Copied!",
+  failed = "Couldn't copy: select it instead",
+  onFail,
+  className,
+}: {
+  text: () => string;
+  label: string;
+  copied?: string;
+  failed?: string;
+  onFail?: () => void;
+  className: string;
+}) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const reset = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(reset.current), []);
   return (
     <button
       type="button"
       className={className}
       onClick={() => {
-        copyText(claudePrompt()).then((ok) => {
-          if (!ok) showPromptSelected();
-          setState(ok ? "copied" : "manual");
-          setTimeout(() => setState("idle"), 3000);
+        clearTimeout(reset.current);
+        copyText(text()).then((ok) => {
+          if (!ok) onFail?.();
+          setState(ok ? "copied" : "failed");
+          reset.current = setTimeout(() => setState("idle"), 3000);
         });
       }}
     >
       <span aria-live="polite">
-        {state === "copied"
-          ? "Copied! Paste in Claude"
-          : state === "manual"
-            ? "Selected below: copy it"
-            : "Copy prompt for Claude"}
+        {state === "copied" ? copied : state === "failed" ? failed : label}
       </span>
     </button>
+  );
+}
+
+/** "Copy prompt for Claude": copies the prompt, or shows it selected when copying fails. */
+export function CopyPromptButton({ className }: { className: string }) {
+  return (
+    <CopyButton
+      className={className}
+      text={() => claudePrompt()}
+      label="Copy prompt for Claude"
+      copied="Copied! Paste in Claude"
+      failed="Selected below: copy it"
+      onFail={showPromptSelected}
+    />
   );
 }
 
 /**
  * The "Start with Claude" part of the quick start: what the prompt does, the prompt itself to read
  * before copying, and the copy button. Before the prompt can work (no npm package, no public
- * source) it shows the text with "Coming at launch" and no button.
+ * source) it only says what will be here: a runnable `npx zerosnake` prompt today would run
+ * whatever package squats that name.
  */
 export function ClaudePromptBlock() {
-  const works = claudePromptWorks();
+  if (!claudePromptWorks()) {
+    return (
+      <div className="claude-start">
+        <div className="start-head">
+          <h3 className="start-part-title">Start with Claude</h3>
+          <span className="soon-tag">Coming at launch</span>
+        </div>
+        <p className="muted small">
+          On launch day a button here copies one prompt for{" "}
+          <a href="https://claude.com/claude-code">Claude Code</a> (or any coding agent). Pasted
+          into an empty folder, it creates your bot, explains it, writes a first strategy, tests it,
+          and walks you through signing in with GitHub and deploying. It needs the{" "}
+          <code>zerosnake</code> package on npm, so it isn't here yet.
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="claude-start">
       <div className="start-head">
         <h3 className="start-part-title">Start with Claude</h3>
-        {works ? (
-          <CopyPromptButton className="button small" />
-        ) : (
-          <span className="soon-tag">Coming at launch</span>
-        )}
+        <CopyPromptButton className="button small" />
       </div>
       <p className="muted small">
         Open <a href="https://claude.com/claude-code">Claude Code</a> (or Cursor, Codex, any coding

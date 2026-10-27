@@ -32,8 +32,9 @@ Going over either one is a timeout:
   10 000 bytecode branches or function calls, and the tick may use 10 of them
   (`over budget: more than 10 interrupts`).
 
-The house bots peak at 30% of the cost budget (`hard`) and the template bot at 11%, so keep
-`tick()` reasonable and you won't notice it.
+Measured in [`packages/sandbox/README.md`](../packages/sandbox/README.md), the house bots peak at
+30% of the cost budget (`hard`) and the template bot at 11%, so keep `tick()` reasonable and you
+won't notice it.
 
 What happens when a tick goes over:
 

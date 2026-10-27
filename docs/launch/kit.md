@@ -58,7 +58,7 @@ everything (engine, sandbox, CLI, site) is MIT on GitHub.
 Fastest start: the "Copy prompt for Claude" button on the site. Paste it into Claude Code in an
 empty folder and it does all of the above with you, including the GitHub sign-in.
 
-The starter bot already beats the easiest house bot, so you can be on the board tonight. What
+The starter bot already beats the easiest house bot, so it can be in the arena tonight. What
 strategy would you prompt first?
 ```
 
@@ -72,7 +72,7 @@ strategy would you prompt first?
 3. A terminal running `npx zerosnake deploy` next to the bot's page with its rating.
    _Caption: Deploy in one command. Ranked after 30 lives._
 4. A replay frame with the trace panel open at the tick before a death.
-   _Caption: Every death explained: what your bot saw, what it returned, what killed it._
+   _Caption: Recent deaths explained: what your bot saw, what it returned, what killed it._
 5. The project in an editor: `CLAUDE.md`, `AGENTS.md`, `.claude/skills/` and `src/bot.ts`.
    _Caption: Ships with the rules, the API and skills your agent already understands._
 
@@ -95,7 +95,8 @@ account.
 Hi HN. ZeroSnake Arena is a game for programs: you write a snake bot in JS/TS (one `tick()`
 function: state in, `{ turn, boost }` out), upload it with `npx zerosnake deploy`, and it plays
 other people's bots in rooms that never close. The rules are slither.io-like: continuous
-movement, limited turning, boosting costs length.
+movement, limited turning, boosting costs length. `npx zerosnake init` and `sim` run locally
+with no account; only `deploy` needs a GitHub sign-in.
 
 The parts that were fun to build:
 
@@ -139,11 +140,13 @@ MIT, source: `<REPO>`. Happy to go deep on the sandbox or the metering.
   bots, not who typed them.
 - _"Empty leaderboard?"_ Only if you skip the soft open (checklist below).
 - _"Who's behind it / business model / what if it shuts down?"_ _(owner to decide)_: who pays,
-  whether there will be a paid tier, and that everything is MIT and runs locally (`pnpm dev`
-  runs the site and arena on workerd), and your bot lives in your own repo.
+  whether there will be a paid tier, and that everything is MIT and runs locally: `pnpm dev` in
+  `apps/web` serves the site on workerd and `pnpm dev` in `apps/arena` runs the arena worker
+  (`wrangler dev`), sharing local D1/R2 state (see `apps/web/README.md`); your bot lives in your
+  own repo.
 - _"Is this affiliated with slither.io?"_ No. The mechanics are inspired by it; the engine,
   rules and graphics are our own (the renderer comes from our earlier ZeroSnake game).
-- _"Node 24 only?"_ It's the current LTS and the CLI uses its built-ins _(check whether 22
+- _"Node 24 only?"_ It's an LTS line and the CLI uses its built-ins _(check whether 22
   works; the DX run says `init` and `sim` did)_.
 
 ## Reddit
@@ -205,7 +208,7 @@ _(sim viewer screenshot)_
 4/ `npx zerosnake deploy`: the same checks as the server run locally, then the bot joins rooms
 that never close. No server to host. _(terminal screenshot)_
 
-5/ Every death leaves a replay and a trace of what your bot saw and returned in its last ticks.
+5/ Recent deaths come with a replay and a trace of what your bot saw and returned in its last ticks.
 Hand it to Claude, ship v2, watch the rating move. _(trace screenshot)_
 
 6/ Under the hood: deterministic TS engine, each bot in its own QuickJS-in-wasm sandbox with a
@@ -251,6 +254,9 @@ The starter bot already beats the easiest house bot. Who's first on the leaderbo
 
 - [ ] PH at 00:01 PT; first maker comment posted right away; answer every comment for the first
   6 hours.
+- [ ] Never ask anyone to upvote or comment, or post direct links to the HN/PH pages asking for
+  support: both sites treat it as vote-ringing and bury or penalize the post. Share the site
+  link; people find the threads.
 - [ ] X thread once the PH page is live; pin it.
 - [ ] Show HN on a different day from PH (before or after), mid-morning US Eastern, from the
   personal account, with the first comment above posted immediately.

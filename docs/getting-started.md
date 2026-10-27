@@ -125,8 +125,8 @@ the template is the [`template/`](../template) folder and pnpm links the package
 ```bash
 git clone https://github.com/zeroplayers/snake-arena
 cd snake-arena
-pnpm install
-pnpm --filter zerosnake build
+npx pnpm@11 install
+npx pnpm@11 --filter zerosnake build
 node packages/cli/bin/zerosnake.js init ../my-snake
 ```
 

@@ -1,9 +1,8 @@
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
 import { CLI_PUBLISHED, REPO } from "../../site";
 import { GithubLink } from "../GithubLink";
 import { ArenaHero } from "./ArenaHero";
-import { ClaudePromptBlock, CopyPromptButton } from "./ClaudeStart";
+import { ClaudePromptBlock, CopyButton, CopyPromptButton } from "./ClaudeStart";
 import { claudePromptWorks } from "./claudePrompt";
 import { NOT_YET, QUICKSTART, quickstartScript } from "./quickstart";
 
@@ -35,8 +34,8 @@ const HOW = [
     body: (
       <>
         Rooms run around the clock. Each spawn-to-death is a life with a score, and after 30 lives
-        your bot is ranked. Every life has a replay, and every death a trace of what your bot saw
-        and did, so you (or Claude) can fix it and ship v2.
+        your bot is ranked. Recent deaths come with a replay and a trace of what your bot saw and
+        did, so you (or Claude) can fix it and ship v2.
       </>
     ),
   },
@@ -98,30 +97,44 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
           </h1>
         </div>
         <div className="landing-cta">
-          <div className="actions">
-            {claudePromptWorks() ? (
+          {claudePromptWorks() ? (
+            <div className="actions">
               <CopyPromptButton className="button" />
-            ) : (
-              <a href="#claude" className="button">
-                Start with Claude
+              <a href="#by-hand" className="button ghost">
+                Build it by hand
               </a>
-            )}
-            <a href="#start" className="button ghost">
-              Build it by hand
-            </a>
-          </div>
+            </div>
+          ) : (
+            <div className="actions">
+              <a href="#start" className="button">
+                Build your bot
+              </a>
+              <Link to="/docs" className="button ghost">
+                Read the docs
+              </Link>
+            </div>
+          )}
           <ol className="hero-steps">
             <li>
-              <strong>Paste the prompt</strong> into Claude Code in an empty folder, or run{" "}
-              <code>npx zerosnake init</code> yourself.
+              {claudePromptWorks() ? (
+                <>
+                  <strong>Paste the prompt</strong> into Claude Code in an empty folder, or run{" "}
+                  <code>npx zerosnake init my-snake</code> yourself.
+                </>
+              ) : (
+                <>
+                  <strong>Create a bot</strong> with <code>npx zerosnake init my-snake</code>, or
+                  with one prompt to Claude Code. Both open at launch, when the CLI goes on npm.
+                </>
+              )}
             </li>
             <li>
               <strong>Watch your snake</strong> play the house bots on your machine. No account
               needed.
             </li>
             <li>
-              <strong>Deploy it:</strong> <code>zerosnake login</code> opens your browser to sign in
-              with GitHub.
+              <strong>Deploy it:</strong> <code>npx zerosnake login</code> opens your browser to
+              sign in with GitHub.
             </li>
           </ol>
         </div>
@@ -131,8 +144,8 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
             A slither.io-style arena where every snake is a program. Describe a strategy to Claude
             Code, Cursor or any coding agent, or write the TypeScript yourself.{" "}
             <code>npx zerosnake deploy</code> puts it in rooms that run around the clock, with no
-            server for you to host. It earns a rating, and every death leaves a replay of what
-            killed it.
+            server for you to host. It earns a rating, and recent deaths come with a replay and a
+            trace of what killed it.
           </p>
         </div>
       </section>
@@ -199,10 +212,15 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
         <div id="claude" className="landing-section">
           <ClaudePromptBlock />
         </div>
-        <div className="start-head by-hand">
+        <div id="by-hand" className="start-head by-hand">
           <h3 className="start-part-title">Or by hand</h3>
           {CLI_PUBLISHED ? (
-            <CopyButton label="Copy first steps" text={quickstartScript()} />
+            <CopyButton
+              className="button ghost small"
+              label="Copy first steps"
+              text={quickstartScript}
+              failed="Couldn't copy: select the commands"
+            />
           ) : (
             <span className="soon-tag">Coming at launch</span>
           )}
@@ -310,26 +328,5 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
         </ul>
       </section>
     </>
-  );
-}
-
-function CopyButton({ label, text }: { label: string; text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      className="button ghost small"
-      onClick={() => {
-        navigator.clipboard.writeText(text).then(
-          () => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
-          },
-          () => {},
-        );
-      }}
-    >
-      {copied ? "Copied" : label}
-    </button>
   );
 }

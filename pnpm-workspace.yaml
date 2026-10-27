@@ -4,6 +4,7 @@ packages:
   - bots/*
   - template
   - spikes/*
+  - docs
 
 allowBuilds:
   esbuild: true

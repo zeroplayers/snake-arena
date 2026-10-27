@@ -134,6 +134,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
           slowTickMs: limits.slowTickMs ?? DEFAULT_SLOW_TICK_MS,
           maxOutbox: limits.maxOutbox ?? DEFAULT_MAX_OUTBOX,
           chunkTicks: limits.chunkTicks ?? CHUNK_TICKS,
+          trialGapMs: limits.trialGapMs ?? TRIAL_GAP_MS,
         },
         livesEnded: 0,
         lastBatchTicks: 0,
@@ -291,7 +292,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       suspectLife: null,
       suspectAt: null,
       suspectTick: null,
-      trialTick: null,
+      trialCall: null,
     };
     // Bots that restart now begin a new sandbox life here; a trial rebuilds them from this tick.
     this.store.setBotStart(
@@ -435,21 +436,21 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       suspectLife: trial.lifeId,
       suspectAt: null,
       suspectTick: null,
-      trialTick: null,
+      trialCall: null,
     };
     await this.begin(meta, marker);
-    const mark = async (tick: number | null) => {
-      marker.trialTick = tick;
+    const mark = async (call: string | null) => {
+      marker.trialCall = call;
       this.store.setMarker(marker);
       await this.ctx.storage.sync();
       return Date.now();
     };
     const step = await runner.run(
       {
-        before: (tick) => mark(tick),
+        before: (call) => mark(call),
         after: async () => {
           const now = await mark(null);
-          await new Promise((r) => setTimeout(r, Math.random() * TRIAL_GAP_MS));
+          await new Promise((r) => setTimeout(r, Math.random() * meta.limits.trialGapMs));
           return now;
         },
       },
@@ -570,8 +571,9 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     if (verdict === "confirmed") {
       const detail =
         `${trial.reason}; run alone, it used up the CPU limit (${meta.limits.cpuLimitMs} ms) ` +
-        `at tick ${marker.trialTick}, ${TRIAL_DEATHS_TO_CONFIRM} times`;
-      this.endTrial(meta, trial, "cpu", detail, marker.trialTick ?? undefined);
+        `in ${marker.trialCall}, ${TRIAL_DEATHS_TO_CONFIRM} times in a row`;
+      const tick = Number(marker.trialCall?.split("@")[1] ?? marker.fromTick);
+      this.endTrial(meta, trial, "cpu", detail, tick);
     } else if (verdict === "inconclusive") {
       this.endTrial(meta, trial, "inconclusive", `${trial.attempts} trials without a verdict`);
     } else {

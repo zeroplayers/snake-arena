@@ -44,7 +44,8 @@ export interface TrialSetup {
 }
 
 export interface TrialHooks {
-  before: (tick: number) => Promise<number>;
+  /** `call`: `init@<tick>` or `tick@<tick>`. */
+  before: (call: string) => Promise<number>;
   after: () => Promise<number>;
 }
 
@@ -78,8 +79,8 @@ export class TrialRunner {
 
   /**
    * Runs until the trial ends ("done": see `outcome`) or `yieldNow()` asks to stop ("yield"; call
-   * again in a later invocation). Around each of the suspect's calls, `hooks.before(tick)` makes
-   * "running tick" durable and `hooks.after()` makes "between calls" durable; both return a fresh
+   * again in a later invocation). Around each of the suspect's calls, `hooks.before(call)` makes
+   * "running this call" durable and `hooks.after()` makes "between calls" durable; both return a fresh
    * clock. `after` may also wait, so a restart is likelier to land between calls.
    */
   async run(hooks: TrialHooks, yieldNow: () => boolean): Promise<"done" | "yield"> {
@@ -91,7 +92,7 @@ export class TrialRunner {
         opBudget: DEFAULT_OP_BUDGET,
         logLimitBytes: LOG_LIMIT_BYTES,
       });
-      await hooks.before(this.world.tick);
+      await hooks.before(`init@${this.world.tick}`);
       this.life = this.setup.sandbox.startLife(botSource(this.setup.suspect), info);
       await hooks.after();
     }
@@ -107,7 +108,7 @@ export class TrialRunner {
           continue;
         }
         const state = buildBotState(this.world, me);
-        await hooks.before(this.world.tick);
+        await hooks.before(`tick@${this.world.tick}`);
         this.life.tick(state);
         await hooks.after();
         this.world = player.next();
@@ -115,7 +116,7 @@ export class TrialRunner {
       }
       if (this.liveLeft <= 0) return this.end(false);
       const state = buildBotState(this.world, me);
-      const before = await hooks.before(this.world.tick);
+      const before = await hooks.before(`tick@${this.world.tick}`);
       const report = this.life.tick(state);
       this.out.ran++;
       const after = await hooks.after();

@@ -47,6 +47,7 @@ async function drive(
   { hangMs = 1500, max = 40 } = {},
 ): Promise<{ kills: number; s: RoomStatus }> {
   let kills = 0;
+  let last: RoomStatus | null = null;
   for (let i = 0; i < max; i++) {
     const finished = await Promise.race([
       h.fire(name, "runBatch").then(() => true),
@@ -57,9 +58,14 @@ async function drive(
       await h.restart();
     }
     const s = await status(name);
+    last = s;
     if (done(s)) return { kills, s };
   }
-  throw new Error(`room ${name}: condition not reached in ${max} batches`);
+  const { tick, incidents, strikes, trial, snakes } = last ?? ({} as RoomStatus);
+  throw new Error(
+    `room ${name}: condition not reached in ${max} batches (${kills} kills): ` +
+      JSON.stringify({ tick, incidents, strikes, trial, snakes: snakes?.map((x) => x.lifeId) }),
+  );
 }
 
 describe("RoomDO", () => {
@@ -262,8 +268,9 @@ describe("RoomDO", () => {
 });
 
 describe("RoomDO backstop", () => {
-  // Small CPU limit and batches, so "killed after 1.5 s" counts as CPU-limit evidence.
-  const limits = { cpuLimitMs: 1000, batchTicks: 50 };
+  // Small CPU limit and batches, so "killed after 1.5 s" counts as CPU-limit evidence. Short
+  // trial gaps for speed (the storm test keeps the default).
+  const limits = { cpuLimitMs: 1000, batchTicks: 50, trialGapMs: 10 };
 
   it("bans a version whose code, run alone, reproducibly blows the CPU limit", async () => {
     const evil = await ticket("mallory", BOTS.hostile(120));
@@ -275,10 +282,10 @@ describe("RoomDO backstop", () => {
     // Its second life, for when the first is killed.
     await h.call("matchmaker", "offer", { ...evil, lifeId: "life-mallory-2" });
 
-    const first = await drive("backstop", (s) => s.strikes.length > 0);
+    const first = await drive("backstop", (s) => s.strikes.length > 0, { max: 100 });
     // Normal batch dies (overrun), watched batch dies in its call (suspect), then its trial dies
-    // three times at the same tick (strike); the life is killed.
-    expect(first.kills).toBe(5);
+    // four times in the same call (strike); the life is killed.
+    expect(first.kills).toBe(6);
     expect(first.s.incidents.map((i) => i.outcome)).toEqual(["overrun", "suspect", "culprit"]);
     expect(first.s.strikes.map((x) => [x.lifeId, x.kind, x.tick])).toEqual([
       [evil.lifeId, "cpu", 120],
@@ -286,8 +293,8 @@ describe("RoomDO backstop", () => {
     expect(first.s.bans).toEqual([]);
 
     // Its second life does it again: second strike, banned.
-    const second = await drive("backstop", (s) => s.bans.length > 0, { max: 60 });
-    expect(second.kills).toBe(4);
+    const second = await drive("backstop", (s) => s.bans.length > 0, { max: 100 });
+    expect(second.kills).toBe(5);
     expect(second.s.incidents.map((i) => i.outcome)).toEqual([
       "overrun",
       "suspect",
@@ -328,8 +335,8 @@ describe("RoomDO backstop", () => {
     const burner = await ticket("nina", BOTS.burnAfter(60));
     const other = await ticket("oscar", house.hard as string);
     await startRoom("burner", [burner, other], { limits });
-    const { kills, s } = await drive("burner", (s) => s.strikes.length > 0, { max: 80 });
-    expect(kills).toBe(5);
+    const { kills, s } = await drive("burner", (s) => s.strikes.length > 0, { max: 120 });
+    expect(kills).toBe(6);
     expect(s.incidents.map((i) => i.outcome)).toEqual(["overrun", "suspect", "culprit"]);
     expect(s.strikes.map((x) => x.lifeId)).toEqual([burner.lifeId]);
     // The struck snake dies at the start of the next batch.
@@ -345,7 +352,7 @@ describe("RoomDO backstop", () => {
     const honest = await Promise.all(
       ["h5", "h6", "h7", "h8", "h9"].map((a) => ticket(a, house.hard as string)),
     );
-    await startRoom("storm", honest, { limits });
+    await startRoom("storm", honest, { limits: { cpuLimitMs: 1000, batchTicks: 50 } });
     await h.room("storm", "runBatch");
     for (let i = 0; i < 20; i++) {
       void h.fire("storm", "runBatch");
@@ -354,7 +361,7 @@ describe("RoomDO backstop", () => {
       await sleep(1200);
     }
     // Let pending trials finish.
-    const { s } = await drive("storm", (s) => s.trial === null, { max: 40 });
+    const { s } = await drive("storm", (s) => s.trial === null, { max: 100 });
     expect(s.strikes).toEqual([]);
     expect(s.bans).toEqual([]);
     expect(s.incidents.some((i) => i.outcome === "culprit" || i.outcome === "slow")).toBe(false);

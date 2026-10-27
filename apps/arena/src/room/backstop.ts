@@ -48,9 +48,9 @@ export const SLOW_TRIAL_CONFIRM = 3;
  * Trial deaths in a row at the same tick that confirm a CPU overrun. A real overrun dies at the
  * same tick every time; restarts land wherever the trial happens to be.
  */
-export const TRIAL_DEATHS_TO_CONFIRM = 3;
+export const TRIAL_DEATHS_TO_CONFIRM = 4;
 /** Trial attempts (deaths without a match, restarts) before giving up: inconclusive. */
-export const TRIAL_MAX_ATTEMPTS = 8;
+export const TRIAL_MAX_ATTEMPTS = 10;
 /**
  * Each trial waits a random 0..this ms (wall time, no CPU) before it starts, so restarts timed
  * from the invocation's start (deploys, retries) don't hit the same tick every time.
@@ -59,10 +59,11 @@ export const TRIAL_JITTER_MS = 250;
 /**
  * After each of the suspect's calls the trial records "between calls" and waits a random
  * 0..this ms (no CPU). Most of a trial's wall time is then between calls, where a restart counts
- * for nothing; one that lands in a call hits a random tick. A real overrun never returns from its
- * call, so it always dies at the same tick.
+ * for nothing; one that lands in a call hits a call in proportion to its length (starting the
+ * sandbox life is the longest for an honest bot, hence four matching deaths). A real overrun never
+ * returns from its call, so it always dies in the same one.
  */
-export const TRIAL_GAP_MS = 20;
+export const TRIAL_GAP_MS = 100;
 
 /** What `RoomStore` keeps of a batch in progress, as far as the backstop is concerned. */
 export interface CrashMarker {
@@ -108,8 +109,9 @@ export interface Trial {
   untilTick: number;
   /** cpu: the crashed batch's pending tickets (the suspect may be one of its spawns). */
   maxPendingSeq: number;
-  /** Ticks at which trials of this suspect died with CPU-limit evidence, in order. */
-  deaths: number[];
+  /** Calls (`init@<tick>`, `tick@<tick>`) in which trials of this suspect died with CPU-limit
+   * evidence, in order. */
+  deaths: string[];
   /** Trial invocations so far that didn't complete. */
   attempts: number;
   /** Why it was suspected, for the strike's detail. */
@@ -119,14 +121,14 @@ export interface Trial {
 /** What a dead trial (only the suspect's code ran) means. Records the attempt in `trial`. */
 export function judgeTrialCrash(
   trial: Trial,
-  marker: CrashMarker & { trialTick: number | null },
+  marker: CrashMarker & { trialCall: string | null },
   now: number,
   cpuLimitMs: number,
 ): "confirmed" | "retry" | "inconclusive" {
   const attempts = trial.attempts + 1;
-  const cpu = now - marker.startedAt >= CPU_EVIDENCE * cpuLimitMs && marker.trialTick !== null;
+  const cpu = now - marker.startedAt >= CPU_EVIDENCE * cpuLimitMs && marker.trialCall !== null;
   if (cpu) {
-    const deaths = [...trial.deaths, marker.trialTick as number];
+    const deaths = [...trial.deaths, marker.trialCall as string];
     const last = deaths.slice(-TRIAL_DEATHS_TO_CONFIRM);
     if (last.length === TRIAL_DEATHS_TO_CONFIRM && last.every((t) => t === last[0])) {
       return "confirmed";

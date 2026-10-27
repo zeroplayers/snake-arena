@@ -41,8 +41,10 @@ export interface BatchMarker extends CrashMarker {
   /** Pending tickets with `seq` up to this one spawn in the batch. */
   maxPendingSeq: number;
   suspectTick: number | null;
-  /** Trial: the tick the suspect is running. */
-  trialTick: number | null;
+  /**
+   * Trial: the suspect's call in progress, `init@<tick>` or `tick@<tick>`; null between calls.
+   */
+  trialCall: string | null;
 }
 
 export interface Meta {

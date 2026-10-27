@@ -92,6 +92,8 @@ export interface RoomLimits {
   maxOutbox?: number;
   /** Ticks per replay chunk. Default `CHUNK_TICKS` (1200, two minutes). */
   chunkTicks?: number;
+  /** Trials: random wait after each of the suspect's calls, up to this. Default 100. */
+  trialGapMs?: number;
 }
 
 export type JoinResult =

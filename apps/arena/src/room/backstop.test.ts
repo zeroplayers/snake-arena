@@ -66,29 +66,29 @@ describe("judgeTrialCrash", () => {
     attempts: 0,
     reason: "",
   });
-  const died = (t: Trial, tick: number, gap: number) =>
-    judgeTrialCrash(t, { ...watched(0, 0), trialTick: tick }, gap, LIMIT);
+  const died = (t: Trial, call: string | null, gap: number) =>
+    judgeTrialCrash(t, { ...watched(0, 0), trialCall: call }, gap, LIMIT);
 
-  it("confirms only after three deaths in a row at the same tick", () => {
+  it("confirms only after four deaths in a row in the same call", () => {
     const t = trial();
-    expect(died(t, 120, 31_000)).toBe("retry");
-    expect(died(t, 120, 31_000)).toBe("retry");
-    expect(died(t, 120, 31_000)).toBe("confirmed");
+    for (let i = 0; i < 3; i++) expect(died(t, "tick@120", 31_000)).toBe("retry");
+    expect(died(t, "tick@120", 31_000)).toBe("confirmed");
   });
 
-  it("doesn't count restarts, and needs the deaths to match", () => {
+  it("doesn't count restarts or deaths between calls, and needs the calls to match", () => {
     const t = trial();
-    expect(died(t, 120, 31_000)).toBe("retry");
-    expect(died(t, 120, 2_000)).toBe("retry"); // a restart: not a death
-    expect(died(t, 121, 31_000)).toBe("retry"); // a different tick: restarts land anywhere
-    expect(died(t, 120, 31_000)).toBe("retry");
-    expect(t.deaths).toEqual([120, 121, 120]);
+    expect(died(t, "tick@120", 31_000)).toBe("retry");
+    expect(died(t, "tick@120", 2_000)).toBe("retry"); // a restart: not a death
+    expect(died(t, null, 31_000)).toBe("retry"); // between calls: nobody's
+    expect(died(t, "init@120", 31_000)).toBe("retry"); // a different call
+    expect(died(t, "tick@120", 31_000)).toBe("retry");
+    expect(t.deaths).toEqual(["tick@120", "init@120", "tick@120"]);
   });
 
   it("gives up after too many attempts", () => {
     const t = trial();
     let verdict = "retry";
-    for (let i = 0; i < TRIAL_MAX_ATTEMPTS; i++) verdict = died(t, i, 31_000);
+    for (let i = 0; i < TRIAL_MAX_ATTEMPTS; i++) verdict = died(t, `tick@${i}`, 31_000);
     expect(verdict).toBe("inconclusive");
   });
 });

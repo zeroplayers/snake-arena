@@ -20,6 +20,18 @@ const FOOD_COLORS = ["#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#00
 /** Glow square side relative to the food radius (the original's 6× base size, padded). */
 const GLOW_SIZE_MULTIPLIER = 6 * SVG_PADDING;
 const GLOW_OPACITY = 0.75;
+/**
+ * Pellet radius the halo is tuned for: the engine's default `foodRadius` (ambient food, as in
+ * the original game). The renderer doesn't know the engine config; bigger pellets get a
+ * tamer halo (`foodGlowScale`).
+ */
+const GLOW_BASE_RADIUS = 0.5;
+/**
+ * How far from an eaten pellet to look for the head that ate it. Covers the engine's largest
+ * eat reach (max size 5 × eatRadiusFactor 3 + remains radius 1.5 = 16.5) plus a boosted tick
+ * of movement; it must not depend on the drawn size, which is smaller than the gameplay one.
+ */
+const EATEN_SEARCH_RADIUS = 20;
 const PULSE_AMPLITUDE = 0.08;
 const PULSE_SPEED = 3; // rad/s
 
@@ -77,7 +89,7 @@ export class FoodRenderer {
     }
     // Whatever is left in prevById was eaten (or decayed) during this tick.
     for (const f of prevById.values()) {
-      const head = nearestHead(heads, f.x, f.y, f.size * 12);
+      const head = nearestHead(heads, f.x, f.y, EATEN_SEARCH_RADIUS);
       const x = head ? lerp(f.x, head[0], alpha) : f.x;
       const y = head ? lerp(f.y, head[1], alpha) : f.y;
       this.write(n++, f, x, y, 1 - alpha);
@@ -105,10 +117,11 @@ export class FoodRenderer {
     this.core.setMatrixAt(i, this.matrix);
     this.core.setColorAt(i, this.color);
 
-    const g = r * GLOW_SIZE_MULTIPLIER;
+    // Halos are additive: dim the ones of pellets bigger than ambient food (see foodGlowScale).
+    const g = r * foodGlowScale(f.size);
     this.matrix.makeScale(g, g, 1).setPosition(x, y, -0.11);
     this.glow.setMatrixAt(i, this.matrix);
-    this.glow.setColorAt(i, this.color);
+    this.glow.setColorAt(i, this.color.multiplyScalar(Math.min(1, GLOW_BASE_RADIUS / f.size)));
   }
 
   private ensureCapacity(n: number): void {
@@ -161,6 +174,16 @@ export class FoodRenderer {
       mesh.dispose();
     }
   }
+}
+
+/**
+ * Side of a pellet's halo relative to its drawn radius. Pellets up to `GLOW_BASE_RADIUS` get
+ * the full halo; above it the halo only grows with √size (and `write` dims it as 1/size), so a
+ * row of big pellets (a dead snake's remains) stays a row of glowing dots instead of merging
+ * into a white blob.
+ */
+export function foodGlowScale(size: number): number {
+  return GLOW_SIZE_MULTIPLIER / Math.sqrt(Math.max(1, size / GLOW_BASE_RADIUS));
 }
 
 function nearestHead(

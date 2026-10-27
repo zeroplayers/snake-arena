@@ -30,6 +30,7 @@ beforeEach(async () => {
   env = platform.env;
   auth = createAuth({
     DB: env.DB,
+    AUTH_KV: env.AUTH_KV,
     BETTER_AUTH_URL: BASE,
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
     GITHUB_CLIENT_ID: "test-client-id",

@@ -55,3 +55,22 @@ export async function signUp(
   vi.unstubAllGlobals();
   return { id: row.id, login, githubId, jar };
 }
+
+export interface WebSession {
+  token: string;
+  userId: string;
+  /** KV expiration, seconds since the epoch. */
+  expiration: number | undefined;
+}
+
+/** The web sessions Better Auth keeps in `AUTH_KV` (src/server/session-store.ts). */
+export async function webSessions(kv: KVNamespace): Promise<WebSession[]> {
+  const { keys } = await kv.list();
+  const sessions: WebSession[] = [];
+  for (const { name, expiration } of keys) {
+    if (name.startsWith("active-sessions-")) continue;
+    const value = await kv.get<{ session?: { userId: string } }>(name, "json");
+    if (value?.session) sessions.push({ token: name, userId: value.session.userId, expiration });
+  }
+  return sessions;
+}

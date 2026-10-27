@@ -8,6 +8,7 @@ import type {
   SnakeTick,
   TickSnapshot,
 } from "@zerosnake/viewer";
+import { foodDisplaySize } from "@zerosnake/viewer/food";
 import type { SimChunk, SimLife, SnakeCall, TickCalls } from "./protocol.ts";
 
 /** Built snapshots kept around: playback reads a few neighbouring ticks every frame. */
@@ -180,7 +181,7 @@ export class RecordedMatchSource implements MatchSource {
           id: f.id,
           x: f.x,
           y: f.y,
-          size: f.kind === "remains" ? c.remainsRadius : c.foodRadius,
+          size: foodDisplaySize(f.kind, c),
         };
         this.foodCache.set(f.id, r);
       }

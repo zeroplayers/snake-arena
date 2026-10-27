@@ -161,7 +161,8 @@ template/          bot template: src/bot.ts, CLAUDE.md, .claude/skills, tests
 ```
 
 **Storage:**
-- **D1:** Better Auth tables, `bots`, `versions`, `lives` (score, cause of death, replay and trace keys), `ratings`.
+- **D1:** Better Auth tables except sessions, `bots`, `versions`, `lives` (score, cause of death, replay and trace keys), `ratings`.
+- **KV:** Better Auth web sessions, bound to the site only (D1 is shared with the arena, which runs bot code).
 - **R2:** bundles, sources, replays, traces.
 - **DO SQLite:** matchmaker queue, room state.
 

@@ -1,6 +1,7 @@
 # @zerosnake/web
 
-The site: TanStack Start on Workers, Better Auth (GitHub + device flow for `zerosnake login`) on D1.
+The site: TanStack Start on Workers, Better Auth (GitHub + device flow for `zerosnake login`) on D1,
+with web sessions in KV.
 
 ## Local development
 
@@ -102,6 +103,15 @@ The staging deploy applies new migrations with `wrangler d1 migrations apply DB 
 ## Auth
 
 - `/api/auth/*`: Better Auth. GitHub is the only sign-in method.
+- Web sessions are in KV (`AUTH_KV`, `src/server/session-store.ts`), never in D1: D1 is also bound
+  to apps/arena, which runs bot code, and Better Auth keeps session tokens in plaintext. KV entries
+  expire with the session. Revocation is decided in D1, since KV can serve a deleted entry for a
+  while longer elsewhere: sign-out records the token's SHA-256 in `revoked_sessions` (pruned by the
+  5-minute cron once expired), and `/revoke-sessions` ("sign out everywhere") sets
+  `users.sessions_revoked_at`, ending every older session. Both take effect at once everywhere.
+  `/revoke-other-sessions` is off (it trusts KV's list of a user's sessions). The user stored next
+  to a session is re-read from D1 on every check, so username claims and bans apply at once.
+  OAuth state stays in D1 (`verification`).
 - `/welcome`: claim a username after the first sign-in (`POST /api/auth/username/claim`, once).
   `/update-user` is disabled: name and avatar come from GitHub.
 - `/device`: where `zerosnake login` sends people to approve the CLI (client id `zerosnake-cli`).
@@ -111,7 +121,8 @@ The staging deploy applies new migrations with `wrangler d1 migrations apply DB 
   (`src/server/cli-auth.ts`). `GET /cli/me` and `POST /cli/logout` serve `whoami`/`logout`.
 - `/settings`: list and revoke CLI tokens (`GET /api/auth/cli/tokens`, `POST /api/auth/cli/tokens/revoke`).
 
-Tests run Better Auth against a real D1 (wrangler's platform proxy) with GitHub mocked at `fetch`.
+Tests run Better Auth against a real D1 and KV (wrangler's platform proxy) with GitHub mocked at
+`fetch`.
 
 ## CLI API (deploy)
 

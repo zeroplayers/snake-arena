@@ -14,6 +14,7 @@ import {
 } from "@zerosnake/engine";
 import { type RenderFood, type RenderSnake, SNAKE_PALETTE } from "@zerosnake/renderer";
 import { createTickLog, type LogFn, type TickLog } from "@zerosnake/sdk";
+import { foodDisplaySize } from "../food.ts";
 import type {
   BotTrace,
   LifeInfo,
@@ -389,7 +390,7 @@ export class LiveEngineSource implements MatchSource {
           id: f.id,
           x: f.x,
           y: f.y,
-          size: f.kind === "remains" ? c.remainsRadius : c.foodRadius,
+          size: foodDisplaySize(f.kind, c),
         };
         this.foodCache.set(f.id, r);
       }

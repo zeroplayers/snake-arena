@@ -1,3 +1,4 @@
+import { formatReport } from "@zerosnake/checks";
 import { readSources, runLocalChecks } from "../artifact.ts";
 import { bundleBot } from "../bundle.ts";
 import { EXIT, UsageError } from "../errors.ts";
@@ -7,23 +8,26 @@ import { dim, green, stderrHasColor } from "../term.ts";
 
 export const TEST_HELP = `Usage: zerosnake test [options]
 
-Runs the checks the server runs on every deploy: size limits, loading in the sandbox, matches
-on fixed seeds against house bots (no exceptions, no timeouts), and qualification (beat easy).
+Bundles your bot exactly like \`sim\` and \`deploy\` and runs the checks the server runs on every
+deploy, with the same seeds, so it gets the same verdict there: the deploy limits, loading in the
+sandbox, 5 matches × 1000 ticks against the house bots (no timeouts, exceptions or running out
+of memory, and within the CPU caps), and qualification (a mean score per life at least that of
+the easy house bot in your seat). Takes a few seconds.
 
 Options:
   --bot <file>   Your bot's entry file (default: src/bot.ts)
-  -h, --help     Show this help`;
+  --json         Print the check report as JSON on stdout (what the server stores with each
+                 version); everything else goes to stderr
+  -h, --help     Show this help
+
+Exit codes: 0 the bot passes, 1 it fails a check (or doesn't build), 2 bad command line.
+A problem found before the matches (a build error, a deploy limit) prints no JSON.`;
 
 const OPTIONS = {
   bot: { type: "string" },
+  json: { type: "boolean" },
   help: { type: "boolean", short: "h" },
 } as const;
-
-/** zeroplayers/snake-arena#13 builds the shared check suite this command will run. */
-export const CHECKS_PENDING =
-  "The full check suite is coming with zeroplayers/snake-arena#13 (@zerosnake/checks).\n" +
-  "Until then `zerosnake test` only checks the deploy limits and loads your bot in the sandbox;\n" +
-  "use `zerosnake sim --headless` to see how it plays.";
 
 export async function testCommand(argv: string[], io: Io): Promise<number> {
   const { values, positionals } = parse(argv, OPTIONS, "test");
@@ -36,15 +40,22 @@ export async function testCommand(argv: string[], io: Io): Promise<number> {
       `Unexpected argument "${positionals[0]}". Use --bot <file> to pick your bot.`,
     );
   }
+  // With --json, stdout carries the report alone.
+  const human: Io = values.json ? { ...io, out: io.err } : io;
   const project = findProject(io.cwd);
   const entry = findEntry(project, io.cwd, values.bot);
   const bundle = await bundleBot(entry, { cwd: project.root, color: stderrHasColor() });
   const sources = readSources(project.root, bundle);
-  io.out(
+  human.out(
     `${green("✓")} bundles ${dim(`(${(bundle.bytes / 1024).toFixed(1)} KB from ${sources.length} source files)`)}`,
   );
-  await runLocalChecks(io, bundle, sources);
+  const report = await runLocalChecks(human, bundle, sources);
 
-  io.err(`\n${CHECKS_PENDING}`);
-  return EXIT.failure;
+  if (values.json) {
+    io.out(JSON.stringify(report, null, 2));
+  } else {
+    io.out(`\n${formatReport(report).trimEnd()}`);
+    if (report.passed) io.out(`\nReady to deploy: ${dim("npx zerosnake deploy")}`);
+  }
+  return report.passed ? EXIT.ok : EXIT.failure;
 }

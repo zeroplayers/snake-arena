@@ -4,12 +4,21 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { DeployRequest } from "@zerosnake/web/shared";
+import { runChecks } from "@zerosnake/checks";
+import type { DeployRequest, CheckReport as WebCheckReport } from "@zerosnake/web/shared";
 import { afterAll, describe, expect, it } from "vitest";
 import { main } from "./cli.ts";
 import { Credentials } from "./remote/config.ts";
 import { apiError, FakeArena, htmlNotFound, SERVER } from "./testing/fake-arena.ts";
-import { captureIo, cleanUp, GOOD_BOT, makeProject, TUNING } from "./testing/project.ts";
+import {
+  captureIo,
+  cleanUp,
+  GOOD_BOT,
+  makeProject,
+  SUICIDAL_BOT,
+  TEMPLATE_BOT,
+  TUNING,
+} from "./testing/project.ts";
 
 afterAll(cleanUp);
 
@@ -185,10 +194,15 @@ describe("zerosnake deploy", () => {
 
   it("creates the bot, uploads bundle and sources, and waits for the checks", async () => {
     const { arena, run } = setUp();
-    const r = await run(["deploy", "--create", "-m", "first try"]);
+    const r = await run(
+      ["deploy", "--create", "-m", "first try"],
+      botProject({ "src/bot.ts": TEMPLATE_BOT }),
+    );
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain("within the deploy limits");
-    expect(r.out).toContain("loads in the sandbox");
+    expect(r.out).toMatch(
+      /✓ passes the checks \(mean score per life [\d.]+, easy in your seat [\d.]+\)/,
+    );
     expect(r.out).toContain("created the bot my-snake");
     expect(r.out).toContain("uploaded my-snake v1 (19 of 20 deploys left today)");
     expect(r.out).toContain("my-snake v1 passed the checks and is live in the arena.");
@@ -204,20 +218,61 @@ describe("zerosnake deploy", () => {
     const body = upload?.body as DeployRequest;
     expect(body.bundle).toContain("export");
     expect(body.sources.map((s) => s.path)).toEqual(["src/bot.ts", "src/tuning.ts"]);
-    expect(body.sources[0]?.content).toBe(GOOD_BOT);
+    expect(body.sources[0]?.content).toBe(TEMPLATE_BOT);
     expect(body.meta).toMatchObject({ cliVersion: expect.any(String), message: "first try" });
     expect(upload?.headers.get("idempotency-key")).toMatch(/^[0-9a-f-]{36}$/);
     expect(arena.calls("GET", /versions\/1$/).length).toBeGreaterThanOrEqual(2);
+  }, 120_000);
+
+  it("runs the server's checks first and uploads nothing when they fail", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("my-snake");
+    const cwd = botProject({ "src/bot.ts": SUICIDAL_BOT });
+    const r = await run(["deploy"], cwd);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("within the deploy limits");
+    expect(r.err).toContain("Checks failed: this bot would be rejected.");
+    expect(r.err).toContain("✗ Qualifies");
+    expect(r.err).toContain("Not uploaded: the server would reject this version.");
+    expect(r.err).toContain("--skip-local-checks");
+    expect(arena.calls("POST", /versions/)).toHaveLength(0);
+
+    // The escape hatch: the server decides.
+    const skipped = await run(["deploy", "--skip-local-checks", "--no-wait"], cwd);
+    expect(skipped.code, skipped.err).toBe(0);
+    expect(skipped.out).toContain("within the deploy limits");
+    expect(skipped.out).toContain("skipped the check suite here (--skip-local-checks)");
+    expect(skipped.all).not.toContain("Running the checks");
+    expect(skipped.out).toContain("uploaded my-snake v1");
+  }, 120_000);
+
+  it("prints a rejection report from the check suite like `zerosnake test` does", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("my-snake");
+    const report = await runChecks(
+      { bundle: "export default {}", sources: [{ path: "src/bot.ts", bytes: 17 }] },
+      { seeds: [1], ticks: 10 },
+    );
+    arena.outcome = { status: "rejected", report: report as unknown as WebCheckReport, polls: 1 };
+    const r = await run(["deploy", "--skip-local-checks"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("my-snake v1 was rejected:");
+    expect(r.err).toContain("  Checks failed: this bot would be rejected.");
+    expect(r.err).toContain("  ✗ Loads     the bundle does not load");
+    const logs = await run(["logs", "--version", "1"]);
+    expect(logs.out).toContain("✗ Loads     the bundle does not load");
   });
 
   it("deploys to --bot, or the bot named in package.json", async () => {
     const { arena, run } = setUp();
     arena.addBot("greedy");
-    expect((await run(["deploy", "--bot", "greedy", "--no-wait"])).code).toBe(0);
+    expect(
+      (await run(["deploy", "--skip-local-checks", "--bot", "greedy", "--no-wait"])).code,
+    ).toBe(0);
     const cwd = botProject({
       "package.json": JSON.stringify({ name: "x", zerosnake: { bot: "greedy" } }),
     });
-    const r = await run(["deploy", "--no-wait"], cwd);
+    const r = await run(["deploy", "--skip-local-checks", "--no-wait"], cwd);
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain("uploaded greedy v2");
     expect(r.out).toContain("zerosnake status");
@@ -233,7 +288,7 @@ describe("zerosnake deploy", () => {
       .fail("POST", /versions$/, "lost")
       .fail("POST", /versions$/, apiError(409, "deploy_in_progress", "Still processing."));
     arena.fail("GET", /versions\/1$/, "network");
-    const r = await run(["deploy"]);
+    const r = await run(["deploy", "--skip-local-checks"]);
     expect(r.code, r.err).toBe(0);
     const keys = arena.calls("POST", /versions$/).map((c) => c.headers.get("idempotency-key"));
     expect(keys).toHaveLength(5);
@@ -258,7 +313,7 @@ describe("zerosnake deploy", () => {
       },
       polls: 1,
     };
-    const r = await run(["deploy"]);
+    const r = await run(["deploy", "--skip-local-checks"]);
     expect(r.code).toBe(1);
     expect(r.err).toContain("my-snake v1 was rejected:");
     expect(r.err).toContain("✗ qualification: mean score 12.0, easy scored 29.5");
@@ -288,7 +343,7 @@ describe("zerosnake deploy", () => {
     const { arena, run } = setUp();
     arena.addBot("my-snake");
     const cwd = botProject();
-    const deploy = ["deploy", "--no-wait", "-m", "x".repeat(200)];
+    const deploy = ["deploy", "--skip-local-checks", "--no-wait", "-m", "x".repeat(200)];
     expect((await run(deploy, cwd)).code).toBe(0);
     const sent = Buffer.byteLength(JSON.stringify(arena.calls("POST", /versions$/)[0]?.body));
     arena.limits = { ...arena.limits, maxBodyBytes: sent };
@@ -308,7 +363,7 @@ describe("zerosnake deploy", () => {
       /versions$/,
       new Response(null, { status: 308, headers: { location: "https://elsewhere.test/v" } }),
     );
-    const r = await run(["deploy"]);
+    const r = await run(["deploy", "--skip-local-checks"]);
     expect(r.code).toBe(1);
     expect(r.err).toContain("redirected (HTTP 308 to https://elsewhere.test/v)");
     expect(r.err).not.toContain("retrying");
@@ -327,12 +382,12 @@ describe("zerosnake deploy", () => {
         actual: 2,
       }),
     );
-    const r = await run(["deploy"]);
+    const r = await run(["deploy", "--skip-local-checks"]);
     expect(r.code).toBe(1);
     expect(r.err).toContain("Sources are 1.2 MB; the limit is 1 MB.\nEverything under src/");
 
     arena.tokens.clear();
-    const expired = await run(["deploy"]);
+    const expired = await run(["deploy", "--skip-local-checks"]);
     expect(expired.code).toBe(1);
     expect(expired.err).toContain("didn't accept your login: it expired or was revoked");
   });
@@ -341,7 +396,7 @@ describe("zerosnake deploy", () => {
     const { arena, run } = setUp();
     arena.addBot("my-snake");
     arena.outcome = { ...arena.outcome, polls: 10_000 };
-    const r = await run(["deploy"]);
+    const r = await run(["deploy", "--skip-local-checks"]);
     expect(r.code).toBe(1);
     expect(r.err).toContain("The server is still checking my-snake v1 after 10 minutes");
     expect(r.err).toContain("the checks aren't running on this server yet");
@@ -357,7 +412,7 @@ describe("zerosnake deploy", () => {
       ZEROSNAKE_TOKEN: "zsk_ci",
       ZEROSNAKE_CONFIG_DIR: makeProject({}),
     });
-    expect(await main(["deploy", "--no-wait"], io, remote)).toBe(0);
+    expect(await main(["deploy", "--skip-local-checks", "--no-wait"], io, remote)).toBe(0);
     expect(arena.calls("POST", /versions$/)[0]?.headers.get("authorization")).toBe("Bearer zsk_ci");
   });
 });
@@ -368,10 +423,12 @@ describe("zerosnake status", () => {
     arena.addBot("greedy");
     arena.addBot("draft");
     arena.addBot("newbie");
-    expect((await run(["deploy", "--bot", "greedy"])).code).toBe(0);
-    expect((await run(["deploy", "--bot", "draft"])).code).toBe(0);
+    expect((await run(["deploy", "--skip-local-checks", "--bot", "greedy"])).code).toBe(0);
+    expect((await run(["deploy", "--skip-local-checks", "--bot", "draft"])).code).toBe(0);
     arena.outcome = { ...arena.outcome, polls: 100 };
-    expect((await run(["deploy", "--bot", "greedy", "--no-wait"])).code).toBe(0);
+    expect(
+      (await run(["deploy", "--skip-local-checks", "--bot", "greedy", "--no-wait"])).code,
+    ).toBe(0);
     arena.ratings = {
       greedy: { rating: 312.44, ratingCi: 18.2, ratedLives: 64, lives: 1234 },
       draft: { rating: 50, ratingCi: 40, ratedLives: 12, lives: 12 },
@@ -397,7 +454,7 @@ describe("zerosnake logs", () => {
   it("shows the version and points at the site while the API has no lives", async () => {
     const { arena, run } = setUp();
     arena.addBot("my-snake");
-    expect((await run(["deploy", "-m", "eat more"])).code).toBe(0);
+    expect((await run(["deploy", "--skip-local-checks", "-m", "eat more"])).code).toBe(0);
     const r = await run(["logs"]);
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain("my-snake v1 · ready (active)");
@@ -410,7 +467,7 @@ describe("zerosnake logs", () => {
   it("lists recent lives and how they ended", async () => {
     const { arena, run } = setUp();
     arena.addBot("my-snake");
-    expect((await run(["deploy"])).code).toBe(0);
+    expect((await run(["deploy", "--skip-local-checks"])).code).toBe(0);
     arena.livesEndpoint = true;
     const life = {
       startedAt: "2026-10-27T10:00:00Z",
@@ -453,7 +510,7 @@ describe("zerosnake logs", () => {
       report: { ok: false, checks: [{ name: "loads", ok: false, message: "threw on load" }] },
       polls: 1,
     };
-    await run(["deploy"]);
+    await run(["deploy", "--skip-local-checks"]);
     const r = await run(["logs", "--version", "1"]);
     expect(r.out).toContain("my-snake v1 · rejected");
     expect(r.out).toContain("✗ loads: threw on load");

@@ -1,6 +1,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createSandbox } from "@zerosnake/sandbox";
+import {
+  CHECK_SEED_COUNT,
+  CHECK_TICKS,
+  type CheckReport,
+  formatReport as formatCheckReport,
+  REPORT_VERSION,
+  runChecks,
+} from "@zerosnake/checks";
 import {
   DEPLOY_LIMITS,
   type DeployLimits,
@@ -10,7 +17,6 @@ import {
 import type { BundledBot } from "./bundle.ts";
 import { CliError } from "./errors.ts";
 import type { Io } from "./io.ts";
-import { assertLoads } from "./preflight.ts";
 import { collectSources } from "./project.ts";
 import { dim, green, red } from "./term.ts";
 
@@ -152,21 +158,16 @@ export function limitChecks(
 }
 
 /**
- * The checks `test` and `deploy` run on this machine before anything is uploaded: the deploy
- * limits, then loading the bundle in the sandbox. Prints a line per check; throws a
- * {@link CliError} on the first failure.
- *
- * Hook for the full suite (zeroplayers/snake-arena#13, `@zerosnake/checks`): once it's on main,
- * run its `runChecks({ bundle, sources })` here after `assertLoads`, print `formatReport`, and
- * fail unless it passed. `test` and `deploy` both pick it up from here.
+ * The deploy API's limits, checked on this machine before anything is uploaded. Prints one line;
+ * throws a {@link CliError} if the upload would be refused.
  */
-export async function runLocalChecks(
+export function assertWithinLimits(
   io: Io,
   bundle: BundledBot,
   sources: SourceText[],
   limits?: DeployLimits,
   meta?: DeployMeta,
-): Promise<void> {
+): void {
   const limitResults = limitChecks(bundle, sources, limits, meta);
   const failed = limitResults.filter((c) => !c.ok);
   if (failed.length > 0) {
@@ -180,13 +181,99 @@ export async function runLocalChecks(
     .map((c) => `${c.name} ${c.message}`)
     .join(", ");
   io.out(`${green("✓")} within the deploy limits ${dim(`(${sizes})`)}`);
-
-  assertLoads(await createSandbox(), "Your bot", bundle.code);
-  io.out(`${green("✓")} loads in the sandbox`);
 }
 
-/** Lines for a `CheckReport` (`versions.report`); tolerant of fields it doesn't know. */
+/**
+ * The checks `test` and `deploy` run on this machine before anything is uploaded: the deploy
+ * API's limits ({@link assertWithinLimits}, throws), then the server's check suite
+ * ({@link runCheckSuite}). Returns the suite's report; the caller prints it.
+ */
+export async function runLocalChecks(
+  io: Io,
+  bundle: BundledBot,
+  sources: SourceText[],
+  limits?: DeployLimits,
+  meta?: DeployMeta,
+): Promise<CheckReport> {
+  assertWithinLimits(io, bundle, sources, limits, meta);
+  return runCheckSuite(io, bundle, sources);
+}
+
+/** What the suite plays, for the progress line. */
+const SUITE = `${CHECK_SEED_COUNT} matches × ${CHECK_TICKS} ticks against the house bots`;
+
+/**
+ * `runChecks` of `@zerosnake/checks` with the deploy configuration, exactly as the server runs
+ * it (same seeds, same report), with a progress line on the terminal while it runs.
+ */
+export async function runCheckSuite(
+  io: Io,
+  bundle: BundledBot,
+  sources: readonly SourceText[],
+): Promise<CheckReport> {
+  if (!io.progress) io.err(dim(`Running the checks (${SUITE})…`));
+  const started = performance.now();
+  let reads = 0;
+  let shown = Number.NEGATIVE_INFINITY;
+  // The suite runs synchronously and has no progress callback. Its wall clock (the 60 s cap) is
+  // read once per tick of the bot and once per life, so counting the reads tells how far it is.
+  // It still returns the real time: the cap and the report are the same as without it.
+  const clock = () => {
+    const now = performance.now();
+    reads++;
+    if (io.progress && now - shown >= 100) {
+      shown = now;
+      const percent = Math.min(99, Math.floor((reads / (CHECK_SEED_COUNT * CHECK_TICKS)) * 100));
+      io.progress(
+        `Running the checks (${SUITE})… ${percent}% ${dim(`${Math.round((now - started) / 1000)}s`)}`,
+      );
+    }
+    return now;
+  };
+  try {
+    return await runChecks(
+      { bundle: bundle.code, sources: sources.map(({ path, bytes }) => ({ path, bytes })) },
+      { clock },
+    );
+  } finally {
+    io.progress?.("");
+  }
+}
+
+/** One line for a report that passed: the score against the bar. */
+export function passedLine(report: CheckReport): string {
+  const { score, bar } = report.qualify;
+  const scores =
+    score !== null && bar !== null
+      ? ` ${dim(`(mean score per life ${score.toFixed(1)}, easy in your seat ${bar.toFixed(1)})`)}`
+      : "";
+  return `${green("✓")} passes the checks${scores}`;
+}
+
+/** Whether a stored report is `@zerosnake/checks`' {@link CheckReport}. */
+function isSuiteReport(report: unknown): report is CheckReport {
+  const r = report as Partial<CheckReport> | null;
+  return (
+    typeof r === "object" &&
+    r !== null &&
+    r.version === REPORT_VERSION &&
+    typeof r.passed === "boolean" &&
+    [r.limits, r.load, r.run, r.qualify].every((c) => typeof c?.summary === "string")
+  );
+}
+
+/**
+ * Lines for a stored version report (`versions.report`): `@zerosnake/checks`' report as
+ * `zerosnake test` prints it, or the older `{ ok, checks, qualificationScore }` shape. Tolerant of
+ * fields it doesn't know.
+ */
 export function formatReport(report: unknown): string[] {
+  if (isSuiteReport(report)) {
+    return formatCheckReport(report)
+      .trimEnd()
+      .split("\n")
+      .map((line) => (line ? `  ${line}` : line));
+  }
   const r = report as { checks?: unknown; qualificationScore?: unknown } | null;
   if (!r || !Array.isArray(r.checks)) return [];
   const lines = r.checks.map((c: { name?: unknown; ok?: unknown; message?: unknown }) => {

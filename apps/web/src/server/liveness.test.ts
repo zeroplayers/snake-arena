@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ARENA_LIMITS } from "../shared/arena";
 import { createTestD1, type TestD1 } from "../test/d1";
 import { checkLiveness, runLivenessCheck } from "./liveness";
 
@@ -22,28 +23,48 @@ afterEach(async () => {
   await d1.dispose();
 });
 
-async function readyVersion(activatedMinutesAgo: number | null) {
+async function readyVersion(activatedMinutesAgo: number | null, bot = "b", id = "v") {
   await d1.db
     .prepare(
       `INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key, activated_at)
-       VALUES ('v', 'b', 1, 'ready', 'b.js', 's.json', ?)`,
+       VALUES (?, ?, 1, 'ready', 'b.js', 's.json', ?)`,
     )
-    .bind(activatedMinutesAgo === null ? null : minutesAgo(activatedMinutesAgo))
+    .bind(id, bot, activatedMinutesAgo === null ? null : minutesAgo(activatedMinutesAgo))
     .run();
 }
 
-async function life(id: string, startedMinutesAgo: number, endedMinutesAgo: number | null) {
+async function life(
+  id: string,
+  startedMinutesAgo: number,
+  endedMinutesAgo: number | null,
+  version = "v",
+) {
   await d1.db
     .prepare(
       `INSERT INTO lives (id, version_id, room, start_tick, started_at, ended_at)
-       VALUES (?, 'v', 'r', 0, ?, ?)`,
+       VALUES (?, ?, 'r', 0, ?, ?)`,
     )
     .bind(
       id,
+      version,
       minutesAgo(startedMinutesAgo),
       endedMinutesAgo === null ? null : minutesAgo(endedMinutesAgo),
     )
     .run();
+}
+
+/** `count` lives of `version`, started and ended around `minutesAgo(at)`. */
+async function lives(version: string, count: number, at: number) {
+  await d1.db.batch(
+    Array.from({ length: count }, () =>
+      d1.db
+        .prepare(
+          `INSERT INTO lives (id, version_id, room, start_tick, started_at, ended_at)
+           VALUES (?, ?, 'r', 0, ?, ?)`,
+        )
+        .bind(crypto.randomUUID(), version, minutesAgo(at + 1), minutesAgo(at)),
+    ),
+  );
 }
 
 const check = (env: { NO_LIVES_ALERT_MINUTES?: string } = {}) =>
@@ -88,6 +109,56 @@ describe("checkLiveness", () => {
     expect(await check()).toMatchObject({ status: "ok", minutesSinceActivity: 2 });
   });
 
+  it("is exhausted, not stalled, once every bot used its lives for the day", async () => {
+    const quota = ARENA_LIMITS.livesPerBotPerDay;
+    await readyVersion(600);
+    // An older version of the same bot used part of the quota: it counts per bot.
+    await d1.db
+      .prepare(
+        `INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key)
+         VALUES ('old', 'b', 0, 'archived', 'b.js', 's.json')`,
+      )
+      .run();
+    await lives("old", 10, 700);
+    await lives("v", quota - 11, 60);
+    // Yesterday's lives don't count (NOW is 12:00 UTC).
+    await lives("v", 50, 1000);
+    expect(await check()).toMatchObject({
+      status: "stalled",
+      readyVersions: 1,
+      playableVersions: 1,
+    });
+    await lives("v", 1, 60);
+    expect(await check()).toMatchObject({
+      status: "exhausted",
+      readyVersions: 1,
+      playableVersions: 0,
+      minutesSinceActivity: 60,
+    });
+
+    // Another bot with lives left: the arena should be playing it.
+    await d1.db
+      .prepare("INSERT INTO bots (id, owner_id, name, slug) VALUES ('b2', 'u', 'B2', 'b2')")
+      .run();
+    await readyVersion(600, "b2", "v2");
+    expect(await check()).toMatchObject({
+      status: "stalled",
+      readyVersions: 2,
+      playableVersions: 1,
+    });
+    // The kill switch still wins.
+    await d1.db.prepare("UPDATE arena_control SET paused = 1").run();
+    expect(await check()).toMatchObject({ status: "paused" });
+  });
+
+  it("gives the arena time after the 00:00 UTC quota reset", async () => {
+    await readyVersion(2000);
+    await life("yesterday", 740, 730); // 23:50 UTC the day before NOW
+    const at = (iso: string) => checkLiveness({ DB: d1.db }, new Date(iso));
+    expect(await at("2026-10-27T00:10:00Z")).toMatchObject({ status: "ok" });
+    expect(await at("2026-10-27T00:16:00Z")).toMatchObject({ status: "stalled" });
+  });
+
   it("is stalled when there was never any activity at all", async () => {
     await readyVersion(null);
     await d1.db.prepare("UPDATE arena_control SET updated_at = 0").run();
@@ -113,7 +184,7 @@ describe("runLivenessCheck", () => {
       {
         indexes: ["arena.liveness"],
         blobs: ["arena.liveness", "web", "stalled"],
-        doubles: [1, 60, 1, 15],
+        doubles: [1, 60, 1, 15, 1],
       },
     ]);
   });

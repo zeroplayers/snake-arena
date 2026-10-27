@@ -150,7 +150,8 @@ function KillSwitch({ page, action }: { page: ModerationPage; action: Action }) 
           </dd>
         </div>
       </dl>
-      {control.reason && <p className="muted small">Reason: {control.reason}</p>}
+      {control.reason && <p className="muted small">Arena: {control.reason}</p>}
+      {control.deploysReason && <p className="muted small">Deploys: {control.deploysReason}</p>}
       <form className="inline-form" onSubmit={(e) => e.preventDefault()}>
         <label className="sr-only" htmlFor="control-reason">
           Reason

@@ -301,11 +301,15 @@ describe("CLI API per-user limits", () => {
       ]);
     }
     const api = createCliApi(env, { rateLimiter: createRateLimiter(env) });
-    const deploy = (who: string, i: number) =>
+    const deploy = (who: string, i: number, idempotencyKey?: string) =>
       api.deploy(
         new Request(`${BASE}/api/bots/snake/versions`, {
           method: "POST",
-          headers: { authorization: `Bearer ${tokens[who]}`, "content-type": "application/json" },
+          headers: {
+            authorization: `Bearer ${tokens[who]}`,
+            "content-type": "application/json",
+            ...(idempotencyKey ? { "idempotency-key": idempotencyKey } : {}),
+          },
           body: JSON.stringify({
             bundle: `export default { tick() { return { turn: ${i} }; } };`,
             sources: [{ path: "src/bot.ts", content: `// ${i}` }],
@@ -329,6 +333,21 @@ describe("CLI API per-user limits", () => {
     expect(refused[0]?.headers.get("retry-after")).toBe("60");
     expect(await refused[0]?.json()).toMatchObject({ error: "rate_limited", retryAfter: 60 });
     expect((await deploy("bob", 0)).status).toBe(201);
+  });
+
+  it("doesn't charge the deploy limit for retries with an Idempotency-Key in use", async () => {
+    const { deploy } = await cli({ deploy: 1 });
+    const first = await deploy("ada", 0, "retry-key-1");
+    expect(first.status).toBe(201);
+    const { version } = (await first.json()) as { version: { id: string } };
+    for (let i = 0; i < 3; i++) {
+      const replay = await deploy("ada", 0, "retry-key-1");
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toMatchObject({ version: { id: version.id } });
+    }
+    // A new deploy (a new key, or none) is charged, and the one allowed is used up.
+    expect((await deploy("ada", 1, "retry-key-2")).status).toBe(429);
+    expect((await deploy("ada", 1)).status).toBe(429);
   });
 
   it("counts every call of a user against the user limit", async () => {

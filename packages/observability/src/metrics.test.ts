@@ -46,6 +46,7 @@ describe("metricPoint", () => {
       minutesSinceActivity: "double2",
       readyVersions: "double3",
       thresholdMinutes: "double4",
+      playableVersions: "double5",
     });
     for (const [name, schema] of Object.entries(METRICS)) {
       // Analytics Engine: at most 20 blobs and 20 doubles; two of each are taken.

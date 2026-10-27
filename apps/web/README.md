@@ -290,8 +290,11 @@ saving.
 
 **No lives recorded** comes from the Cron Trigger (`*/5 * * * *`, `src/server/liveness.ts`). It
 reads D1: the newest `lives` rows (by `rowid`, a few rows, not a scan), the latest activation of a
-`ready` version and the kill switch's last change. It reports `stalled` when the latest of those
-is older than `NO_LIVES_ALERT_MINUTES` (15) while the arena isn't paused and has `ready` versions.
-With no `ready` versions it's `idle`: house bots write no `lives` rows. Each run also logs
+`ready` version and the kill switch's last change (and counts 00:00 UTC, when quotas reset, as
+a fresh start). It reports `stalled` when the latest of those is older than
+`NO_LIVES_ALERT_MINUTES` (15) while the arena isn't paused and has playable versions: `ready`
+ones whose bot hasn't used its `livesPerBotPerDay` lives today. With no `ready` versions it's
+`idle` (house bots write no `lives` rows); when every bot's daily quota is used up, it's
+`exhausted` until 00:00 UTC, not an alert. Each run also logs
 `arena.liveness`, at level `error` with `alert: "no_lives"` when stalled, so a Workers Logs alert
 works as well. Locally, trigger it with `curl "http://localhost:3000/cdn-cgi/handler/scheduled"`.

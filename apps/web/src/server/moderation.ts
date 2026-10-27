@@ -104,7 +104,10 @@ function fail(code: ModerationErrorCode, message: string): never {
 export interface ArenaControlView {
   paused: boolean;
   deploysPaused: boolean;
+  /** Why the arena switch last changed. */
   reason: string | null;
+  /** Why the deploys switch last changed. */
+  deploysReason: string | null;
   updatedAt: string | null;
   /** Username (or id) of the admin who last changed it. */
   updatedBy: string | null;
@@ -218,6 +221,11 @@ export function parseTarget(ref: string): { parts: string[]; n: number | null } 
     parts.pop();
   }
   return { parts, n };
+}
+
+/** The first line of a banned version's report `text`. */
+function moderationHeading(reason: string): string {
+  return `Rejected by a moderator: ${reason}`;
 }
 
 function moderationReport(message: string): CheckReport {
@@ -403,6 +411,7 @@ export function createModeration(env: ModerationEnv, options: ModerationOptions)
         paused: false,
         deploysPaused: false,
         reason: null,
+        deploysReason: null,
         updatedAt: null,
         updatedBy: null,
       };
@@ -411,12 +420,16 @@ export function createModeration(env: ModerationEnv, options: ModerationOptions)
       paused: row.control.paused,
       deploysPaused: row.control.deploysPaused,
       reason: row.control.reason,
+      deploysReason: row.control.deploysReason,
       updatedAt: row.control.updatedAt.toISOString(),
       updatedBy: row.updater?.username ?? row.control.updatedBy,
     };
   }
 
-  /** Flips one switch of `arena_control` (made if missing), unless it's already there. */
+  /**
+   * Flips one switch of `arena_control` (made if missing), unless it's already there. Each switch
+   * has its own reason column, so resuming one never rewrites why the other is off.
+   */
   async function setControl(
     adminId: string,
     column: "paused" | "deploys_paused",
@@ -434,15 +447,17 @@ export function createModeration(env: ModerationEnv, options: ModerationOptions)
     const id = crypto.randomUUID();
     const at = now().getTime();
     const value = on ? 1 : 0;
+    const reasonColumn = sql.raw(column === "paused" ? "reason" : "deploys_reason");
     const current = sql`coalesce((SELECT ${sql.raw(column)} FROM ${arenaControl} WHERE id = 1), 0)`;
     const [inserted] = await batch([
       sql`INSERT INTO ${moderationActions} (id, admin_id, action, reason, created_at)
           SELECT ${id}, ${adminId}, ${action}, ${reason}, ${at} WHERE ${current} != ${value}
           RETURNING id`,
-      sql`INSERT INTO ${arenaControl} (id, ${sql.raw(column)}, reason, updated_by, updated_at)
+      sql`INSERT INTO ${arenaControl}
+            (id, ${sql.raw(column)}, ${reasonColumn}, updated_by, updated_at)
           SELECT 1, ${value}, ${reason}, ${adminId}, ${at} WHERE ${written(id)}
           ON CONFLICT (id) DO UPDATE SET ${sql.raw(column)} = excluded.${sql.raw(column)},
-            reason = excluded.reason, updated_by = excluded.updated_by,
+            ${reasonColumn} = excluded.${reasonColumn}, updated_by = excluded.updated_by,
             updated_at = excluded.updated_at`,
     ]);
     if (!inserted?.length) {
@@ -460,6 +475,7 @@ export function createModeration(env: ModerationEnv, options: ModerationOptions)
       paused: view.paused,
       deploysPaused: view.deploysPaused,
       reason: view.reason,
+      deploysReason: view.deploysReason,
       updatedAt: at,
     });
     return view;
@@ -689,6 +705,7 @@ export function createModeration(env: ModerationEnv, options: ModerationOptions)
         const id = crypto.randomUUID();
         const at = now().getTime();
         const check = JSON.stringify({ name: MODERATION_CHECK_NAME, ok: false, message: reason });
+        const heading = `${moderationHeading(reason)}\n\n`;
         const [inserted, banned] = await batch([
           sql`INSERT INTO ${moderationActions}
                 (id, admin_id, action, target_user_id, target_bot_id, target_version_id, reason,
@@ -697,12 +714,15 @@ export function createModeration(env: ModerationEnv, options: ModerationOptions)
               FROM ${versions} WHERE id = ${version.id} AND status != 'rejected'
               RETURNING id`,
           // Earlier checks stay in the report, the moderation check is appended (like the
-          // room backstop's `arena-backstop` check).
+          // room backstop's `arena-backstop` check). The consumer's `text` (what the CLI prints,
+          // "Checks passed…") gets the verdict on top, so nobody reads it as a pass.
           sql`UPDATE ${versions}
               SET status = 'rejected', updated_at = ${at},
-                report = json_set(
-                  json_insert(coalesce(report, '{"ok":false,"checks":[]}'), '$.checks[#]', json(${check})),
-                  '$.ok', json('false'))
+                report = json_replace(
+                  json_set(
+                    json_insert(coalesce(report, '{"ok":false,"checks":[]}'), '$.checks[#]', json(${check})),
+                    '$.ok', json('false')),
+                  '$.text', ${heading} || json_extract(report, '$.text'))
               WHERE id = ${version.id} AND ${written(id)}
               RETURNING id, bot_id`,
         ]);

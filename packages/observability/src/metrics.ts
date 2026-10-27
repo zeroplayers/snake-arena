@@ -64,12 +64,13 @@ export const METRICS = {
   "moderation.action": { source: "web", blobs: ["action"], doubles: [] },
   /**
    * The scheduled liveness check (apps/web cron): `status` is `ok`, `idle` (no ready versions),
-   * `paused` (kill switch on) or `stalled` (ready versions but no lives for too long: alert).
+   * `exhausted` (every bot used its daily lives), `paused` (kill switch on) or `stalled`
+   * (playable versions but no lives for too long: alert).
    */
   "arena.liveness": {
     source: "web",
     blobs: ["status"],
-    doubles: ["minutesSinceActivity", "readyVersions", "thresholdMinutes"],
+    doubles: ["minutesSinceActivity", "readyVersions", "thresholdMinutes", "playableVersions"],
   },
 
   // ─── apps/arena ────────────────────────────────────────────────────────────────────────────

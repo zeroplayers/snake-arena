@@ -18,9 +18,10 @@
  *
  * Abuse controls: every call counts against the caller's `user` rate limit, deploys also
  * against `deploy` (429 `rate_limited`, `src/server/rate-limit.ts`; the per-IP limit is applied
- * before this, in `src/server/edge.ts`). Banned users get 403 `user_banned` on every call,
- * banned bots 403 `bot_banned` on deploy, and while an admin has paused deploys, 503
- * `deploys_paused` (`src/server/moderation.ts`).
+ * before this, in `src/server/edge.ts`), except retries with an `Idempotency-Key` already in
+ * use. Banned users get 403 `user_banned` on every call, banned bots 403 `bot_banned` on deploy,
+ * and while an admin has paused deploys, 503 `deploys_paused` (`src/server/moderation.ts`) to
+ * new deploys; a retry of one made before the pause still gets its version.
  */
 import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import * as z from "zod";
@@ -363,7 +364,7 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
   /** 503 while an admin has paused deploys (the kill switch, `src/shared/arena.ts`). */
   async function refuseIfDeploysPaused() {
     const [control] = await db
-      .select({ deploysPaused: arenaControl.deploysPaused, reason: arenaControl.reason })
+      .select({ deploysPaused: arenaControl.deploysPaused, reason: arenaControl.deploysReason })
       .from(arenaControl)
       .where(eq(arenaControl.id, 1))
       .limit(1);
@@ -631,7 +632,6 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
 
     deploy: (request: Request, botParam: string) =>
       withCli(request, async ({ user }) => {
-        await limit("deploy", user.id);
         const bot = await ownBot(user.id, botParam);
         const refuseArchived = (row: BotRow) => {
           if (row.bannedAt) {
@@ -648,8 +648,6 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
             bot: botInfo(row),
           });
         };
-        refuseArchived(bot);
-        await refuseIfDeploysPaused();
         const idempotencyKey = request.headers.get("idempotency-key");
         if (idempotencyKey !== null && !IDEMPOTENCY_KEY.test(idempotencyKey)) {
           fail(400, {
@@ -657,6 +655,14 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
             message: "Idempotency-Key must be 8–128 of A-Z, a-z, 0-9, _ and -.",
           });
         }
+        // A retry of a deploy this key already made (the CLI retries 409 `deploy_in_progress`
+        // and lost answers) is the same deploy: it isn't charged the `deploy` rate limit again,
+        // and a pause that came after it doesn't hide it. A stale take-over that makes a new
+        // version still checks the pause, below.
+        const retried = idempotencyKey !== null && !!(await versionByKey(bot.id, idempotencyKey));
+        if (!retried) await limit("deploy", user.id);
+        refuseArchived(bot);
+        if (!retried) await refuseIfDeploysPaused();
         const raw = await readJson(request, limits.maxBodyBytes);
         checkFileCount(raw, limits);
         const body = parse(deployBody, raw);
@@ -697,6 +703,7 @@ export function createCliApi(env: CliApiEnv, options: CliApiOptions = {}) {
         for (let attempt = 0; attempt < 3; attempt++) {
           const settled = await settle();
           if (settled) return settled;
+          if (retried) await refuseIfDeploysPaused();
           const version = await insertVersion(bot, user.id, keys, body.meta, idempotencyKey);
           if (version) return finishDeploy(bot, version, upload, idempotencyKey);
           // Nothing inserted: the bot was archived or banned during the upload (or its owner

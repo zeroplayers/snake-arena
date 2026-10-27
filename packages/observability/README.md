@@ -45,23 +45,23 @@ and `zerosnake_staging` on staging. Every event has a fixed layout:
 
 Never reorder or reuse a position; add fields at the end, or add a new event.
 
-| event               | worker | blobs (`blob3…`)                          | doubles (`double2…`)                                        |
-| ------------------- | ------ | ----------------------------------------- | ----------------------------------------------------------- |
-| `deploy.accepted`   | web    | `userId`                                  | `status`                                                    |
-| `deploy.rejected`   | web    | `reason` (error code), `userId`           | `status`                                                    |
-| `http.error`        | web    | `route` (`page` for pages), `outcome`     | `status`                                                    |
-| `ratelimit.limited` | web    | `rule`, `route`                           |                                                             |
-| `auth.failure`      | web    | `kind`, `route`                           | `status`                                                    |
-| `moderation.action` | web    | `action`                                  |                                                             |
-| `arena.liveness`    | web    | `status` (`ok`/`idle`/`paused`/`stalled`) | `minutesSinceActivity`, `readyVersions`, `thresholdMinutes` |
-| `room.started`      | arena  | `roomId`, `mode`                          | `maxSnakes`                                                 |
-| `room.batch`        | arena  | `roomId`, `mode`                          | `ticks`, `snakes`, `workUnits`                              |
-| `room.crashed`      | arena  | `roomId`, `cause`                         | `restarts`                                                  |
-| `room.closed`       | arena  | `roomId`, `reason`                        | `ticks`, `lives`, `durationMs`                              |
-| `life.ended`        | arena  | `versionId`, `deathCause`, `roomId`       | `score`, `ticks`, `kills`                                   |
-| `version.banned`    | arena  | `versionId`, `reason`                     |                                                             |
-| `checks.finished`   | arena  | `outcome`, `reason`                       | `durationMs`                                                |
-| `arena.gauge`       | arena  | (none)                                    | `rooms`, `liveSnakes`, `queuedLives`, `readyVersions`       |
+| event               | worker | blobs (`blob3…`)                                      | doubles (`double2…`)                                                            |
+| ------------------- | ------ | ----------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `deploy.accepted`   | web    | `userId`                                              | `status`                                                                        |
+| `deploy.rejected`   | web    | `reason` (error code), `userId`                       | `status`                                                                        |
+| `http.error`        | web    | `route` (`page` for pages), `outcome`                 | `status`                                                                        |
+| `ratelimit.limited` | web    | `rule`, `route`                                       |                                                                                 |
+| `auth.failure`      | web    | `kind`, `route`                                       | `status`                                                                        |
+| `moderation.action` | web    | `action`                                              |                                                                                 |
+| `arena.liveness`    | web    | `status` (`ok`/`idle`/`exhausted`/`paused`/`stalled`) | `minutesSinceActivity`, `readyVersions`, `thresholdMinutes`, `playableVersions` |
+| `room.started`      | arena  | `roomId`, `mode`                                      | `maxSnakes`                                                                     |
+| `room.batch`        | arena  | `roomId`, `mode`                                      | `ticks`, `snakes`, `workUnits`                                                  |
+| `room.crashed`      | arena  | `roomId`, `cause`                                     | `restarts`                                                                      |
+| `room.closed`       | arena  | `roomId`, `reason`                                    | `ticks`, `lives`, `durationMs`                                                  |
+| `life.ended`        | arena  | `versionId`, `deathCause`, `roomId`                   | `score`, `ticks`, `kills`                                                       |
+| `version.banned`    | arena  | `versionId`, `reason`                                 |                                                                                 |
+| `checks.finished`   | arena  | `outcome`, `reason`                                   | `durationMs`                                                                    |
+| `arena.gauge`       | arena  | (none)                                                | `rooms`, `liveSnakes`, `queuedLives`, `readyVersions`                           |
 
 `METRICS` in [`src/metrics.ts`](src/metrics.ts) is the source of truth; `metricColumns(name)`
 gives one event's mapping.

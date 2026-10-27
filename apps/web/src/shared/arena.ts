@@ -97,7 +97,7 @@ export interface MatchmakerSiteRpc {
  * migration 0005; treat a missing row as all zeros, "running"). Read it with
  *
  * ```sql
- * SELECT paused, deploys_paused, reason, updated_at FROM arena_control WHERE id = 1
+ * SELECT paused, deploys_paused, reason, deploys_reason, updated_at FROM arena_control WHERE id = 1
  * ```
  *
  * `paused = 1` stops the arena. Then the matchmaker:
@@ -122,8 +122,10 @@ export interface ArenaControl {
   v: typeof ARENA_CONTROL_VERSION;
   paused: boolean;
   deploysPaused: boolean;
-  /** Why, as the admin wrote it. */
+  /** Why `paused` last changed, as the admin wrote it. */
   reason: string | null;
+  /** Why `deploysPaused` last changed (its own column, `deploys_reason`, migration 0006). */
+  deploysReason: string | null;
   /** Unix ms of the change. */
   updatedAt: number;
 }
@@ -142,7 +144,8 @@ export const ARENA_CONTROL_POLL_MS = 30_000;
  *
  * - **Version**: `status = 'rejected'`, with a failed check `{ name: "moderation", ok: false,
  *   message: <reason> }` appended to `versions.report` (like the room backstop's
- *   `arena-backstop` check). Final.
+ *   `arena-backstop` check), and `report.text`, if any, prefixed with "Rejected by a moderator:
+ *   <reason>" so the suite's "Checks passed" isn't the first thing the author reads. Final.
  * - **Bot**: `bots.banned_at` / `ban_reason` set; its `ready` version becomes `archived` and
  *   versions still in checks become `rejected` (same as archiving the bot). Lifting the ban
  *   leaves the bot with no active version, the owner picks one.
@@ -152,8 +155,8 @@ export const ARENA_CONTROL_POLL_MS = 30_000;
  * Each status change bumps `versions.change_seq`, so the incremental poll sees it, and the site
  * sends `activeVersionChanged` with reason `moderation` for each bot whose `ready` version went
  * away. A trigger (`versions_ready_unbanned`) aborts any write that would make a version of a
- * banned bot, or of a banned user's bot, `ready`: the checks consumer should treat that error
- * like an archived bot (reject the version, `reason: bot_archived`) rather than retry.
+ * banned bot, or of a banned user's bot, `ready`: the checks consumer must reject the version
+ * (`reason: banned`) rather than retry; see `CheckJob` in `src/shared/checks.ts`.
  *
  * The checks consumer, before running a job, may skip it (and leave the version `rejected`)
  * if the bot or its owner is banned; the ban already rejected `validating` versions, so this

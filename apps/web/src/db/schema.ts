@@ -377,8 +377,10 @@ export const arenaControl = sqliteTable(
     id: integer("id").primaryKey(),
     paused: integer("paused", { mode: "boolean" }).notNull().default(false),
     deploysPaused: integer("deploys_paused", { mode: "boolean" }).notNull().default(false),
-    /** Why, shown on `/admin` and logged; free text. */
+    /** Why `paused` last changed, shown on `/admin` and logged; free text. */
     reason: text("reason"),
+    /** Why `deploys_paused` last changed; the deploy API's 503 quotes it. */
+    deploysReason: text("deploys_reason"),
     /** Admin user id of the last change. */
     updatedBy: text("updated_by"),
     updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(now),

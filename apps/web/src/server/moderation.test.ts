@@ -101,13 +101,17 @@ async function cliToken(account: TestAccount) {
   return token;
 }
 
-async function deploy(token: string, slug = "snake") {
+async function deploy(token: string, slug = "snake", idempotencyKey?: string) {
   const response = await createCliApi(env).deploy(
     new Request(`${BASE}/api/bots/${slug}/versions`, {
       method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        ...(idempotencyKey ? { "idempotency-key": idempotencyKey } : {}),
+      },
       body: JSON.stringify({
-        bundle: `export default { tick() { return { turn: 0 }; } }; // ${crypto.randomUUID()}`,
+        bundle: `export default { tick() { return { turn: 0 }; } }; // ${idempotencyKey ?? crypto.randomUUID()}`,
         sources: [{ path: "src/bot.ts", content: "// bot" }],
       }),
     }),
@@ -246,7 +250,7 @@ describe("authorization", () => {
 
 /** The query `src/shared/arena.ts` tells the matchmaker and rooms to run. */
 const CONTRACT_SQL =
-  "SELECT paused, deploys_paused, reason, updated_at FROM arena_control WHERE id = 1";
+  "SELECT paused, deploys_paused, reason, deploys_reason, updated_at FROM arena_control WHERE id = 1";
 
 describe("kill switch", () => {
   it("starts running, pauses and resumes the arena through the documented row", async () => {
@@ -268,6 +272,7 @@ describe("kill switch", () => {
         paused: true,
         deploysPaused: false,
         reason: "runaway bot",
+        deploysReason: null,
         updatedAt: expect.any(Number),
       },
     ]);
@@ -311,6 +316,50 @@ describe("kill switch", () => {
 
     ok(await moderation().setDeploysPaused(req(root), { paused: false, reason: "done" }));
     expect((await deploy(token)).status).toBe(201);
+  });
+
+  it("still answers a retry of a deploy made before the pause with its version", async () => {
+    await env.DB.prepare(
+      "INSERT INTO bots (id, owner_id, name, slug) VALUES ('b', ?, 'S', 'snake')",
+    )
+      .bind(ada.id)
+      .run();
+    const token = await cliToken(ada);
+    const first = await deploy(token, "snake", "before-the-pause");
+    expect(first.status).toBe(201);
+    ok(await moderation().setDeploysPaused(req(root), { paused: true, reason: "maintenance" }));
+    const retry = await deploy(token, "snake", "before-the-pause");
+    expect(retry.status).toBe(200);
+    expect(retry.body).toMatchObject({ version: { n: 1 } });
+    expect((await deploy(token, "snake", "after-the-pause")).status).toBe(503);
+  });
+
+  it("keeps a reason per switch, so changing one never rewrites the other's", async () => {
+    await env.DB.prepare(
+      "INSERT INTO bots (id, owner_id, name, slug) VALUES ('b', ?, 'S', 'snake')",
+    )
+      .bind(ada.id)
+      .run();
+    const token = await cliToken(ada);
+    const m = moderation();
+    ok(await m.setDeploysPaused(req(root), { paused: true, reason: "maintenance" }));
+    ok(await m.setArenaPaused(req(root), { paused: true, reason: "runaway bot" }));
+    const view = ok(await m.setArenaPaused(req(root), { paused: false, reason: "fixed" }));
+    expect(view).toMatchObject({
+      paused: false,
+      deploysPaused: true,
+      reason: "fixed",
+      deploysReason: "maintenance",
+    });
+    expect(await env.DB.prepare(CONTRACT_SQL).first()).toMatchObject({
+      reason: "fixed",
+      deploys_reason: "maintenance",
+    });
+    expect(controls.at(-1)).toMatchObject({ reason: "fixed", deploysReason: "maintenance" });
+    const refused = await deploy(token);
+    expect(refused.body).toMatchObject({ error: "deploys_paused" });
+    expect((refused.body as { message: string }).message).toContain("(maintenance)");
+    expect((refused.body as { message: string }).message).not.toContain("fixed");
   });
 });
 
@@ -453,6 +502,21 @@ describe("banning a version", () => {
       .all();
     expect(results).toContainEqual({ id: bot.ready, status: "rejected" });
 
+    // A report from the checks consumer: its `text` (what the CLI prints) leads with the ban.
+    const suiteText = "Checks passed: this bot can be deployed.\n\n✓ Limits  fine\n";
+    await env.DB.prepare(
+      `INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key, report, enqueued_at)
+       VALUES ('v3', ?, 3, 'archived', 'b.js', 's.json', ?, 1)`,
+    )
+      .bind(bot.botId, JSON.stringify({ ok: true, checks: [], text: suiteText }))
+      .run();
+    ok(await moderation().banVersion(req(root), { version: "@ada/snake/3", reason: "copied" }));
+    expect((await version("v3")).report).toEqual({
+      ok: false,
+      checks: [{ name: "moderation", ok: false, message: "copied" }],
+      text: `Rejected by a moderator: copied\n\n${suiteText}`,
+    });
+
     // The bot itself isn't banned: the version in checks is untouched.
     expect((await version(bot.validating)).status).toBe("validating");
     ok(await moderation().banVersion(req(root), { version: bot.validating, reason: "same" }));
@@ -467,6 +531,39 @@ describe("banning a version", () => {
       await moderation().banVersion(req(root), { version: "@ada/snake/9", reason: "missing" }),
       "version_not_found",
     );
+  });
+});
+
+describe("the checks consumer's contract (CheckJob)", () => {
+  it("aborts the documented markPassed batch with `bot is banned`, changing nothing", async () => {
+    const bot = await botWithVersions(ada);
+    // A ban landing between the consumer's read and its write: the `validating` version is
+    // still there (a real ban rejects it in the same batch).
+    await env.DB.prepare("UPDATE bots SET banned_at = 1 WHERE id = ?").bind(bot.botId).run();
+    const markPassed = env.DB.batch([
+      env.DB.prepare(
+        `UPDATE versions SET status = 'archived', updated_at = ?3
+         WHERE bot_id = ?2 AND status = 'ready'
+           AND EXISTS (SELECT 1 FROM versions WHERE id = ?1 AND status = 'validating')
+           AND (SELECT archived_at FROM bots WHERE id = ?2) IS NULL`,
+      ).bind(bot.validating, bot.botId, 5),
+      env.DB.prepare(
+        `UPDATE versions SET status = 'ready', activated_at = ?3, updated_at = ?3
+         WHERE id = ?1 AND status = 'validating'
+           AND (SELECT archived_at FROM bots WHERE id = ?2) IS NULL
+         RETURNING id`,
+      ).bind(bot.validating, bot.botId, 5),
+    ]);
+    await expect(markPassed).rejects.toThrow(/bot is banned/);
+    expect((await version(bot.ready)).status).toBe("ready");
+    expect((await version(bot.validating)).status).toBe("validating");
+    // What the contract says to do instead: reject it.
+    await env.DB.prepare(
+      "UPDATE versions SET status = 'rejected' WHERE id = ? AND status = 'validating'",
+    )
+      .bind(bot.validating)
+      .run();
+    expect((await version(bot.validating)).status).toBe("rejected");
   });
 });
 

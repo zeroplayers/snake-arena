@@ -1,0 +1,15 @@
+{
+  "name": "@zerosnake/observability",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Structured logs and Analytics Engine metrics shared by the site and the arena",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "vitest": "^5.0.5"
+  }
+}

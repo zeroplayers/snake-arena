@@ -40,6 +40,14 @@
  *   If the second statement returns no row, the version is no longer `validating` or the bot is
  *   archived: the job is done either way. Use `RETURNING`, not `meta.changes`: D1 also counts the
  *   rows triggers change (`versions.change_seq`, migration 0004).
+ * - A banned bot, or a bot of a banned user, never gets a `ready` version either (moderation,
+ *   `src/shared/arena.ts`). Banning rejects the bot's `validating` versions, so the guard above
+ *   usually catches it; when a ban lands between the read and the write, the trigger
+ *   `versions_ready_unbanned` (migration 0005) ABORTs the batch with an error whose message
+ *   contains `bot is banned`. That error is final, not a failure to retry: reject the version
+ *   (`status = 'rejected'` with `WHERE status = 'validating'`, `reason: banned`, a failed check
+ *   `{ name: "moderation", ok: false, message: "The bot was banned before the checks ended." }`)
+ *   and ack the message. Retrying it only ends in the dead-letter queue.
  */
 export interface CheckJob {
   /** Message shape version; bumped on incompatible changes. */
@@ -103,10 +111,12 @@ export const SOURCE_ARCHIVE_FORMAT = "zerosnake-sources@1";
 
 const CHECK_LABELS: Record<string, string> = {
   deploy: "Deploy",
+  limits: "Upload limits",
   loads: "Bundle loads",
   seeds: "Fixed seeds",
   qualification: "Qualification",
   "arena-backstop": "Arena",
+  moderation: "Moderation",
 };
 
 /** A report as plain sentences for people: one per failed check, `Label: message`. */

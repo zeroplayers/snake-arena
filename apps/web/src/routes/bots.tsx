@@ -81,6 +81,13 @@ function BotsPage() {
     <>
       <section className="panel">
         <h1 className="title">Your bots</h1>
+        {page.banned && (
+          <p className="error" role="alert">
+            Your account is suspended
+            {page.banned.reason ? `: ${page.banned.reason}` : ""}. Your bots don't play, and nothing
+            can be deployed or changed.
+          </p>
+        )}
         <Quotas page={page} />
         {action.notice && (
           <p
@@ -374,6 +381,12 @@ function BotPanel({ bot, page, action }: { bot: ManagedBot; page: ManagePage; ac
           </button>
         </div>
       </div>
+      {bot.banned && (
+        <p className="error">
+          Banned{bot.banned.reason ? `: ${bot.banned.reason}` : ""}. It doesn't play and can't be
+          deployed to.
+        </p>
+      )}
       <p className="muted">
         {current ? (
           <>

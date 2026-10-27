@@ -1,7 +1,16 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createSandbox } from "@zerosnake/sandbox";
 import {
+  CHECK_SEED_COUNT,
+  CHECK_TICKS,
+  type CheckReport,
+  DEFAULT_MAX_MILLIS,
+  formatReport as formatCheckReport,
+  REPORT_VERSION,
+  runChecks,
+} from "@zerosnake/checks";
+import {
+  checkReportLines,
   DEPLOY_LIMITS,
   type DeployLimits,
   type DeployMeta,
@@ -10,9 +19,8 @@ import {
 import type { BundledBot } from "./bundle.ts";
 import { CliError } from "./errors.ts";
 import type { Io } from "./io.ts";
-import { assertLoads } from "./preflight.ts";
 import { collectSources } from "./project.ts";
-import { dim, green, red } from "./term.ts";
+import { dim, green, red, yellow } from "./term.ts";
 
 /** A source file as `deploy` uploads it. */
 export interface SourceText {
@@ -152,21 +160,16 @@ export function limitChecks(
 }
 
 /**
- * The checks `test` and `deploy` run on this machine before anything is uploaded: the deploy
- * limits, then loading the bundle in the sandbox. Prints a line per check; throws a
- * {@link CliError} on the first failure.
- *
- * Hook for the full suite (zeroplayers/snake-arena#13, `@zerosnake/checks`): once it's on main,
- * run its `runChecks({ bundle, sources })` here after `assertLoads`, print `formatReport`, and
- * fail unless it passed. `test` and `deploy` both pick it up from here.
+ * The deploy API's limits, checked on this machine before anything is uploaded. Prints one line;
+ * throws a {@link CliError} if the upload would be refused.
  */
-export async function runLocalChecks(
+export function assertWithinLimits(
   io: Io,
   bundle: BundledBot,
   sources: SourceText[],
   limits?: DeployLimits,
   meta?: DeployMeta,
-): Promise<void> {
+): void {
   const limitResults = limitChecks(bundle, sources, limits, meta);
   const failed = limitResults.filter((c) => !c.ok);
   if (failed.length > 0) {
@@ -180,14 +183,162 @@ export async function runLocalChecks(
     .map((c) => `${c.name} ${c.message}`)
     .join(", ");
   io.out(`${green("✓")} within the deploy limits ${dim(`(${sizes})`)}`);
-
-  assertLoads(await createSandbox(), "Your bot", bundle.code);
-  io.out(`${green("✓")} loads in the sandbox`);
 }
 
-/** Lines for a `CheckReport` (`versions.report`); tolerant of fields it doesn't know. */
+/** What {@link runLocalChecks} found: the suite's report and how long the suite took here. */
+export interface LocalChecks {
+  report: CheckReport;
+  millis: number;
+}
+
+/**
+ * The checks `test` and `deploy` run on this machine before anything is uploaded: the deploy
+ * API's limits ({@link assertWithinLimits}, throws), then the server's check suite
+ * ({@link runCheckSuite}). Returns the suite's report; the caller prints it.
+ */
+export async function runLocalChecks(
+  io: Io,
+  bundle: BundledBot,
+  sources: SourceText[],
+  limits?: DeployLimits,
+  meta?: DeployMeta,
+): Promise<LocalChecks> {
+  assertWithinLimits(io, bundle, sources, limits, meta);
+  const started = performance.now();
+  const report = await runCheckSuite(io, bundle, sources);
+  return { report, millis: performance.now() - started };
+}
+
+/**
+ * Above this, a suite that passed here may not finish on the server. There the suite's wall
+ * clock (the 60 s cap) doesn't decide: the Worker's CPU time limit does, on hardware that can be
+ * slower than the author's. Honest bots take 2–5 s.
+ */
+export const SLOW_SUITE_MS = 20_000;
+
+/** A warning for a suite that took {@link SLOW_SUITE_MS} or more here, else `null`. */
+export function slowSuiteWarning(millis: number): string | null {
+  if (millis < SLOW_SUITE_MS) return null;
+  return (
+    `${yellow("!")} The checks took ${Math.round(millis / 1000)} s here (most bots take a few). ` +
+    "The server runs them under a CPU time limit instead of the " +
+    `${DEFAULT_MAX_MILLIS / 1000} s clock, possibly on a slower machine; if they don't finish ` +
+    "there, the version is rejected. Make the bot's ticks cheaper to be safe."
+  );
+}
+
+/** What the suite plays, for the progress line. */
+const SUITE = `${CHECK_SEED_COUNT} matches × ${CHECK_TICKS} ticks against the house bots`;
+
+/**
+ * `runChecks` of `@zerosnake/checks` with the deploy configuration, exactly as the server runs
+ * it (same seeds, same report), with a progress line on the terminal while it runs.
+ */
+export async function runCheckSuite(
+  io: Io,
+  bundle: BundledBot,
+  sources: readonly SourceText[],
+): Promise<CheckReport> {
+  if (!io.progress) io.err(dim(`Running the checks (${SUITE})…`));
+  const started = performance.now();
+  let reads = 0;
+  let shown = Number.NEGATIVE_INFINITY;
+  // The suite runs synchronously and has no progress callback. Its wall clock (the 60 s cap) is
+  // read once per tick of the bot and once per life, so counting the reads tells how far it is.
+  // It still returns the real time: the cap and the report are the same as without it.
+  const clock = () => {
+    const now = performance.now();
+    reads++;
+    if (io.progress && now - shown >= 100) {
+      shown = now;
+      const percent = Math.min(99, Math.floor((reads / (CHECK_SEED_COUNT * CHECK_TICKS)) * 100));
+      io.progress(
+        `Running the checks (${SUITE})… ${percent}% ${dim(`${Math.round((now - started) / 1000)}s`)}`,
+      );
+    }
+    return now;
+  };
+  try {
+    return await runChecks(
+      { bundle: bundle.code, sources: sources.map(({ path, bytes }) => ({ path, bytes })) },
+      { clock },
+    );
+  } finally {
+    io.progress?.("");
+  }
+}
+
+/** One line for a report that passed: the score against the bar. */
+export function passedLine(report: CheckReport): string {
+  const { score, bar } = report.qualify;
+  const scores =
+    score !== null && bar !== null
+      ? ` ${dim(`(mean score per life ${score.toFixed(1)}, easy in your seat ${bar.toFixed(1)})`)}`
+      : "";
+  return `${green("✓")} passes the checks${scores}`;
+}
+
+/** Whether a stored report is `@zerosnake/checks`' {@link CheckReport}. */
+function isSuiteReport(report: unknown): report is CheckReport {
+  const r = report as Partial<CheckReport> | null;
+  return (
+    typeof r === "object" &&
+    r !== null &&
+    r.version === REPORT_VERSION &&
+    typeof r.passed === "boolean" &&
+    [r.limits, r.load, r.run, r.qualify].every((c) => typeof c?.summary === "string")
+  );
+}
+
+/**
+ * The names the suite's own checks have in a stored report (apps/arena's `versionReport`). Any
+ * other check was added after the suite ran: a moderator's ban, the arena's backstop.
+ */
+const SUITE_CHECK_NAMES = new Set(["limits", "loads", "seeds", "qualification"]);
+
+/**
+ * Lines for a stored version report (`versions.report`), tolerant of fields it doesn't know:
+ * - the checks consumer's `{ ok, checks, suite, text, qualificationScore }`: its `suite` (a
+ *   `@zerosnake/checks` report) as `zerosnake test` prints it, else its `text`; failed checks
+ *   that aren't the suite's go first, since they're why a version the suite passed was rejected;
+ * - a bare `@zerosnake/checks` report, printed the same way;
+ * - else the `{ ok, checks, qualificationScore }` lines.
+ */
 export function formatReport(report: unknown): string[] {
-  const r = report as { checks?: unknown; qualificationScore?: unknown } | null;
+  const r = report as {
+    checks?: unknown;
+    qualificationScore?: unknown;
+    suite?: unknown;
+    text?: unknown;
+  } | null;
+  const suite = isSuiteReport(report) ? report : isSuiteReport(r?.suite) ? r.suite : null;
+  const text = suite ? formatCheckReport(suite) : typeof r?.text === "string" ? r.text : "";
+  if (text.trim()) {
+    const lines = text
+      .trimEnd()
+      .split("\n")
+      .map((line) => (line ? `  ${line}` : line));
+    const added = Array.isArray(r?.checks)
+      ? (r.checks as { name?: unknown; ok?: unknown; message?: unknown }[]).filter(
+          (c) =>
+            c.ok === false &&
+            typeof c.name === "string" &&
+            !SUITE_CHECK_NAMES.has(c.name) &&
+            // The server may have put it in `text` already.
+            !(typeof c.message === "string" && c.message && text.includes(c.message)),
+        )
+      : [];
+    if (added.length === 0) return lines;
+    const verdicts = checkReportLines({
+      ok: false,
+      checks: added.map((c) => ({
+        name: String(c.name),
+        ok: false,
+        ...(typeof c.message === "string" ? { message: c.message } : {}),
+      })),
+    });
+    return [...verdicts.map((line) => `  ${red("✗")} ${line}`), "", ...lines];
+  }
   if (!r || !Array.isArray(r.checks)) return [];
   const lines = r.checks.map((c: { name?: unknown; ok?: unknown; message?: unknown }) => {
     const mark = c.ok ? green("✓") : red("✗");

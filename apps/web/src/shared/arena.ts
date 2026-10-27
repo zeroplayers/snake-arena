@@ -63,7 +63,12 @@ export type ActiveVersionChangeReason =
   /** The owner archived the active version; the bot has none now. */
   | "deactivate"
   /** The owner archived the bot (and with it its active version). */
-  | "archive_bot";
+  | "archive_bot"
+  /**
+   * An admin banned the version, the bot or its author (see "Moderation" below). End the
+   * running lives of `previousVersionId` now rather than letting them finish.
+   */
+  | "moderation";
 
 export interface ActiveVersionChange {
   v: typeof ACTIVE_VERSION_CHANGE_VERSION;
@@ -81,7 +86,83 @@ export interface ActiveVersionChange {
 /** RPC methods the site calls on the `MatchmakerDO` stub (besides the arena's own room → matchmaker RPC). */
 export interface MatchmakerSiteRpc {
   activeVersionChanged(change: ActiveVersionChange): Promise<void>;
+  /** The kill switch changed (see "Kill switch" below). Best effort, like the other. */
+  arenaControlChanged(control: ArenaControl): Promise<void>;
 }
+
+// ─── Kill switch ─────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The kill switch admins flip on `/admin`: one D1 row, `arena_control` with `id = 1` (made by
+ * migration 0005; treat a missing row as all zeros, "running"). Read it with
+ *
+ * ```sql
+ * SELECT paused, deploys_paused, reason, deploys_reason, updated_at FROM arena_control WHERE id = 1
+ * ```
+ *
+ * `paused = 1` stops the arena. Then the matchmaker:
+ * - starts no lives (`nextLife` returns `null`) and starts no rooms;
+ * - ends the lives running in rooms (`RoomRpc.leave`), so rooms flush their replays and close.
+ *   The lives end with `death_cause = 'retired'` (nobody's fault), rated however the arena
+ *   rates retired lives elsewhere.
+ *
+ * The site calls `arenaControlChanged` after each change (best effort), so the matchmaker can
+ * act at once; it must also poll the row, at least every `ARENA_CONTROL_POLL_MS`, and before
+ * starting a room. As a backstop against a matchmaker that's itself the problem, a room
+ * re-reads the row at the same interval (one primary-key read, cached in memory in between)
+ * and, when paused, retires its lives and closes by itself.
+ *
+ * `paused = 0` again: carry on as after a restart (reconcile from D1, refill rooms).
+ *
+ * `deploys_paused = 1` makes the deploy API refuse new versions (503 `deploys_paused`). The
+ * checks consumer should go on with versions already queued; to stop bot code from running at
+ * all, pause both.
+ */
+export interface ArenaControl {
+  v: typeof ARENA_CONTROL_VERSION;
+  paused: boolean;
+  deploysPaused: boolean;
+  /** Why `paused` last changed, as the admin wrote it. */
+  reason: string | null;
+  /** Why `deploysPaused` last changed (its own column, `deploys_reason`, migration 0006). */
+  deploysReason: string | null;
+  /** Unix ms of the change. */
+  updatedAt: number;
+}
+
+export const ARENA_CONTROL_VERSION = 1;
+
+/** How stale the matchmaker's and rooms' view of `arena_control` may get. */
+export const ARENA_CONTROL_POLL_MS = 30_000;
+
+// ─── Moderation ──────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Admins (`ADMIN_USER_IDS` / `ADMIN_GITHUB_IDS`, see `src/server/moderation.ts`) can ban a
+ * version, a bot or a user. Every ban is plain D1 state the matchmaker already follows, so
+ * nothing new has to be read:
+ *
+ * - **Version**: `status = 'rejected'`, with a failed check `{ name: "moderation", ok: false,
+ *   message: <reason> }` appended to `versions.report` (like the room backstop's
+ *   `arena-backstop` check), and `report.text`, if any, prefixed with "Rejected by a moderator:
+ *   <reason>" so the suite's "Checks passed" isn't the first thing the author reads. Final.
+ * - **Bot**: `bots.banned_at` / `ban_reason` set; its `ready` version becomes `archived` and
+ *   versions still in checks become `rejected` (same as archiving the bot). Lifting the ban
+ *   leaves the bot with no active version, the owner picks one.
+ * - **User**: `users.banned_at` / `ban_reason` set; the same happens to each of their bots
+ *   (but `bots.banned_at` stays as it was). They can't deploy or sign in the CLI.
+ *
+ * Each status change bumps `versions.change_seq`, so the incremental poll sees it, and the site
+ * sends `activeVersionChanged` with reason `moderation` for each bot whose `ready` version went
+ * away. A trigger (`versions_ready_unbanned`) aborts any write that would make a version of a
+ * banned bot, or of a banned user's bot, `ready`: the checks consumer must reject the version
+ * (`reason: banned`) rather than retry; see `CheckJob` in `src/shared/checks.ts`.
+ *
+ * The checks consumer, before running a job, may skip it (and leave the version `rejected`)
+ * if the bot or its owner is banned; the ban already rejected `validating` versions, so this
+ * only matters for a job it picked up mid-ban.
+ */
+export const MODERATION_CHECK_NAME = "moderation";
 
 /** Arena quotas the site shows (SPEC §4). The matchmaker enforces them. */
 export const ARENA_LIMITS = {

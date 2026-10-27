@@ -144,6 +144,7 @@ code {
 
 .site-nav {
   display: flex;
+  align-items: center;
   gap: 20px;
 }
 
@@ -165,8 +166,9 @@ code {
 
 .site-footer {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
-  gap: 16px;
+  gap: 8px 16px;
   padding-block: 20px;
   color: var(--text-muted);
   font-size: 13px;
@@ -197,10 +199,6 @@ code {
   font-size: 20px;
 }
 
-.hero {
-  padding-block: 40px 8px;
-}
-
 .lead {
   max-width: 640px;
   margin: 0 0 24px;
@@ -210,6 +208,7 @@ code {
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
@@ -234,32 +233,6 @@ code {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   backdrop-filter: blur(10px);
-}
-
-.arena-placeholder {
-  display: grid;
-  place-items: center;
-  aspect-ratio: 16 / 7;
-  background:
-    radial-gradient(circle at 30% 40%, rgba(4, 255, 0, 0.08), transparent 40%),
-    radial-gradient(circle at 70% 60%, rgba(0, 255, 242, 0.08), transparent 40%);
-}
-
-.steps {
-  display: grid;
-  gap: 12px;
-  margin: 0;
-  padding-left: 20px;
-}
-
-.steps li {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-}
-
-.steps code {
-  color: var(--green-secondary);
 }
 
 .table {
@@ -786,4 +759,451 @@ button.button:disabled {
   .replay-stage {
     height: 85dvh;
   }
+}
+
+/* Landing */
+
+/* Phones: headline, arena, then the pitch. Wide: text left, arena right. */
+.landing-hero {
+  display: grid;
+  grid-template-areas: "head" "arena" "body";
+  gap: 20px;
+  padding-block: 8px;
+}
+
+.landing-head {
+  grid-area: head;
+}
+
+.landing-head .title {
+  margin: 0;
+}
+
+.hero-arena {
+  grid-area: arena;
+}
+
+.landing-body {
+  grid-area: body;
+}
+
+@media (min-width: 860px) {
+  .landing-hero {
+    grid-template-areas: "head arena" "body arena";
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+    gap: 20px 40px;
+    padding-block: 32px 16px;
+  }
+
+  .landing-head {
+    align-self: end;
+  }
+}
+
+.eyebrow {
+  margin: 0 0 12px;
+  color: var(--light-blue);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.landing-title {
+  font-size: clamp(28px, 4.4vw, 42px);
+}
+
+.lead code {
+  color: var(--green-secondary);
+  font-size: 0.92em;
+}
+
+.hero-arena {
+  margin: 0;
+  min-width: 0;
+}
+
+.hero-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  max-height: 72dvh;
+  margin-inline: auto;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background:
+    radial-gradient(circle at 35% 40%, rgba(4, 255, 0, 0.08), transparent 45%),
+    radial-gradient(circle at 65% 60%, rgba(0, 255, 242, 0.08), transparent 45%), #000;
+}
+
+.hero-stage canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.hero-stage-note {
+  padding: 16px;
+  text-align: center;
+}
+
+.hero-caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 30px;
+  margin-top: 10px;
+}
+
+.live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: var(--red);
+  vertical-align: 1px;
+}
+
+.landing-section {
+  scroll-margin-top: 16px;
+}
+
+.how {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (min-width: 720px) {
+  .how {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.how-step h3 {
+  margin: 8px 0 6px;
+  font-size: 17px;
+}
+
+.how-step p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.how-n {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+  color: var(--accent);
+  font-size: 14px;
+}
+
+.start-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.start-head .subtitle {
+  margin: 0;
+}
+
+.terminal {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: #000;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  list-style: none;
+}
+
+.terminal li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 16px;
+}
+
+/* Comments line up in a column once there's room for one. */
+@media (min-width: 640px) {
+  .terminal {
+    grid-template-columns: max-content 1fr;
+  }
+
+  .terminal li {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+  }
+}
+
+.terminal code {
+  color: var(--green-secondary);
+  white-space: pre;
+}
+
+.terminal .prompt {
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.terminal .muted {
+  font-size: 13px;
+}
+
+.not-yet {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px dashed #ffb02e88;
+  border-radius: 8px;
+}
+
+.not-yet h3 {
+  margin: 0 0 6px;
+  color: #ffb02e;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.not-yet ul {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding-left: 18px;
+  color: var(--gray-secondary);
+  font-size: 14px;
+}
+
+.not-yet code {
+  color: var(--green-secondary);
+}
+
+.not-yet p {
+  margin: 0;
+}
+
+.link-grid {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (min-width: 720px) {
+  .link-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.link-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+}
+
+button.link-card {
+  cursor: pointer;
+}
+
+a.link-card:hover,
+button.link-card:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+
+.link-card strong {
+  color: var(--link);
+  font-size: 16px;
+}
+
+.soon {
+  color: var(--text-muted);
+}
+
+.soon-tag {
+  padding: 1px 6px;
+  border: 1px solid #444;
+  border-radius: 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  vertical-align: 2px;
+}
+
+.footer-links {
+  display: flex;
+  gap: 16px;
+}
+
+/* Docs */
+
+.docs {
+  display: grid;
+  gap: 16px;
+}
+
+@media (min-width: 860px) {
+  .docs {
+    grid-template-columns: 180px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .docs-nav {
+    position: sticky;
+    top: 16px;
+  }
+}
+
+.docs-nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (min-width: 860px) {
+  .docs-nav ul {
+    flex-direction: column;
+  }
+}
+
+.docs-nav a {
+  color: var(--text-muted);
+}
+
+.docs-nav a[data-status="active"] {
+  color: var(--accent);
+}
+
+.docs-page {
+  min-width: 0;
+}
+
+.doc {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  overflow-wrap: break-word;
+}
+
+.doc h1,
+.doc h2,
+.doc h3,
+.doc h4 {
+  font-family: var(--font);
+  line-height: 1.25;
+  scroll-margin-top: 16px;
+}
+
+.doc h1 {
+  margin: 0 0 16px;
+  font-size: clamp(26px, 4vw, 34px);
+}
+
+.doc h2 {
+  margin: 32px 0 12px;
+  padding-top: 8px;
+  border-top: 1px solid #222;
+  font-size: 22px;
+}
+
+.doc h3 {
+  margin: 24px 0 8px;
+  font-size: 18px;
+}
+
+.doc p,
+.doc ul,
+.doc ol {
+  margin: 0 0 14px;
+}
+
+.doc li + li {
+  margin-top: 4px;
+}
+
+.doc code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #ffffff12;
+  color: var(--green-secondary);
+  font-size: 0.88em;
+}
+
+.doc pre {
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  border: 1px solid #222;
+  border-radius: 8px;
+  background: #000;
+  line-height: 1.5;
+}
+
+.doc pre code {
+  padding: 0;
+  background: none;
+  font-size: 13.5px;
+}
+
+.doc blockquote {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border-left: 3px solid #ffb02e;
+  border-radius: 0 8px 8px 0;
+  background: #ffb02e0d;
+  color: #ddd;
+}
+
+.doc blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.doc .table-scroll {
+  margin: 0 0 16px;
+}
+
+.doc .table {
+  font-size: 14px;
+}
+
+.doc hr {
+  border: 0;
+  border-top: 1px solid #222;
+}
+
+/* Links inside running text are underlined, not told apart by colour alone. */
+.landing-section p a,
+.doc p a,
+.doc li a,
+.doc td a,
+.doc blockquote a {
+  text-decoration: underline;
+  text-decoration-color: #00ffdd66;
+  text-underline-offset: 2px;
 }

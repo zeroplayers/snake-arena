@@ -11,7 +11,7 @@ import {
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { packageRoot } from "./paths.ts";
-import { cleanUp, GOOD_BOT, makeProject, TUNING } from "./testing/project.ts";
+import { cleanUp, GOOD_BOT, makeProject, SUICIDAL_BOT, TUNING } from "./testing/project.ts";
 
 afterAll(cleanUp);
 
@@ -27,7 +27,7 @@ function run(cmd: string, args: string[], cwd: string) {
  * monorepo is reachable from there.
  */
 describe("the packed CLI", () => {
-  it("installs and runs init, sim and help with nothing but its own files", () => {
+  it("installs and runs init, sim, test and help with nothing but its own files", () => {
     const root = packageRoot();
     const tmp = makeProject({ "package.json": JSON.stringify({ name: "outside", private: true }) });
 
@@ -102,5 +102,19 @@ describe("the packed CLI", () => {
     expect(sim.code, sim.err).toBe(0);
     expect(sim.out).toContain("Match: seed 1, 100 ticks");
     expect(sim.out).toContain("my-bot (you)");
-  }, 120_000);
+
+    // The check suite is in dist/ too: the template bot passes, a hopeless one fails and says why.
+    const test = run("node", [bin, "test"], project);
+    expect(test.code, `${test.out}\n${test.err}`).toBe(0);
+    expect(test.out).toContain("Checks passed: this bot can be deployed.");
+    const json = run("node", [bin, "test", "--json"], project);
+    expect(json.code, json.err).toBe(0);
+    expect(JSON.parse(json.out)).toMatchObject({ passed: true, ticks: 1000 });
+    writeFileSync(join(project, "src", "bot.ts"), SUICIDAL_BOT);
+    const failing = run("node", [bin, "test"], project);
+    expect(failing.code, failing.err).toBe(1);
+    expect(failing.out).toContain("Checks failed: this bot would be rejected.");
+    expect(failing.out).toContain("✗ Qualifies scores below easy");
+    expect(failing.out).toContain("What to fix:");
+  }, 240_000);
 });

@@ -4,7 +4,7 @@
 npx zerosnake init my-snake    # new bot project from template/ (offline)
 cd my-snake
 npx zerosnake sim              # local match in the sandbox, opens the viewer
-npx zerosnake test             # the deploy checks (#13)
+npx zerosnake test             # the server's deploy checks, same seeds, same verdict
 npx zerosnake login            # device flow in the browser
 npx zerosnake deploy --create  # upload; live once the server's checks pass
 npx zerosnake status           # bots, active versions, ratings, deploys left today
@@ -41,6 +41,28 @@ On an M1 Max laptop: `init` ~0.2 s, viewer's first ticks ~0.5 s after `sim` star
 3000-tick match (5 minutes of game time) against the four house bots ~4 s (~1 s with
 `--native-house`).
 
+## `test`
+
+```bash
+zerosnake test [--bot src/bot.ts] [--json]
+```
+
+- Bundles with `bundleBot` exactly like `sim` and `deploy`, checks the deploy API's limits and
+  path rules (`assertWithinLimits` in `src/artifact.ts`), then runs `runChecks` from
+  `@zerosnake/checks` with the deploy configuration (`runCheckSuite`): the same suite, seeds
+  (from the bundle's hash) and report as the server's checks, so a bot that passes here passes
+  there, except on time: here the suite's 60 s wall-clock cap stops a slow bot, while on the
+  server the Worker's CPU time limit does, possibly on slower hardware. So a pass that took
+  `SLOW_SUITE_MS` (20 s) or more prints a warning (`slowSuiteWarning`) in `test` and `deploy`; it
+  doesn't block. See `packages/checks/README.md` for the checks.
+- Prints `formatReport` (what to fix included), or the `CheckReport` JSON with `--json` (stdout
+  carries only the JSON; the other lines go to stderr). Exit `0` passed, `1` failed.
+- The suite runs synchronously and has no progress callback. On a terminal the CLI shows a
+  progress line by counting reads of the suite's clock (`clock` option, once per bot tick and
+  per life; it returns the real time, so the report is unchanged); elsewhere it prints one line.
+- Typical run: 2–5 s for an honest bot. A problem before the matches (a build error, a deploy
+  limit) is a plain error with exit 1 and no JSON.
+
 ## Remote commands
 
 `login`, `logout`, `deploy`, `status` and `logs` talk to the site's API (`apps/web`, types from
@@ -62,12 +84,17 @@ allowed only for localhost.
 - **`deploy`**: `GET /api/me` first (bot exists? quota left? the server's limits), then bundles
   with `bundleBot` exactly like `sim`, collects the sources (everything under `src/` except hidden
   files, plus other project files the bundle imports, minus a vendored SDK; text only), and runs
-  the local checks (`src/artifact.ts`: the deploy API's limits and path rules, then loading in the
-  sandbox; the same as `test`). The upload always carries an `Idempotency-Key` (a UUID per run,
+  the local checks (`runLocalChecks` in `src/artifact.ts`: the deploy API's limits and path rules,
+  then the full check suite, exactly as `test`). A bot that fails them isn't uploaded (exit 1 with
+  the report), so it costs no deploy. `--skip-local-checks` skips the suite (not the limits) and
+  lets the server decide; on a pass it prints the score against `easy` and any warnings. The upload always carries an `Idempotency-Key` (a UUID per run,
   reused by every retry): network errors, 5xx, a gateway's 429 and `409 deploy_in_progress` are
   retried with backoff for up to 90 s, which outlasts the API's one-minute takeover of a deploy
   that died half way. Then it polls `GET /api/bots/:bot/versions/:n` every 2 s (up to 10 minutes)
-  until `ready` or `rejected`, and prints the check report. Still `validating` after that, it exits
+  until `ready` or `rejected`, and prints the check report (`formatReport` in `src/artifact.ts`:
+  the checks consumer's `{ ok, checks, suite, text, qualificationScore }` prints its `suite` as
+  `test` prints it, else its `text`; a bare `@zerosnake/checks` report prints the same way, and
+  `{ ok, checks }` alone, like the consumer's "checks didn't finish" report, as one line per check). Still `validating` after that, it exits
   1 and says the checks may not run on this server yet (#22; the API has no hint for that). The
   local upload-size check measures the exact body sent, `meta` included.
   The bot is `--bot <slug>`, else `"zerosnake": { "bot": "<slug>" }` in package.json, else the
@@ -106,7 +133,9 @@ don't need an install: without one, the CLI bundles the bot against its own copy
 every workspace package it uses), `client.js` (the viewer page), `house/*.js` (house bot
 bundles), `sdk/` and `template/`. The package ships only `bin/` and `dist/`; its dependencies
 are esbuild and QuickJS. `src/pack.test.ts` packs it, installs it outside the monorepo and runs
-`init` and `sim --headless`. The package stays `private` until publishing is decided (#31).
+`init`, `sim --headless` and `test` (on the template bot, which passes, and on a bot that
+can't beat `easy`). `@zerosnake/checks` is bundled into `cli.js` like the other workspace
+packages. The package stays `private` until publishing is decided (#31).
 
 In a checkout, build once with `pnpm --filter zerosnake build` before running
 `bin/zerosnake.js`; the bin never builds by itself. Tests run the sources directly.

@@ -39,6 +39,8 @@ export class ApiError extends Error {
     /** The parsed body, if it was JSON. */
     readonly json: unknown,
     readonly path: string,
+    /** How long the server asked to wait (`Retry-After`, else the body's `retryAfter`), if it did. */
+    readonly retryAfterMs: number | null = null,
   ) {
     super(`HTTP ${status} from ${path}`);
     this.name = "ApiError";
@@ -159,9 +161,30 @@ export class Api {
         json = null;
       }
     }
-    if (!response.ok || json === null) throw new ApiError(response.status, json, path);
+    if (!response.ok || json === null) {
+      const retryAfter =
+        parseRetryAfter(response.headers.get("retry-after"), this.remote.now()) ??
+        bodyRetryAfter(json);
+      throw new ApiError(response.status, json, path, retryAfter);
+    }
     return json as T;
   }
+}
+
+/** `Retry-After` (seconds, or an HTTP date) in ms from `now`; `null` if absent or malformed. */
+export function parseRetryAfter(value: string | null, now: number): number | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000;
+  const at = Date.parse(trimmed);
+  return Number.isNaN(at) ? null : Math.max(0, at - now);
+}
+
+function bodyRetryAfter(json: unknown): number | null {
+  const seconds = (json as { retryAfter?: unknown } | null)?.retryAfter;
+  return typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0
+    ? seconds * 1000
+    : null;
 }
 
 function isRedirect(response: Response): boolean {
@@ -178,13 +201,21 @@ function resolve(location: string | null, base: string): string | null {
 }
 
 /**
+ * Answers that look transient by status but come from an admin, not a hiccup: they last until a
+ * person changes them (minutes to hours), so the CLI says so and stops instead of retrying.
+ */
+const ADMIN_STOPS = new Set(["deploys_paused", "arena_stopped"]);
+
+/**
  * Worth trying again with the same request: no answer, a 5xx (the deploy API's 503 `unavailable`
  * and 500 `internal_error`, or a gateway's), 409 `deploy_in_progress`, or a 429 from a rate
- * limiter in front of the API (not our `quota_exceeded`, which lasts until midnight).
+ * limiter (not our `quota_exceeded`, which lasts until midnight). Not a 503 `deploys_paused` or
+ * `arena_stopped`: an admin switched those on.
  */
 export function isTransient(e: unknown): boolean {
   if (e instanceof NetworkError) return true;
   if (!(e instanceof ApiError)) return false;
+  if (e.code !== null && ADMIN_STOPS.has(e.code)) return false;
   if (e.status >= 500) return true;
   if (e.status === 409) return e.code === "deploy_in_progress";
   if (e.status === 429) return e.code !== "quota_exceeded";
@@ -199,7 +230,9 @@ export interface RetryOptions {
 
 /**
  * Runs `fn` until it succeeds or fails with a non-transient error, backing off 1, 2, 4, 8, then
- * 10 s. The default 90 s outlasts the deploy API's one-minute takeover of a stuck deploy.
+ * 10 s, or longer when the server asks for it (`Retry-After`). The default 90 s outlasts the
+ * deploy API's one-minute takeover of a stuck deploy; when the server asks for a wait past it,
+ * the error is thrown at once (its message says when to try again).
  */
 export async function withRetries<T>(
   remote: Remote,
@@ -211,7 +244,9 @@ export async function withRetries<T>(
     try {
       return await fn();
     } catch (e) {
-      const delay = Math.min(1000 * 2 ** attempt, 10_000);
+      const backoff = Math.min(1000 * 2 ** attempt, 10_000);
+      const asked = e instanceof ApiError ? (e.retryAfterMs ?? 0) : 0;
+      const delay = Math.max(backoff, asked);
       if (!isTransient(e) || waited + delay > maxWaitMs) throw e;
       onRetry?.(e, delay);
       await remote.sleep(delay);
@@ -308,6 +343,10 @@ const HINTS: Partial<Record<string, string>> = {
   not_bot_owner: "Pick one of your own bots with --bot (`zerosnake status` lists them).",
   bot_limit_reached: "Archive a bot on the site, or deploy to an existing one with --bot.",
   unavailable: "Nothing was deployed. Try again in a minute.",
+  deploys_paused:
+    "The server's admins paused deploys for everyone; it isn't about your bot. Deploy again later.",
+  arena_stopped:
+    "The server's admins stopped the arena for everyone; it isn't about your bot. Try again later.",
   internal_error: "If it keeps failing, please report it.",
 };
 

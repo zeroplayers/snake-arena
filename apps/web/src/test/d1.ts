@@ -6,6 +6,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getPlatformProxy, unstable_splitSqlQuery as splitSqlQuery } from "wrangler";
+import { RATE_LIMITS, type RateLimitBinding, type RateLimitRule } from "../server/rate-limit";
 
 const appDir = join(import.meta.dirname, "../..");
 export const migrationsDir = join(appDir, "migrations");
@@ -21,16 +22,32 @@ export async function createTestD1({ seed = false } = {}): Promise<TestD1> {
   return { db: env.DB, dispose };
 }
 
-/** What the CLI API needs besides D1: the R2 buckets and the checks queue producer. */
+/**
+ * What the CLI API needs besides D1: the R2 buckets and the checks queue producer, plus the
+ * rate limiters (Miniflare's, exact within one process).
+ */
 export interface TestPlatformEnv {
   DB: D1Database;
   BUNDLES: R2Bucket;
   SOURCES: R2Bucket;
   CHECKS_QUEUE: Queue;
+  RATE_LIMIT_IP: RateLimitBinding;
+  RATE_LIMIT_AUTH: RateLimitBinding;
+  RATE_LIMIT_USER: RateLimitBinding;
+  RATE_LIMIT_DEPLOY: RateLimitBinding;
 }
 
-/** D1 plus local R2 buckets and a queue producer (Miniflare), nothing persisted. */
-export async function createTestPlatform({ seed = false } = {}) {
+export interface TestPlatformOptions {
+  seed?: boolean;
+  /** Overrides the `limit` of rate limit rules (the defaults are `RATE_LIMITS`). */
+  rateLimits?: Partial<Record<RateLimitRule, number>>;
+}
+
+/** D1 plus local R2 buckets, a queue producer and rate limiters (Miniflare), nothing persisted. */
+export async function createTestPlatform({
+  seed = false,
+  rateLimits = {},
+}: TestPlatformOptions = {}) {
   // A config with nothing but these bindings, so the proxy doesn't look for apps/arena.
   const dir = mkdtempSync(join(tmpdir(), "zerosnake-d1-"));
   const configPath = join(dir, "wrangler.json");
@@ -45,6 +62,11 @@ export async function createTestPlatform({ seed = false } = {}) {
         { binding: "SOURCES", bucket_name: "test-sources" },
       ],
       queues: { producers: [{ binding: "CHECKS_QUEUE", queue: "test-checks" }] },
+      ratelimits: Object.entries(RATE_LIMITS).map(([rule, { binding, limit, period }], i) => ({
+        name: binding,
+        namespace_id: String(9001 + i),
+        simple: { limit: rateLimits[rule as RateLimitRule] ?? limit, period },
+      })),
     }),
   );
   const proxy = await getPlatformProxy<TestPlatformEnv>({

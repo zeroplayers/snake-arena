@@ -24,6 +24,9 @@
  *   would let an author deploy many versions and switch to whichever got the luckiest run
  *   (the "redeploy lottery"); restarting it for free would let them roll back until a run of 30
  *   lives comes out lucky. Archiving the active version costs nothing.
+ * - Bans (`src/server/moderation.ts`): a banned user can still look, but changes nothing. A
+ *   banned bot can't be restored or given an active version until an admin lifts the ban.
+ * - Every call counts against the user's `user` rate limit (`src/server/rate-limit.ts`).
  *
  * After each change of the active version the matchmaker is told (`src/shared/arena.ts`).
  */
@@ -43,6 +46,8 @@ import { type CheckReport, checkReportLines } from "../shared/checks";
 import { DEPLOY_LIMITS, type QuotaInfo, type VersionStatus } from "../shared/deploy";
 import { botNameProblem, parseBotName } from "./bot-names";
 import { deployQuota, quotaUsedSql, utcDayStart } from "./quota";
+import { noRateLimit, type RateLimiter, rateLimitedBody } from "./rate-limit";
+import { setRequestOutcome, setRequestUser } from "./request-context";
 
 export interface BotAdminEnv {
   DB: D1Database;
@@ -53,7 +58,12 @@ export interface BotAdminEnv {
 }
 
 export interface WebSession {
-  user: { id: string; username?: string | null | undefined };
+  user: {
+    id: string;
+    username?: string | null | undefined;
+    bannedAt?: Date | null | undefined;
+    banReason?: string | null | undefined;
+  };
 }
 
 export interface BotAdminOptions {
@@ -63,6 +73,8 @@ export interface BotAdminOptions {
   notify?: (change: ActiveVersionChange) => Promise<void>;
   now?: () => Date;
   limits?: Partial<BotAdminLimits>;
+  /** Per-user rate limits; none if left out. */
+  rateLimiter?: RateLimiter;
 }
 
 export interface BotAdminLimits {
@@ -97,7 +109,13 @@ export type AdminErrorCode =
   | "not_active"
   /** Only `archived` versions (once `ready`) can be made active again. */
   | "version_not_activatable"
-  | "quota_exceeded";
+  | "quota_exceeded"
+  /** An admin suspended the account: it can look, not change. */
+  | "user_banned"
+  /** An admin banned the bot. */
+  | "bot_banned"
+  /** Too many calls in a short time; try again in a minute. */
+  | "rate_limited";
 
 export type AdminResult<T> =
   | { ok: true; value: T }
@@ -139,6 +157,8 @@ export interface ManagedBot {
   slug: string;
   createdAt: string;
   archivedAt: string | null;
+  /** Set while an admin has banned the bot. */
+  banned: Ban | null;
   /** The `ready` version, however old (it may not be among `versions`). */
   activeVersion: ManagedVersion | null;
   /** Lives started since 00:00 UTC, all versions. */
@@ -165,8 +185,15 @@ export interface RejectedVersion {
   problems: string[];
 }
 
+export interface Ban {
+  at: string;
+  reason: string | null;
+}
+
 export interface ManagePage {
   username: string | null;
+  /** Set while an admin has suspended the account. */
+  banned: Ban | null;
   /** Active bots first (oldest first), then archived ones (latest archived first). */
   bots: ManagedBot[];
   activeBots: number;
@@ -190,30 +217,38 @@ const NOTIFY_TIMEOUT_MS = 2_000;
 const dialect = new SQLiteAsyncDialect();
 
 /**
- * Calls `activeVersionChanged` on the global `MatchmakerDO`, best effort: errors and timeouts are
- * logged, never thrown, since the matchmaker reconciles from D1 anyway. Until #23 implements the
- * method the call fails and only logs.
+ * Calls a `MatchmakerSiteRpc` method on the global `MatchmakerDO`, best effort: errors and
+ * timeouts are logged, never thrown, since the matchmaker reconciles from D1 anyway. Until #23
+ * implements the methods the calls fail and only log.
  */
+export async function callMatchmaker(
+  namespace: DurableObjectNamespace | undefined,
+  call: (stub: MatchmakerSiteRpc) => Promise<void>,
+  detail: unknown,
+) {
+  if (!namespace) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const stub = namespace.get(
+      namespace.idFromName(MATCHMAKER_NAME),
+    ) as unknown as MatchmakerSiteRpc;
+    await Promise.race([
+      call(stub),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("timed out")), NOTIFY_TIMEOUT_MS);
+      }),
+    ]);
+  } catch (error) {
+    console.warn("matchmaker not notified; it will pick the change up from D1", detail, error);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** `activeVersionChanged`, through `callMatchmaker`. */
 export function matchmakerNotifier(namespace: DurableObjectNamespace | undefined) {
-  return async (change: ActiveVersionChange) => {
-    if (!namespace) return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const stub = namespace.get(
-        namespace.idFromName(MATCHMAKER_NAME),
-      ) as unknown as MatchmakerSiteRpc;
-      await Promise.race([
-        stub.activeVersionChanged(change),
-        new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error("timed out")), NOTIFY_TIMEOUT_MS);
-        }),
-      ]);
-    } catch (error) {
-      console.warn("matchmaker not notified; it will pick the change up from D1", change, error);
-    } finally {
-      clearTimeout(timer);
-    }
-  };
+  return (change: ActiveVersionChange) =>
+    callMatchmaker(namespace, (stub) => stub.activeVersionChanged(change), change);
 }
 
 // ─── API ─────────────────────────────────────────────────────────────────────────────────────────
@@ -228,7 +263,7 @@ type VersionRow = typeof versions.$inferSelect;
 type RatingRow = typeof ratings.$inferSelect;
 
 function managedVersion(
-  bot: Pick<BotRow, "archivedAt">,
+  bot: Pick<BotRow, "archivedAt" | "bannedAt">,
   v: VersionRow,
   rating: RatingRow | null,
 ): ManagedVersion {
@@ -242,7 +277,7 @@ function managedVersion(
     rating: rating && { mean: rating.mean, ci: rating.ci, nLives: rating.nLives },
     message: v.meta?.message ?? null,
     problems: v.status === "rejected" ? checkReportLines(v.report) : [],
-    canActivate: v.status === "archived" && bot.archivedAt === null,
+    canActivate: v.status === "archived" && bot.archivedAt === null && bot.bannedAt === null,
   };
 }
 
@@ -288,6 +323,7 @@ export function createBotAdmin(env: BotAdminEnv, options: BotAdminOptions) {
   const db = createDb(env.DB);
   const now = options.now ?? (() => new Date());
   const notify = options.notify ?? (async () => {});
+  const rateLimiter = options.rateLimiter ?? noRateLimit;
   const siteOrigin = new URL(env.BETTER_AUTH_URL).origin;
   const limits: BotAdminLimits = {
     botsPerAuthor: positiveInt(env.BOTS_PER_AUTHOR) ?? DEPLOY_LIMITS.botsPerAuthor,
@@ -323,9 +359,19 @@ export function createBotAdmin(env: BotAdminEnv, options: BotAdminOptions) {
     try {
       if (mutation) sameOrigin(request);
       const user = await webUser(request);
+      setRequestUser(user.id);
+      const verdict = await rateLimiter.check("user", user.id);
+      if (!verdict.ok) fail("rate_limited", rateLimitedBody(verdict).message);
+      if (mutation && user.bannedAt) {
+        fail(
+          "user_banned",
+          `Your account is suspended${user.banReason ? `: ${user.banReason}` : ""}. Your bots can't be changed.`,
+        );
+      }
       return { ok: true, value: await fn(user.id, user) };
     } catch (error) {
       if (error instanceof AdminError) {
+        setRequestOutcome(error.code);
         return { ok: false, error: error.code, message: error.message };
       }
       throw error;
@@ -442,6 +488,7 @@ export function createBotAdmin(env: BotAdminEnv, options: BotAdminOptions) {
             slug: bot.slug,
             createdAt: bot.createdAt.toISOString(),
             archivedAt: bot.archivedAt?.toISOString() ?? null,
+            banned: bot.bannedAt ? { at: bot.bannedAt.toISOString(), reason: bot.banReason } : null,
             activeVersion: active ? managedVersion(bot, active.version, active.rating) : null,
             livesToday,
             versionCount,
@@ -471,6 +518,9 @@ export function createBotAdmin(env: BotAdminEnv, options: BotAdminOptions) {
 
         return {
           username: user.username ?? null,
+          banned: user.bannedAt
+            ? { at: user.bannedAt.toISOString(), reason: user.banReason ?? null }
+            : null,
           bots: managedBots,
           activeBots: botRows.filter((r) => r.bot.archivedAt === null).length,
           quota: await quota(userId),
@@ -593,6 +643,7 @@ export function createBotAdmin(env: BotAdminEnv, options: BotAdminOptions) {
         const restored = await db.all<{ id: string }>(sql`
           UPDATE ${bots} SET archived_at = NULL
           WHERE id = ${input.botId} AND owner_id = ${userId} AND archived_at IS NOT NULL
+            AND banned_at IS NULL
             AND (
               SELECT count(*) FROM ${bots} WHERE owner_id = ${userId} AND archived_at IS NULL
             ) < ${limits.botsPerAuthor}
@@ -600,6 +651,7 @@ export function createBotAdmin(env: BotAdminEnv, options: BotAdminOptions) {
         if (restored.length > 0) return { id: input.botId };
         const bot = await ownBot(userId, input.botId);
         if (!bot.archivedAt) fail("bot_not_archived", `"${bot.name}" isn't archived.`);
+        if (bot.bannedAt) fail("bot_banned", `"${bot.name}" is banned, so it can't be restored.`);
         return fail(
           "bot_limit_reached",
           `You already have ${limits.botsPerAuthor} active bots. Archive one to restore "${bot.name}".`,
@@ -621,7 +673,7 @@ export function createBotAdmin(env: BotAdminEnv, options: BotAdminOptions) {
                 ${t}
               FROM ${versions} AS v JOIN ${bots} AS b ON b.id = v.bot_id
               WHERE v.id = ${input.versionId} AND b.owner_id = ${userId}
-                AND b.archived_at IS NULL AND v.status = 'archived'
+                AND b.archived_at IS NULL AND b.banned_at IS NULL AND v.status = 'archived'
                 AND ${quotaUsedSql(userId, utcDayStart(at))} < ${limits.deploysPerDay}`,
           [
             // The current one first, so the unique index never sees two `ready` versions.
@@ -636,6 +688,7 @@ export function createBotAdmin(env: BotAdminEnv, options: BotAdminOptions) {
         );
         if (!row) {
           const { version, bot } = await ownVersion(userId, input.versionId);
+          if (bot.bannedAt) fail("bot_banned", `"${bot.name}" is banned, so it can't play.`);
           if (bot.archivedAt) {
             fail("bot_archived", `"${bot.name}" is archived. Restore it first.`);
           }

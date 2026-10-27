@@ -15,7 +15,8 @@ export async function getProfile(db: Db, username: string): Promise<Profile | nu
       createdAt: users.createdAt,
     })
     .from(users)
-    .where(eq(users.username, username.toLowerCase()))
+    // A banned user's profile is gone while the ban lasts.
+    .where(and(eq(users.username, username.toLowerCase()), isNull(users.bannedAt)))
     .limit(1);
   if (!user?.username) return null;
 
@@ -36,8 +37,8 @@ export async function getProfile(db: Db, username: string): Promise<Profile | nu
     .from(bots)
     .leftJoin(versions, and(eq(versions.botId, bots.id), eq(versions.status, "ready")))
     .leftJoin(ratings, eq(ratings.versionId, versions.id))
-    // Archived bots drop off the profile; their pages stay reachable by URL.
-    .where(and(eq(bots.ownerId, user.id), isNull(bots.archivedAt)))
+    // Archived and banned bots drop off the profile; their pages stay reachable by URL.
+    .where(and(eq(bots.ownerId, user.id), isNull(bots.archivedAt), isNull(bots.bannedAt)))
     .orderBy(bots.createdAt);
 
   return {
@@ -79,9 +80,12 @@ export function leaderboardQuery(db: Db, { limit = 50, offset = 0 }: Leaderboard
       and(
         eq(versions.id, ratings.versionId),
         eq(versions.status, "ready"),
-        // Never true together with `ready` (archiving a bot archives its versions), but the
-        // leaderboard must not depend on every writer keeping that up.
+        // Never true together with `ready` (archiving or banning a bot, or banning its author,
+        // archives its versions), but the leaderboard must not depend on every writer keeping
+        // that up.
         isNull(bots.archivedAt),
+        isNull(bots.bannedAt),
+        isNull(users.bannedAt),
         gte(ratings.nLives, RANKED_MIN_LIVES),
       ),
     )

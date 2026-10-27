@@ -14,6 +14,10 @@
   "observability": { "enabled": true },
   // Bundles the house bots into src/house-bundles.gen.ts (git-ignored) before dev and deploy.
   "build": { "command": "node scripts/house-bundles.ts", "watch_dir": "../../bots/house/src" },
+  // CPU time per invocation, the plan maximum; repeated in `env.staging`. The checks consumer
+  // needs it: in workerd the suite's own time cap never fires, so a slow bot is stopped only by
+  // this limit, and queue consumers default to 30 s (`packages/checks/README.md`, "Runtime").
+  "limits": { "cpu_ms": 300000 },
 
   // Shared by all environments.
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MatchmakerDO", "RoomDO"] }],
@@ -29,6 +33,8 @@
     { "binding": "REPLAYS", "bucket_name": "zerosnake-dev-replays" },
     { "binding": "TRACES", "bucket_name": "zerosnake-dev-traces" }
   ],
+  // Checks consumer (src/checks.ts): one job per batch, as each holds a sandbox of up to 64 MiB.
+  // After the last retry a job goes to the DLQ, whose consumer rejects the version.
   "queues": {
     "producers": [{ "binding": "CHECKS_QUEUE", "queue": "zerosnake-dev-checks" }],
     "consumers": [
@@ -36,8 +42,11 @@
         "queue": "zerosnake-dev-checks",
         "max_batch_size": 1,
         "max_retries": 3,
+        "retry_delay": 10,
         "dead_letter_queue": "zerosnake-dev-checks-dlq"
-      }
+      },
+      // Jobs out of retries (CPU limit, or R2/D1 errors): their versions are rejected.
+      { "queue": "zerosnake-dev-checks-dlq", "max_batch_size": 10 }
     ]
   },
   "durable_objects": {
@@ -46,12 +55,15 @@
       { "name": "ROOMS", "class_name": "RoomDO" }
     ]
   },
+  // Rejects versions whose check job was lost (`reapStaleVersions`). Inherited by environments.
+  "triggers": { "crons": ["*/30 * * * *"] },
 
   "env": {
     "staging": {
       // Deployed as `zerosnake-arena-staging`.
       "routes": [{ "pattern": "api.arena.surninsynergy.dev", "custom_domain": true }],
       "vars": { "ENVIRONMENT": "staging" },
+      "limits": { "cpu_ms": 300000 },
       "d1_databases": [
         {
           "binding": "DB",
@@ -72,8 +84,11 @@
             "queue": "zerosnake-staging-checks",
             "max_batch_size": 1,
             "max_retries": 3,
+            "retry_delay": 10,
             "dead_letter_queue": "zerosnake-staging-checks-dlq"
-          }
+          },
+          // Jobs out of retries (CPU limit, or R2/D1 errors): their versions are rejected.
+          { "queue": "zerosnake-staging-checks-dlq", "max_batch_size": 10 }
         ]
       },
       "durable_objects": {

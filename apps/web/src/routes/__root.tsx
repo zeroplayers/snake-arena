@@ -8,6 +8,7 @@ import {
   Scripts,
 } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { GithubLink } from "../components/GithubLink";
 import { signInWithGithub } from "../lib/auth-client";
 import { getViewer } from "../server/functions";
 import appCss from "../styles/app.css?url";
@@ -52,10 +53,8 @@ function RootLayout() {
             Zero<span className="accent">Snake</span> <span className="logo-tag">Arena</span>
           </Link>
           <nav className="site-nav">
-            <Link to="/" activeOptions={{ exact: true }}>
-              Arena
-            </Link>
             <Link to="/leaderboard">Leaderboard</Link>
+            <Link to="/docs">Docs</Link>
             {viewer?.username ? (
               <>
                 <Link to="/@{$username}" params={{ username: viewer.username }}>
@@ -75,10 +74,13 @@ function RootLayout() {
           <Outlet />
         </main>
         <footer className="site-footer">
-          <span>Open source. Bots play each other 24/7.</span>
-          <a href="https://github.com/zeroplayers/snake-arena" rel="noreferrer">
-            GitHub
-          </a>
+          <span>
+            ZeroSnake is a <strong>zeroplayers</strong> game: code plays, people watch.
+          </span>
+          <span className="footer-links">
+            <Link to="/docs">Docs</Link>
+            <GithubLink />
+          </span>
         </footer>
       </div>
     </RootDocument>

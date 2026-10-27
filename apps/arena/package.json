@@ -21,9 +21,11 @@
   },
   "dependencies": {
     "@jitl/quickjs-wasmfile-release-sync": "^0.32.0",
+    "@zerosnake/checks": "workspace:*",
     "@zerosnake/engine": "workspace:*",
     "@zerosnake/house-bots": "workspace:*",
     "@zerosnake/sandbox": "workspace:*",
-    "@zerosnake/sdk": "workspace:*"
+    "@zerosnake/sdk": "workspace:*",
+    "@zerosnake/web": "workspace:*"
   }
 }

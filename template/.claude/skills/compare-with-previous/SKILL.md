@@ -21,12 +21,26 @@ your change, copy `src/` aside before editing instead: `cp -r src .zerosnake/pre
 
 ## 2. Run both on the same seeds
 
+Play each version as "you" on the same seeds against the same lineup (the default: easy, medium,
+hard, chaos), so the comparison is fair and deterministic. A match is ~5–20 s; 20 seeds × 2
+versions take a few minutes, so run the loop in the background if you can:
+
 ```sh
-npm run bench -- --seeds 40 .zerosnake/prev/src/bot.ts src/bot.ts
+for seed in $(seq 1 20); do
+  echo "seed $seed"
+  npx zerosnake sim --headless --seed $seed | grep -E '\(you\)|ops per tick'
+  npx zerosnake sim --headless --seed $seed --bot .zerosnake/prev/src/bot.ts | grep -E '\(you\)|ops per tick'
+done
 ```
 
-Both versions play the same seeds against the same house-bot lineup, so the comparison is fair
-and deterministic. 40 seeds take well under a minute; use more when the difference is small.
+Each `(you)` row has lives, mean score per life, best, kills and deaths by cause for that seed;
+the next line has the max interrupts used in one tick. Average the per-seed mean scores of each
+version and work out the standard error (standard deviation / √seeds). Use more seeds when the
+difference is small. Don't compare by putting both in one match (`--vs ./.zerosnake/prev/...`):
+they then fight each other and one match is mostly luck.
+
+**Monorepo checkout:** `npm run bench -- --seeds 40 .zerosnake/prev/src/bot.ts src/bot.ts` does
+all of this in one table (mean ± error, deaths by cause, mean ticks, max ops).
 
 ## 3. Read the result honestly
 
@@ -34,21 +48,24 @@ and deterministic. 40 seeds take well under a minute; use more when the differen
   200 lives). Call it better or worse only if the means differ by more than about twice the larger
   `±`; otherwise say "within noise" and suggest more seeds.
 - **Deaths by cause:** did the change remove the cause it targeted? Did a new one appear?
-- **Mean ticks:** longer lives usually mean more score; a big drop is a red flag even if the score
-  held.
+- **Lives:** fewer lives on the same seeds means longer lives, usually more score; more deaths is a
+  red flag even if the score held.
 - **max ops:** must stay well under 10; a version that is close to the budget will time out in
-  crowded arena rooms.
-- Both must beat `house:easy`, or the deploy is rejected.
+  crowded arena rooms, and the deploy checks reject an average above 5.
+- **The deploy checks:** `npx zerosnake test` on the current version. If it passes only narrowly
+  (compare "mean score per life" with "easy in your seat" seed by seed), say so: its seeds come from
+  the bundle's hash, so the next edit can fail. Improve the margin rather than re-rolling.
 
 Report a short table (previous vs current) and a one-line verdict.
 
-## Later: the arena
+## The arena
 
-The bench uses house bots only; the arena has other authors' bots. When available:
+The local matches use house bots only; the arena has other authors' bots. After a deploy:
 
-- `npx zerosnake sim --vs ./.zerosnake/prev/src/bot.ts,hard` puts both versions in one local match,
-  in the viewer;
-- `npx zerosnake status` shows the deployed version's rating; the bot page on the site charts rating
-  across versions;
-- with the MCP server connected, `compare_versions(a, b)` compares two deployed versions on real
-  arena lives.
+- `npx zerosnake status` shows the deployed version's rating; the bot page on the site charts
+  rating across versions;
+- `npx zerosnake sim --vs ./.zerosnake/prev/src/bot.ts,hard` puts both versions in one match in
+  the viewer, for the author to watch (don't run it yourself without `--headless`: it waits for the
+  browser);
+- later, with the MCP server connected, `compare_versions(a, b)` will compare two deployed versions
+  on real arena lives.

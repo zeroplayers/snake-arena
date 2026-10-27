@@ -38,6 +38,8 @@ export interface CliToken {
 export interface CliIdentity {
   tokenId: string;
   user: { id: string; username: string | null; name: string; image: string | null };
+  /** Set while an admin has suspended the account: the token still identifies, but can't act. */
+  banned: { at: string; reason: string | null } | null;
 }
 
 export async function hashToken(token: string) {
@@ -70,6 +72,8 @@ export async function authenticateCli(db: Db, headers: Headers): Promise<CliIden
       tokenId: cliTokens.id,
       lastUsedAt: cliTokens.lastUsedAt,
       user: { id: users.id, username: users.username, name: users.name, image: users.image },
+      bannedAt: users.bannedAt,
+      banReason: users.banReason,
     })
     .from(cliTokens)
     .innerJoin(users, eq(users.id, cliTokens.userId))
@@ -82,7 +86,11 @@ export async function authenticateCli(db: Db, headers: Headers): Promise<CliIden
       .set({ lastUsedAt: now, expiresAt: new Date(now.getTime() + TOKEN_TTL_MS) })
       .where(eq(cliTokens.id, row.tokenId));
   }
-  return { tokenId: row.tokenId, user: row.user };
+  return {
+    tokenId: row.tokenId,
+    user: row.user,
+    banned: row.bannedAt ? { at: row.bannedAt.toISOString(), reason: row.banReason } : null,
+  };
 }
 
 const deviceTokenBody = z.object({

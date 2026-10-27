@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { formatReport as formatCheckReport } from "@zerosnake/checks";
 import type {
   BotInfo,
   DeployMeta,
@@ -8,7 +9,15 @@ import type {
   MeResponse,
   VersionInfo,
 } from "@zerosnake/web/shared";
-import { deployRequest, formatReport, readSources, runLocalChecks } from "../artifact.ts";
+import {
+  assertWithinLimits,
+  deployRequest,
+  formatReport,
+  passedLine,
+  readSources,
+  runLocalChecks,
+  slowSuiteWarning,
+} from "../artifact.ts";
 import { bundleBot } from "../bundle.ts";
 import { CliError, EXIT, UsageError } from "../errors.ts";
 import { type Io, parse } from "../io.ts";
@@ -32,9 +41,12 @@ import { bold, cyan, dim, green, red, stderrHasColor, yellow } from "../term.ts"
 
 export const DEPLOY_HELP = `Usage: zerosnake deploy [options]
 
-Bundles your bot exactly like \`sim\`, runs the local checks (deploy limits, loading in the
-sandbox), uploads the bundle and your sources (public on your bot's page), and waits while the
-server checks the new version. A version that passes replaces the bot's active one in the arena.
+Bundles your bot exactly like \`sim\`, runs the checks of \`zerosnake test\` here (the deploy
+limits and the server's check suite, usually a few seconds), uploads the bundle and your sources
+(public on your bot's page), and waits while the server checks the new version. A version that
+passes replaces the bot's active one in the arena. A bot that fails the checks here isn't
+uploaded, so it costs no deploy. A bot whose checks pass here but are slow (see
+\`zerosnake test --help\`) gets a warning: the server may not finish them.
 
 Options:
   --bot <slug>          Which of your bots to deploy to (default: "zerosnake": { "bot" } in
@@ -42,6 +54,8 @@ Options:
   --create              Create the bot if you don't have it yet
   --entry <file>        Your bot's entry file (default: src/bot.ts)
   -m, --message <text>  A note for this version, like a commit message
+  --skip-local-checks   Upload without running the check suite here (the deploy limits are
+                        still checked); the server runs it anyway and rejects a failing bot
   --no-wait             Don't wait for the server's checks
   --url <url>           Server (default: ${DEFAULT_URL}, or ZEROSNAKE_URL)
   -h, --help            Show this help
@@ -54,6 +68,7 @@ const OPTIONS = {
   create: { type: "boolean" },
   entry: { type: "string" },
   message: { type: "string", short: "m" },
+  "skip-local-checks": { type: "boolean" },
   wait: { type: "boolean", default: true },
   url: { type: "string" },
   help: { type: "boolean", short: "h" },
@@ -106,7 +121,24 @@ export async function deployCommand(
     `${green("✓")} bundles ${dim(`(${(bundle.bytes / 1024).toFixed(1)} KB from ${sources.length} source files)`)}`,
   );
   const meta = deployMeta(project.root, values.message);
-  await runLocalChecks(io, bundle, sources, me.limits, meta);
+  if (values["skip-local-checks"]) {
+    assertWithinLimits(io, bundle, sources, me.limits, meta);
+    io.out(dim("- skipped the check suite here (--skip-local-checks): the server runs it"));
+  } else {
+    const { report, millis } = await runLocalChecks(io, bundle, sources, me.limits, meta);
+    if (!report.passed) {
+      io.err(`\n${formatCheckReport(report).trimEnd()}`);
+      io.err(
+        "\nNot uploaded: the server would reject this version. Fix the problem and run " +
+          "`zerosnake test`, or deploy with --skip-local-checks to let the server decide.",
+      );
+      return EXIT.failure;
+    }
+    io.out(passedLine(report));
+    for (const warning of report.run.warnings) io.out(`  ${yellow("!")} ${warning}`);
+    const slow = slowSuiteWarning(millis);
+    if (slow) io.out(`  ${slow}`);
+  }
 
   const bot = existing ?? (await createBot(api, botName(project), slug, io, remote));
   const request = deployRequest(bundle, sources, meta);
@@ -187,7 +219,9 @@ export function upload(
             ? e.reason
             : e instanceof ApiError && e.code === "deploy_in_progress"
               ? "the server is still processing the first attempt"
-              : `HTTP ${(e as ApiError).status}`;
+              : e instanceof ApiError && e.code === "rate_limited"
+                ? "too many requests"
+                : `HTTP ${(e as ApiError).status}`;
         io.err(yellow(`Upload didn't go through (${why}); retrying in ${delay / 1000}s…`));
       },
     },

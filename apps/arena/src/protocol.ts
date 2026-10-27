@@ -159,9 +159,12 @@ export interface LifeDrop {
    * - a `join` refusal (the room asked for the life, then couldn't take it);
    * - `spawn`: dropped when the batch was to spawn it (quarantined meanwhile, or no room left);
    * - `left`: `RoomRpc.leave` before it spawned;
-   * - `stopped`: the arena's kill switch, before it spawned.
+   * - `stopped`: the arena's kill switch, before it spawned;
+   * - `outdated`: its room was saved by an older engine that this one can't run (the round arena
+   *   before #76), so it closed; the life, even if it had started, ends unrated, as if it never
+   *   ran.
    */
-  reason: Extract<JoinResult, { ok: false }>["reason"] | "spawn" | "left" | "stopped";
+  reason: Extract<JoinResult, { ok: false }>["reason"] | "spawn" | "left" | "stopped" | "outdated";
   /** Wall-clock ms. */
   at: number;
 }

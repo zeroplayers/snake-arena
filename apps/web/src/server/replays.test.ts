@@ -556,7 +556,12 @@ describe("GET /api/lives/:id/replay", () => {
     chunk = recorder.flush() as Uint8Array;
     await env.REPLAYS.put(key("room", 0), chunk);
     await env.REPLAYS.put(key("room", 5), chunk);
+    // Recorded by the round-arena engine (format version 1, #76).
+    const old = chunk.slice();
+    old[3] = 1;
+    await env.REPLAYS.put(key("room-old", 0), old);
     await run(
+      lifeSql("old", "v", { room: "room-old", replayKey: key("room-old", 0) }),
       lifeSql("ok", "v", { room: "room", replayKey: key("room", 0) }),
       lifeSql("marked", "v", { room: "room", replayKey: key("room", 5), expired: true }),
       lifeSql("lost", "v", { room: "room", replayKey: key("room", 10) }),
@@ -593,6 +598,16 @@ describe("GET /api/lives/:id/replay", () => {
     }
     // No longer linked, and no longer holding a pinned slot.
     expect(await getReplayLife(db, "lost")).toMatchObject({ replayExpired: true });
+  });
+
+  it("answers 410 for a chunk the engine can't play any more, and marks it", async () => {
+    const db = createDb(env.DB);
+    expect(await getReplayLife(db, "old")).toMatchObject({ replayExpired: false });
+    expect(await get("old")).toEqual({
+      status: 410,
+      body: { error: "replay_expired", message: REPLAY_EXPIRED_MESSAGE },
+    });
+    expect(await getReplayLife(db, "old")).toMatchObject({ replayExpired: true });
   });
 
   it("answers 404 for a life without a replay, or no life", async () => {

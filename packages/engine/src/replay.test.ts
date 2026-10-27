@@ -14,11 +14,13 @@ import {
   CHUNK_TICKS,
   decodeReplayChunk,
   encodeReplayChunk,
+  REPLAY_VERSION,
   type ReplayChunk,
   ReplayDesyncError,
   ReplayPlayer,
   ReplayRecorder,
   replayChunkInfo,
+  replayChunkVersion,
 } from "./replay.ts";
 import { createRng } from "./rng.ts";
 import { quantizeTurn, TURN_STEPS } from "./step.ts";
@@ -328,6 +330,17 @@ describe("hostile input", () => {
   const world = createWorld({ seed: 1 });
   const chunk = (snapshot: World): Uint8Array =>
     encodeReplayChunk({ snapshot, snapshotHash: 0, spawns: [], ticks: [] });
+
+  it("tells the format version, and refuses chunks of another one", () => {
+    const bytes = chunk(world);
+    expect(replayChunkVersion(bytes)).toBe(REPLAY_VERSION);
+    const v1 = bytes.slice();
+    v1[3] = 1;
+    expect(replayChunkVersion(v1)).toBe(1);
+    expect(() => decodeReplayChunk(v1)).toThrow(/unsupported version/);
+    expect(replayChunkVersion(new Uint8Array([1, 2, 3, 4]))).toBeNull();
+    expect(replayChunkVersion(bytes.subarray(0, 3))).toBeNull();
+  });
 
   it("refuses to decode more values than the input can hold", () => {
     const d = new RangeDecoder(new Uint8Array(100));

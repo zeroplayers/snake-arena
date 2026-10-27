@@ -55,9 +55,13 @@ import { cloneWorld, layoutSegments, type SpawnOptions, spawnSnake } from "./wor
 export const CHUNK_TICKS = 120 * TICK_RATE;
 /** Ticks between recorded world hashes. */
 export const HASH_EVERY = 100;
-// Version 2: the square arena (#76). Version 1 chunks were recorded on the round one, which this
-// engine can't play back, so they are refused rather than replayed wrong.
-const MAGIC = [0x5a, 0x53, 0x52, 0x02]; // "ZSR", version 2
+/**
+ * The chunk format: the fourth byte of every chunk. Version 2 is the square arena (#76); version 1
+ * chunks were recorded on the round one, which this engine can't play back, so they are refused
+ * rather than replayed wrong (see {@link replayChunkVersion}).
+ */
+export const REPLAY_VERSION = 2;
+const MAGIC = [0x5a, 0x53, 0x52, REPLAY_VERSION]; // "ZSR", version
 /**
  * Decoding limits. The range decoder already refuses to decode more values than its input could
  * hold (see `RangeDecoder`); these cover what a single small number can blow up into (body
@@ -298,6 +302,15 @@ export function decodeReplayChunk(bytes: Uint8Array): ReplayChunk {
     ticks.push({ turns, boosts, faults, spawns, hash });
   }
   return { snapshot, snapshotHash, spawns: firstSpawns, ticks };
+}
+
+/**
+ * The format version an encoded chunk was written in, or null if it isn't a replay chunk at all.
+ * Only {@link REPLAY_VERSION} decodes; anything else was recorded by another engine.
+ */
+export function replayChunkVersion(bytes: Uint8Array): number | null {
+  for (let i = 0; i < MAGIC.length - 1; i++) if (bytes[i] !== MAGIC[i]) return null;
+  return bytes.length >= MAGIC.length ? (bytes[MAGIC.length - 1] as number) : null;
 }
 
 /** First and last tick of an encoded chunk, without decoding the rest. */

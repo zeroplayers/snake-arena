@@ -6,10 +6,12 @@ import {
   decodeReplayChunk,
   encodeReplayChunk,
   type Fault,
+  REPLAY_VERSION,
+  replayChunkVersion,
   TICK_RATE,
   type World,
 } from "@zerosnake/engine";
-import { log, writeMetric } from "@zerosnake/observability";
+import { log, type MetricFields, writeMetric } from "@zerosnake/observability";
 import { createSandbox, type InstrumentResult, instrument } from "@zerosnake/sandbox";
 import { ARENA_CONTROL_POLL_MS, traceKey } from "@zerosnake/web/shared";
 // Wrangler only treats specifiers ending in .wasm as compiled modules; the package's "./wasm"
@@ -395,6 +397,10 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         // D1/R2/matchmaker are failing: don't produce more until they recover.
         log("error", "room.outbox_full", { roomId: meta.roomId, ...outbox });
         await this.scheduleRetry(meta, outbox.nextAt);
+        return;
+      }
+      if (this.outdated()) {
+        await this.closeOutdated(meta);
         return;
       }
       if (await this.arenaStopped(meta)) this.retireAll();
@@ -1095,6 +1101,59 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       meta.openChunkTick = null;
       this.store.setMeta(meta);
     });
+    await this.closed(meta, closed);
+  }
+
+  /**
+   * Whether the saved world or open replay chunk comes from an older engine, which this one can't
+   * run: the round arena before #76 (its config has no `arenaHalfSize`, its chunks are version 1).
+   */
+  private outdated(): boolean {
+    if (this.sim) return false;
+    const world = this.store.getJson<World>("world");
+    if (world && !(world.config.arenaHalfSize > 0)) return true;
+    const chunk = this.store.getBlob("chunk");
+    return chunk !== null && replayChunkVersion(chunk) !== REPLAY_VERSION;
+  }
+
+  /**
+   * Closes a room `outdated` says the engine can't run (it was running when the engine changed
+   * under it). Every life, running or pending, is dropped as if it never started: the matchmaker
+   * gives the bot its quota and its place back, and nothing is rated, struck or counted as an
+   * eviction. Its open replay chunk is discarded (it couldn't be played). The matchmaker opens
+   * new rooms for the bots.
+   */
+  private async closeOutdated(meta: Meta): Promise<void> {
+    const world = this.store.getJson<World>("world");
+    const now = Date.now();
+    const closed = {
+      roomId: meta.roomId,
+      reason: "outdated",
+      ticks: world?.tick ?? 0,
+      lives: meta.livesEnded,
+      durationMs: meta.startedAt ? now - meta.startedAt : 0,
+    };
+    this.store.transaction(() => {
+      for (const p of this.store.pending()) {
+        if (this.store.removePendingLife(p.lifeId)) this.dropTicket(p, "outdated");
+      }
+      for (const e of this.store.roster()) {
+        this.store.removeFromRoster(e.lifeId);
+        this.dropTicket(e, "outdated");
+      }
+      this.store.putBlob("chunk", null);
+      this.store.clearMarker();
+      this.traces.clear();
+      this.store.enqueue({ kind: "closed" });
+      meta.state = "closed";
+      meta.openChunkTick = null;
+      this.store.setMeta(meta);
+    });
+    await this.closed(meta, closed);
+  }
+
+  /** After `close` or `closeOutdated` committed: report, let spectators go, deliver. */
+  private async closed(meta: Meta, closed: MetricFields<"room.closed">): Promise<void> {
     writeMetric(this.env.METRICS, "room.closed", closed);
     log("info", "room.closed", closed);
     this.dropSim();

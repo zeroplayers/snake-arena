@@ -64,6 +64,7 @@ async function loadWeb(base: string): Promise<Web> {
     platform,
     auth: createAuth({
       DB: platform.env.DB,
+      AUTH_KV: platform.env.AUTH_KV,
       BETTER_AUTH_URL: base,
       BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
       GITHUB_CLIENT_ID: "test-client-id",

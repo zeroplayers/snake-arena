@@ -2,14 +2,15 @@ import { Link } from "@tanstack/react-router";
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import type { Participant } from "../queries/replay";
 import type { ReplaySource } from "../replay/ReplaySource";
-import { getReplayData } from "../server/pages";
 import type { ReplayTrace } from "../server/traces";
+import { REPLAY_EXPIRED_MESSAGE, type ReplayResponse } from "../shared/replay";
 import { type TraceTick, traceTicks } from "../shared/trace";
 import { Empty } from "./PageState";
 
 type State =
   | { kind: "loading" }
   | { kind: "missing" }
+  | { kind: "expired" }
   | { kind: "error"; message: string }
   | { kind: "ready"; participants: Participant[]; desync: boolean };
 
@@ -49,12 +50,16 @@ export function ReplayViewer({
     setState({ kind: "loading" });
 
     (async () => {
-      const data = await getReplayData({ data: lifeId });
+      const response = await fetch(`/api/lives/${encodeURIComponent(lifeId)}/replay`);
       if (cancelled) return;
-      if (data.status === "missing") {
-        setState({ kind: "missing" });
+      // 410: deleted by the replay retention (`src/shared/replay.ts`); 404: never recorded.
+      if (response.status === 410 || response.status === 404) {
+        setState({ kind: response.status === 410 ? "expired" : "missing" });
         return;
       }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = (await response.json()) as ReplayResponse;
+      if (cancelled) return;
       const [{ mountViewer }, { SNAKE_PALETTE }, { ReplaySource }] = await Promise.all([
         import("@zerosnake/viewer"),
         import("@zerosnake/renderer"),
@@ -119,6 +124,7 @@ export function ReplayViewer({
         </p>
       )}
       {state.kind === "missing" && <Empty>No recording was kept for this life.</Empty>}
+      {state.kind === "expired" && <Empty>{REPLAY_EXPIRED_MESSAGE}</Empty>}
       {state.kind === "error" && (
         <p className="error" role="alert">
           Couldn't play this replay: {state.message}
@@ -127,7 +133,7 @@ export function ReplayViewer({
       <div
         ref={container}
         className="replay-stage"
-        hidden={state.kind === "missing" || state.kind === "error"}
+        hidden={state.kind === "missing" || state.kind === "expired" || state.kind === "error"}
       >
         {state.kind === "loading" && <span className="muted replay-loading">Loading replay…</span>}
       </div>

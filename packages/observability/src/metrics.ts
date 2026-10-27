@@ -72,6 +72,26 @@ export const METRICS = {
     blobs: ["status"],
     doubles: ["minutesSinceActivity", "readyVersions", "thresholdMinutes", "playableVersions"],
   },
+  /**
+   * The replay retention sweep (apps/web cron every 30 minutes, `src/server/replays.ts`).
+   * `outcome`: `done` (every room looked at), `more` (stopped at the per-run budget; the next run
+   * carries on), `no_pins` (the pinned lives couldn't be read, so nothing was deleted) or
+   * `failed`. Alert on `no_pins` or `failed` lasting: replays pile up meanwhile.
+   */
+  "replays.swept": {
+    source: "web",
+    blobs: ["outcome"],
+    doubles: [
+      "deleted",
+      "pinnedChunks",
+      "pinnedLives",
+      "expiredLives",
+      "rooms",
+      "roomsSwept",
+      "lists",
+      "durationMs",
+    ],
+  },
 
   // ─── apps/arena ────────────────────────────────────────────────────────────────────────────
   /** A room started (`RoomRpc.start`). */

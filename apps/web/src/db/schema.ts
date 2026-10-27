@@ -321,6 +321,11 @@ export const lives = sqliteTable(
     /** R2 keys in `REPLAYS` (room chunk at the death) and `TRACES`. */
     replayKey: text("replay_key"),
     traceKey: text("trace_key"),
+    /**
+     * When the replay retention sweep (`src/server/replays.ts`) deleted the chunk at
+     * `replay_key`: the replay is gone for good (`src/shared/replay.ts`).
+     */
+    replayExpiredAt: integer("replay_expired_at", { mode: "timestamp_ms" }),
     startedAt: integer("started_at", { mode: "timestamp_ms" }).notNull().default(now),
     endedAt: integer("ended_at", { mode: "timestamp_ms" }),
     /**
@@ -338,6 +343,16 @@ export const lives = sqliteTable(
     // Rating job: lives finished after its cursor, and a version's lives when it rebuilds one.
     uniqueIndex("lives_seq_idx").on(t.seq),
     index("lives_version_seq_idx").on(t.versionId, t.seq),
+    // Replay retention (`src/server/replays.ts`): the best lives whose replay is still there,
+    // overall and per version, and the lives of a chunk the sweep deletes. Partial, so a life
+    // leaves them once its replay expires: they hold the last two days' lives and the pinned ones.
+    index("lives_replay_score_idx")
+      .on(t.score)
+      .where(sql`replay_key IS NOT NULL AND replay_expired_at IS NULL`),
+    index("lives_version_replay_score_idx")
+      .on(t.versionId, t.score)
+      .where(sql`replay_key IS NOT NULL AND replay_expired_at IS NULL`),
+    index("lives_replay_key_idx").on(t.replayKey).where(sql`replay_expired_at IS NULL`),
     check("lives_death_cause_check", oneOf(t.deathCause, deathCauses)),
   ],
 );

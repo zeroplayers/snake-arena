@@ -53,6 +53,15 @@ cd apps/arena && pnpm exec wrangler r2 bucket lifecycle add zerosnake-staging-tr
 Without it the arena's cron (every 30 minutes, `apps/arena/src/traces.ts`) deletes them anyway, up to
 10,000 per run; the rule just makes that a no-op.
 
+**Replay retention**: room replays (R2 `zerosnake-staging-replays`, `apps/web/src/shared/replay.ts`)
+are kept 2 days, plus the chunks of pinned lives: the 100 best lives of all time and the 5 best of
+each of the top 20 leaderboard bots. No lifecycle rule can express the exceptions, so don't add
+one: the site's cron (every 30 minutes, `apps/web/src/server/replays.ts`) deletes the rest, oldest
+chunks of each room first, at most 5,000 chunks and 50 list calls per run, and marks the lives
+that died in them (`lives.replay_expired_at`, migration `0011_replay_retention`). If it can't read
+the pinned lives it deletes nothing. Each run logs `replays.swept` and writes the `replays.swept`
+metric; `outcome` `no_pins` or `failed` means replays are piling up.
+
 **Admins, rate limits, metrics and alerts**: see "Operations" in
 [`apps/web/README.md`](apps/web/README.md#operations). Set `ADMIN_USER_IDS` / `ADMIN_GITHUB_IDS`
 in `env.staging.vars` for `/admin`. The rate limit and Analytics Engine bindings need nothing

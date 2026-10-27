@@ -134,6 +134,7 @@ Version sources are public on the profile (the project is fully open source).
 ## 7. Replays, traces, MCP
 
 - **Room replay** is written in ~2-minute chunks: seed, a snapshot at chunk start and every bot's actions per tick, compressed. Target: tens of KB per chunk. Stored in R2.
+- **Replay retention.** Every chunk is kept 2 days. After that a chunk is kept only while a **pinned life** needs it (every chunk from the one the life was born in to the one it died in): the 100 best lives of all time by score, and the 5 best lives of each of the top 20 bots on the leaderboard (over all their versions). Lives are picked among those whose replay is still there. A sweep in the site's cron (every 30 minutes, bounded per run, oldest chunks of each room first) deletes the rest and marks the lives that died in them (`lives.replay_expired_at`); if it can't read the pinned lives, it deletes nothing that run. An expired replay's page says "This replay is no longer available", and `GET /api/lives/:id/replay` answers 410 `replay_expired`; bot pages don't link to it. Numbers in `apps/web/src/shared/replay.ts`.
 - **Life trace** stores per tick: the action, operations used and `log()` output (byte limit per tick). The last 100 ticks before death are kept in full, the rest is downsampled. Kept for 7 days. Also a summary of what the bot saw (head, wall distance, nearest snake and food). At most 512 KB per life; format in `apps/web/src/shared/trace.ts`. **Only the bot's owner can read a trace** (CLI `zerosnake logs --deaths`, the replay page when signed in): it holds the author's own logs, which may say more than the published source.
 - **Replay viewer** replays the engine locally from seed + actions and shows: timeline, jump to death, the selected snake's vision radius, its logs.
 - **MCP** runs on Workers via the Agents SDK `McpAgent`, auth via Better Auth. Tools:
@@ -160,8 +161,8 @@ template/          bot template: src/bot.ts, CLAUDE.md, .claude/skills, tests
 ```
 
 **Storage:**
-- **D1:** Better Auth tables, `bots`, `versions`, `lives` (score, cause of death, replay and trace keys), `ratings`.
-- **R2:** bundles, sources, replays, traces.
+- **D1:** Better Auth tables, `bots`, `versions`, `lives` (score, cause of death, replay and trace keys, when the replay expired), `ratings`.
+- **R2:** bundles, sources, replays (2 days plus pinned lives, §7), traces (7 days).
 - **DO SQLite:** matchmaker queue, room state.
 
 **Bot template:**
@@ -196,7 +197,7 @@ Estimate step by step:
 2. So 3000 ticks of such a room take ~36 s, roughly 3–4 s per life.
 3. At 128 MB that's ~0.45 GB-s per life, i.e. **~$6 per million lives**.
 
-R2 for replays is pennies. Takeaway: compute is cheap. Quotas exist mainly for fairness and abuse protection, not to save money. The real bottleneck is the throughput of a single DO (one core), which scales with the number of rooms.
+R2 for replays is pennies, and bounded since replays expire (§7). A room writes ~720 chunks a day; at the target of tens of KB each (say 30 KB) that's ~22 MB per room per day. Kept 2 days, 10 rooms hold ~0.4 GB plus the ~200 pinned lives' chunks (~1 MB for a 1-hour life): well under $0.01/month at $0.015/GB-month. Kept forever, the same 10 rooms would add ~6.5 GB every month. Writes are ~220k Class A operations a month for 10 rooms (1M free); the sweep adds about one list call per room per run (~15k a month), and deletes are free. Takeaway: compute is cheap. Quotas exist mainly for fairness and abuse protection, not to save money. The real bottleneck is the throughput of a single DO (one core), which scales with the number of rooms.
 
 ---
 

@@ -79,6 +79,12 @@ In `zerosnake sim` (the viewer's snake panel), and for arena lives in their trac
 returned, spent and logged), and a death's replay page shows them when you're signed in. Up to 1024
 bytes per tick. Traces are kept 7 days and only you can see your bots' logs.
 
+**How long are replays kept?**
+Two days. After that a replay is deleted unless it's one of the 100 best lives of all time (by
+score) or one of the 5 best lives of a bot in the leaderboard's top 20: those stay as long as they
+are pinned. A deleted replay's page says it's no longer available. Traces are kept 7 days either
+way.
+
 **Can I reproduce a match?**
 Yes. The engine is deterministic: the same seed, bots and code give the same match.
 `zerosnake sim` prints its seed; rerun with `--seed`. Two exceptions: running out of memory in a

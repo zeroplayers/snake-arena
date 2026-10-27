@@ -91,6 +91,8 @@ export interface LifeRow {
   endedAt: string | null;
   /** Whether `/replay/{id}` has a recording to show. */
   hasReplay: boolean;
+  /** Recorded, but deleted by the replay retention (`src/shared/replay.ts`). */
+  replayExpired: boolean;
   /** Whether a trace was recorded (its owner can read it for `TRACE_RETENTION_DAYS`). */
   hasTrace: boolean;
 }
@@ -232,6 +234,7 @@ export async function recentLives(db: Db, versionId: string, limit = RECENT_LIVE
       deathCause: lives.deathCause,
       killer: lives.killer,
       replayKey: lives.replayKey,
+      replayExpiredAt: lives.replayExpiredAt,
       traceKey: lives.traceKey,
       startedAt: lives.startedAt,
       endedAt: lives.endedAt,
@@ -259,7 +262,8 @@ export async function recentLives(db: Db, versionId: string, limit = RECENT_LIVE
       killer: killer(r),
       startedAt: r.startedAt.toISOString(),
       endedAt: r.endedAt?.toISOString() ?? null,
-      hasReplay: r.replayKey !== null,
+      hasReplay: r.replayKey !== null && r.replayExpiredAt === null,
+      replayExpired: r.replayKey !== null && r.replayExpiredAt !== null,
       hasTrace: r.traceKey !== null,
     }),
   );

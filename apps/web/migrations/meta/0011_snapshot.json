@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "ba1cbac4-baca-47e6-b6f4-0fdba4904f38",
+  "id": "2e49bd40-1693-40e4-b085-160024f9fca6",
   "prevId": "e4a97d6f-f9db-417e-bef3-3539defb279c",
   "tables": {
     "accounts": {
@@ -731,13 +731,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "replay_expired_at": {
-          "name": "replay_expired_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "started_at": {
           "name": "started_at",
           "type": "integer",
@@ -792,31 +785,6 @@
             "seq"
           ],
           "isUnique": false
-        },
-        "lives_replay_score_idx": {
-          "name": "lives_replay_score_idx",
-          "columns": [
-            "score"
-          ],
-          "isUnique": false,
-          "where": "replay_key IS NOT NULL AND replay_expired_at IS NULL"
-        },
-        "lives_version_replay_score_idx": {
-          "name": "lives_version_replay_score_idx",
-          "columns": [
-            "version_id",
-            "score"
-          ],
-          "isUnique": false,
-          "where": "replay_key IS NOT NULL AND replay_expired_at IS NULL"
-        },
-        "lives_replay_key_idx": {
-          "name": "lives_replay_key_idx",
-          "columns": [
-            "replay_key"
-          ],
-          "isUnique": false,
-          "where": "replay_expired_at IS NULL"
         }
       },
       "foreignKeys": {
@@ -1095,6 +1063,38 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "revoked_sessions": {
+      "name": "revoked_sessions",
+      "columns": {
+        "token_hash": {
+          "name": "token_hash",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "revoked_sessions_expires_at_idx": {
+          "name": "revoked_sessions_expires_at_idx",
+          "columns": [
+            "expires_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "sessions": {
       "name": "sessions",
       "columns": {
@@ -1262,6 +1262,13 @@
         "ban_reason": {
           "name": "ban_reason",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "sessions_revoked_at": {
+          "name": "sessions_revoked_at",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

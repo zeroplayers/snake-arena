@@ -77,6 +77,8 @@ export const METRICS = {
    * `outcome`: `done` (every room looked at), `more` (stopped at the per-run budget; the next run
    * carries on), `no_pins` (the pinned lives couldn't be read, so nothing was deleted) or
    * `failed`. Alert on `no_pins` or `failed` lasting: replays pile up meanwhile.
+   * `oldestDeletedHours` is the age of the oldest chunk deleted: well above the retention (48 h)
+   * means the sweep falls behind.
    */
   "replays.swept": {
     source: "web",
@@ -90,6 +92,7 @@ export const METRICS = {
       "roomsSwept",
       "lists",
       "durationMs",
+      "oldestDeletedHours",
     ],
   },
 

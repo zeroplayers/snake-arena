@@ -1,6 +1,7 @@
 # @zerosnake/web
 
-The site: TanStack Start on Workers, Better Auth (GitHub + device flow for `zerosnake login`) on D1.
+The site: TanStack Start on Workers, Better Auth (GitHub + device flow for `zerosnake login`) on D1,
+with web sessions in KV.
 
 ## Local development
 
@@ -92,21 +93,33 @@ that `lives.replay_key` is the chunk holding the death.
 ## Replay retention
 
 Replays are kept 2 days, plus every chunk a pinned life needs (`src/shared/replay.ts`: the 100
-best lives of all time, the 5 best of each top-20 leaderboard bot, by score, among lives whose
-replay is still there). The sweep (`src/server/replays.ts`, Cron Trigger every 30 minutes):
+best lives of all time, leaving out banned authors' and bots' lives and scores over
+`MAX_LIFE_SCORE`, and the 5 best of each top-20 leaderboard bot over all its versions; by score,
+ties to the earlier life, among lives whose replay is still there). The sweep
+(`src/server/replays.ts`, Cron Trigger every 30 minutes):
 
-1. reads the pinned lives (`leaderboardQuery`, and `lives` through the partial indexes
-   `lives_replay_score_idx` / `lives_version_replay_score_idx`, which hold only lives whose replay
-   is still there). If that fails, it deletes nothing;
+1. settles the pinned lives: the fresh set (`leaderboardQuery`, and `lives` through the partial
+   indexes `lives_replay_score_idx` / `lives_version_replay_score_idx`, which hold only lives whose
+   replay is still there) gets `lives.replay_pinned_at = now`, and every life pinned in the last
+   2 days stays pinned (`lives_replay_pinned_idx`), so a bot that leaves the top 20 for a while
+   keeps its best replays. If a query fails, or the fresh set is less than half of the last run's
+   (a query that silently returns too little), it deletes nothing;
 2. lists the rooms (`<roomId>/` prefixes), starting from a random one, and each room's chunks
    oldest first, until the first one younger than 2 days (by R2 upload time). A chunk is pinned if
-   a pinned life was born before the next chunk starts and died in it or a later one;
+   a pinned life was born before the next chunk of the same room starts and died in it or a later
+   one;
 3. sets `lives.replay_expired_at` on the lives that died in the chunks it deletes, then deletes
-   them. At most 50 list calls and 5,000 deletions per run; the next run carries on.
+   them, 1,000 at a time. At most 300 list calls, 50,000 deletions and 60 s of listing per run;
+   the next run carries on. An accelerated room writes ~5,800 chunks a day (~120 per run), so
+   that keeps up with a few hundred rooms.
 
-An expired replay's page says so instead of loading the player; the bot page shows "Expired"
-instead of a link. Each run logs `replays.swept` (or `replays.sweep_failed`) and writes the
-`replays.swept` metric. Locally: `curl "http://localhost:3000/cdn-cgi/handler/scheduled?cron=*/30+*+*+*+*"`.
+`GET /api/lives/:id/replay` also marks a life whose chunk is gone from R2 without the sweep, so it
+stops being linked and stops holding a pinned slot. An expired replay's page says so instead of
+loading the player (and its trace rows don't seek); the bot page shows "Expired" instead of a
+link, and `zerosnake logs` prints no replay URL. Each run logs `replays.swept` (at level `error`
+with `alert: "replay_backlog"` when the oldest chunk it deleted is over 54 hours old: the sweep is
+falling behind) or `replays.sweep_failed`, and writes the `replays.swept` metric. Locally:
+`curl "http://localhost:3000/cdn-cgi/handler/scheduled?cron=*/30+*+*+*+*"`.
 
 ## Database
 
@@ -121,6 +134,15 @@ The staging deploy applies new migrations with `wrangler d1 migrations apply DB 
 ## Auth
 
 - `/api/auth/*`: Better Auth. GitHub is the only sign-in method.
+- Web sessions are in KV (`AUTH_KV`, `src/server/session-store.ts`), never in D1: D1 is also bound
+  to apps/arena, which runs bot code, and Better Auth keeps session tokens in plaintext. KV entries
+  expire with the session. Revocation is decided in D1, since KV can serve a deleted entry for a
+  while longer elsewhere: sign-out records the token's SHA-256 in `revoked_sessions` (pruned by the
+  5-minute cron once expired), and `/revoke-sessions` ("sign out everywhere") sets
+  `users.sessions_revoked_at`, ending every older session. Both take effect at once everywhere.
+  `/revoke-other-sessions` is off (it trusts KV's list of a user's sessions). The user stored next
+  to a session is re-read from D1 on every check, so username claims and bans apply at once.
+  OAuth state stays in D1 (`verification`).
 - `/welcome`: claim a username after the first sign-in (`POST /api/auth/username/claim`, once).
   `/update-user` is disabled: name and avatar come from GitHub.
 - `/device`: where `zerosnake login` sends people to approve the CLI (client id `zerosnake-cli`).
@@ -130,7 +152,8 @@ The staging deploy applies new migrations with `wrangler d1 migrations apply DB 
   (`src/server/cli-auth.ts`). `GET /cli/me` and `POST /cli/logout` serve `whoami`/`logout`.
 - `/settings`: list and revoke CLI tokens (`GET /api/auth/cli/tokens`, `POST /api/auth/cli/tokens/revoke`).
 
-Tests run Better Auth against a real D1 (wrangler's platform proxy) with GitHub mocked at `fetch`.
+Tests run Better Auth against a real D1 and KV (wrangler's platform proxy) with GitHub mocked at
+`fetch`.
 
 ## CLI API (deploy)
 
@@ -334,7 +357,7 @@ saving.
 | Site errors             | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'http.error'`                                                                                             | `> 0`     |
 | No lives recorded       | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'arena.liveness' AND blob3 = 'stalled'`                                                                   | `> 0`     |
 | Room crashed            | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'room.crashed' AND blob4 != 'restart'`                                                                    | `> 0`     |
-| Replay sweep failing    | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'replays.swept' AND blob3 IN ('no_pins', 'failed')`                                                       | `> 0`     |
+| Replay sweep failing    | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'replays.swept' AND (blob3 IN ('no_pins', 'failed') OR double10 > 54)`                                    | `> 0`     |
 | Auth failures spike     | `SELECT SUM(_sample_interval) AS value FROM events.analyticsEngine.zerosnake_staging WHERE blob1 = 'auth.failure'`                                                                                           | `> 50`    |
 | Arena worker exceptions | the Workers logs dataset (`logs.workersLogs`) in the visual builder: script `zerosnake-arena-staging`, error-level logs or exception outcomes. Field names are listed by `cf sql datasets --include-columns` | `> 0`     |
 

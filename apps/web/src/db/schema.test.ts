@@ -22,6 +22,7 @@ afterAll(() => d1.dispose());
 describe("Better Auth tables", () => {
   const auth = createAuth({
     DB: {} as D1Database,
+    AUTH_KV: {} as KVNamespace,
     BETTER_AUTH_URL: "http://localhost:3000",
     BETTER_AUTH_SECRET: "x".repeat(32),
     GITHUB_CLIENT_ID: "id",

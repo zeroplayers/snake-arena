@@ -1,6 +1,7 @@
 /**
  * Real D1 (workerd, via wrangler's platform proxy) for tests, migrated with the same SQL files
- * `wrangler d1 migrations apply` uses, plus R2 and Queues for the CLI API. Nothing is persisted.
+ * `wrangler d1 migrations apply` uses, plus KV for web sessions and R2 and Queues for the CLI
+ * API. Nothing is persisted.
  */
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +15,8 @@ export const seedFile = join(appDir, "seed/dev.sql");
 
 export interface TestD1 {
   db: D1Database;
+  /** Better Auth's web sessions (`AUTH_KV`). */
+  kv: KVNamespace;
   dispose(): Promise<void>;
 }
 
@@ -22,15 +25,16 @@ export async function createTestD1({
   migrateBefore,
 }: Pick<TestPlatformOptions, "seed" | "migrateBefore"> = {}): Promise<TestD1> {
   const { env, dispose } = await createTestPlatform({ seed, migrateBefore });
-  return { db: env.DB, dispose };
+  return { db: env.DB, kv: env.AUTH_KV, dispose };
 }
 
 /**
- * What the CLI API needs besides D1: the R2 buckets and the checks queue producer, plus the
- * rate limiters (Miniflare's, exact within one process).
+ * What the site needs besides D1: the web session KV, the R2 buckets and the checks queue
+ * producer, plus the rate limiters (Miniflare's, exact within one process).
  */
 export interface TestPlatformEnv {
   DB: D1Database;
+  AUTH_KV: KVNamespace;
   BUNDLES: R2Bucket;
   SOURCES: R2Bucket;
   TRACES: R2Bucket;
@@ -50,7 +54,7 @@ export interface TestPlatformOptions {
   rateLimits?: Partial<Record<RateLimitRule, number>>;
 }
 
-/** D1 plus local R2 buckets, a queue producer and rate limiters (Miniflare), nothing persisted. */
+/** D1 plus local KV, R2 buckets, a queue producer and rate limiters (Miniflare), nothing persisted. */
 export async function createTestPlatform({
   seed = false,
   rateLimits = {},
@@ -65,6 +69,7 @@ export async function createTestPlatform({
       name: "zerosnake-web-test",
       compatibility_date: "2026-10-15",
       d1_databases: [{ binding: "DB", database_name: "test", database_id: "test" }],
+      kv_namespaces: [{ binding: "AUTH_KV", id: "test-auth" }],
       r2_buckets: [
         { binding: "BUNDLES", bucket_name: "test-bundles" },
         { binding: "SOURCES", bucket_name: "test-sources" },
@@ -108,4 +113,17 @@ export async function applyMigrations(db: D1Database, before?: string, from?: st
 export async function execFile(db: D1Database, path: string) {
   const statements = splitSqlQuery(readFileSync(path, "utf8"));
   await db.batch(statements.map((s) => db.prepare(s)));
+}
+
+/** Every row of every table, as one string: what a D1 export would show. */
+export async function dumpTables(db: D1Database) {
+  const { results } = await db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+    .all<{ name: string }>();
+  const rows: Record<string, unknown[]> = {};
+  // Skips SQLite's and D1's internal tables (`_cf_*` can't be read).
+  for (const { name } of results.filter((t) => !/^(sqlite|_cf)_/.test(t.name))) {
+    rows[name] = (await db.prepare(`SELECT * FROM "${name}"`).all()).results;
+  }
+  return JSON.stringify(rows);
 }

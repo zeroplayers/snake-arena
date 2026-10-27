@@ -21,12 +21,22 @@ Cloudflare account "Surnin Synergy". Config lives in the `env.staging` blocks of
 | `zerosnake-web-staging`   | `https://arena.surninsynergy.dev`     | [`/api/health`](https://arena.surninsynergy.dev/api/health)        |
 | `zerosnake-arena-staging` | `https://api.arena.surninsynergy.dev` | [`/health`](https://api.arena.surninsynergy.dev/health) (pings DO) |
 
-Resources: D1 `zerosnake-staging` (shared by both Workers), R2 `zerosnake-staging-{bundles,sources,replays,traces}`,
-queues `zerosnake-staging-checks` and `zerosnake-staging-checks-dlq`.
+Resources: D1 `zerosnake-staging` (shared by both Workers), KV `zerosnake-staging-auth` (web only),
+R2 `zerosnake-staging-{bundles,sources,replays,traces}`, queues `zerosnake-staging-checks` and
+`zerosnake-staging-checks-dlq`.
+
+**Auth storage**: web sessions (Better Auth) live in the KV namespace `zerosnake-staging-auth`, bound
+as `AUTH_KV` to the web Worker only, never to arena: the arena runs untrusted bot code and shares the
+D1, so no session token is kept there (D1 has only hashes of revoked ones). CLI tokens are in D1 as
+SHA-256 hashes, GitHub OAuth tokens encrypted. The namespace was made once with
+`pnpm exec wrangler kv namespace create zerosnake-staging-auth` (from `apps/web`); its id is in
+`env.staging.kv_namespaces` of `apps/web/wrangler.jsonc`.
 
 **Deploys** happen automatically: `.github/workflows/deploy-staging.yml` runs after CI passes on `main`
-(or via "Run workflow"). It deploys arena first (web binds to its Durable Objects), applies D1 migrations,
-then builds and deploys web, then curls both health endpoints. It skips while the repo secrets
+(or via "Run workflow"). It builds web, deploys arena (web binds to its Durable Objects), applies D1
+migrations, deploys the built web, then curls both health endpoints. The old web runs against the new
+schema for a short while, so migrations must not break the code they replace (empty a table before
+dropping it in a later release). It skips while the repo secrets
 `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are unset.
 
 Manual deploy (needs `wrangler login` with access to the account):
@@ -55,12 +65,15 @@ Without it the arena's cron (every 30 minutes, `apps/arena/src/traces.ts`) delet
 
 **Replay retention**: room replays (R2 `zerosnake-staging-replays`, `apps/web/src/shared/replay.ts`)
 are kept 2 days, plus the chunks of pinned lives: the 100 best lives of all time and the 5 best of
-each of the top 20 leaderboard bots. No lifecycle rule can express the exceptions, so don't add
-one: the site's cron (every 30 minutes, `apps/web/src/server/replays.ts`) deletes the rest, oldest
-chunks of each room first, at most 5,000 chunks and 50 list calls per run, and marks the lives
-that died in them (`lives.replay_expired_at`, migration `0011_replay_retention`). If it can't read
-the pinned lives it deletes nothing. Each run logs `replays.swept` and writes the `replays.swept`
-metric; `outcome` `no_pins` or `failed` means replays are piling up.
+each of the top 20 leaderboard bots, each pinned until 2 days after the last run that picked it.
+No lifecycle rule can express the exceptions, so don't add one: the site's cron (every 30 minutes,
+`apps/web/src/server/replays.ts`) deletes the rest, oldest chunks of each room first, at most
+50,000 chunks, 300 list calls and 60 s per run (enough for a few hundred accelerated rooms at
+~5,800 chunks a day each), and marks the lives that died in them (`lives.replay_expired_at`,
+migration `0012_replay_retention`). If it can't settle the pinned lives, or they shrank to less
+than half of the last run's, it deletes nothing. Each run logs `replays.swept` and writes the
+`replays.swept` metric: `outcome` `no_pins` or `failed`, or `oldestDeletedHours` well past 48
+(`alert: "replay_backlog"` in the log), means replays are piling up.
 
 **Admins, rate limits, metrics and alerts**: see "Operations" in
 [`apps/web/README.md`](apps/web/README.md#operations). Set `ADMIN_USER_IDS` / `ADMIN_GITHUB_IDS`

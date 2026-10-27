@@ -3,8 +3,13 @@
  * played in it (`ReplayResponse`), for the site's replay player and anyone else. Errors are
  * `ApiErrorBody`s: 404 `life_not_found` / `replay_not_found`, 410 `replay_expired` once the
  * replay retention deleted the chunk (`src/shared/replay.ts`).
+ *
+ * A chunk gone from R2 without the sweep marking its lives (deleted by hand, or lost) is marked
+ * here, so the life stops being linked and stops holding a pinned slot.
  */
+import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "../db";
+import { lives } from "../db/schema";
 import { readLifeReplay } from "../queries/replay";
 import {
   REPLAY_EXPIRED_MESSAGE,
@@ -29,6 +34,12 @@ export async function replayResponse(db: Db, bucket: R2Bucket, lifeId: string): 
         404,
       );
     case "expired":
+      if (!read.marked) {
+        await db
+          .update(lives)
+          .set({ replayExpiredAt: new Date() })
+          .where(and(eq(lives.id, lifeId), isNull(lives.replayExpiredAt)));
+      }
       return json({ error: "replay_expired", message: REPLAY_EXPIRED_MESSAGE }, 410);
   }
 }

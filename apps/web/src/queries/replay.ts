@@ -27,8 +27,8 @@ export interface ReplayLife {
   botName: string;
   botSlug: string;
   version: number;
-  /** Whether a replay chunk was recorded for this life. */
-  hasReplay: boolean;
+  /** Whether a replay chunk was recorded for this life (it may have expired since). */
+  replayRecorded: boolean;
   /** Recorded, but deleted by the replay retention since. */
   replayExpired: boolean;
 }
@@ -70,7 +70,7 @@ export async function getReplayLife(db: Db, lifeId: string): Promise<ReplayLife 
     ...life,
     author: row.author,
     endedAt: endedAt?.toISOString() ?? null,
-    hasReplay: replayKey !== null,
+    replayRecorded: replayKey !== null,
     replayExpired: replayKey !== null && replayExpiredAt !== null,
   };
 }
@@ -91,12 +91,16 @@ export type ReplayRead =
   | { status: "not_found" }
   /** No chunk was recorded for it (or it can't be read). */
   | { status: "none" }
-  /** Recorded, but deleted by the replay retention. */
-  | { status: "expired" };
+  /**
+   * Recorded, but deleted by the replay retention. `marked`: `lives.replay_expired_at` says so;
+   * otherwise the chunk is just gone from R2 and the caller should mark it.
+   */
+  | { status: "expired"; marked: boolean };
 
 /**
  * The chunk `lifeId` died in, and who played in it (`GET /api/lives/:id/replay`). A chunk missing
  * from R2 counts as expired, marked or not: a life's row is written only once its chunk is in R2.
+ * Read-only: `src/server/replay-api.ts` marks such a life.
  */
 export async function readLifeReplay(
   db: Db,
@@ -105,11 +109,11 @@ export async function readLifeReplay(
 ): Promise<ReplayRead> {
   const life = await getReplayLife(db, lifeId);
   if (!life) return { status: "not_found" };
-  if (!life.hasReplay) return { status: "none" };
-  if (life.replayExpired) return { status: "expired" };
+  if (!life.replayRecorded) return { status: "none" };
+  if (life.replayExpired) return { status: "expired", marked: true };
   const key = await getReplayKey(db, lifeId);
   const object = key ? await bucket.get(key) : null;
-  if (!object) return { status: "expired" };
+  if (!object) return { status: "expired", marked: false };
   const bytes = new Uint8Array(await object.arrayBuffer());
   let range: { startTick: number; endTick: number };
   try {

@@ -82,8 +82,15 @@
     {
       "idx": 11,
       "version": "6",
-      "when": 1793122994283,
-      "tag": "0011_replay_retention",
+      "when": 1793124011428,
+      "tag": "0011_web_sessions_to_kv",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1793130015549,
+      "tag": "0012_replay_retention",
       "breakpoints": true
     }
   ]

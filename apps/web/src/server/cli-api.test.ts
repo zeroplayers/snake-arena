@@ -12,6 +12,7 @@ import {
   type SourceArchive,
   type VersionInfo,
 } from "../shared";
+import { webSessions } from "../test/accounts";
 import { createTestPlatform, type TestPlatformEnv } from "../test/d1";
 import { CookieJar, mockGithub } from "../test/github";
 import { createAuth } from "./auth";
@@ -261,17 +262,15 @@ describe("auth: CLI tokens only", () => {
   it("rejects a web session in both directions", async () => {
     const auth = createAuth({
       DB: env.DB,
+      AUTH_KV: env.AUTH_KV,
       BETTER_AUTH_URL: BASE,
       BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
       GITHUB_CLIENT_ID: "id",
       GITHUB_CLIENT_SECRET: "secret",
     });
     const jar = await signInWithGithub(auth);
-    const session = await env.DB.prepare("SELECT token, user_id FROM sessions").first<{
-      token: string;
-      user_id: string;
-    }>();
-    expect(session).not.toBeNull();
+    const [session] = await webSessions(env.AUTH_KV);
+    expect(session).toBeDefined();
 
     // The session cookie, or the raw session token as a bearer, doesn't open the CLI API.
     for (const call of [
@@ -298,7 +297,7 @@ describe("auth: CLI tokens only", () => {
     await env.DB.prepare(
       "INSERT INTO cli_tokens (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)",
     )
-      .bind(crypto.randomUUID(), session?.user_id, await hashToken(token), Date.now() + 86_400_000)
+      .bind(crypto.randomUUID(), session?.userId, await hashToken(token), Date.now() + 86_400_000)
       .run();
     const getSession = await auth.handler(
       new Request(`${BASE}/api/auth/get-session`, {

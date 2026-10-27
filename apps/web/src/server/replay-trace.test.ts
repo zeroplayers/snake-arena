@@ -56,6 +56,7 @@ beforeAll(async () => {
   env = platform.env;
   auth = createAuth({
     DB: env.DB,
+    AUTH_KV: env.AUTH_KV,
     BETTER_AUTH_URL: BASE,
     BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
     GITHUB_CLIENT_ID: "test-client-id",
@@ -104,7 +105,7 @@ describe("replayTrace (the replay page's trace panel)", () => {
   it("gives the bot's owner the trace", async () => {
     expect(await read({ cookie: ada.jar.header() })).toEqual({
       status: "ok",
-      trace: { ...TRACE, killerName: null },
+      trace: { ...TRACE, killerName: null, hasReplay: true },
     });
     expect(await read({ cookie: ada.jar.header() }, "nope")).toEqual({ status: "none" });
   });

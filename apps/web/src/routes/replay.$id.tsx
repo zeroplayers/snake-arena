@@ -81,7 +81,7 @@ function ReplayPage() {
       </dl>
       {life.replayExpired ? (
         <Empty>{REPLAY_EXPIRED_MESSAGE}</Empty>
-      ) : life.hasReplay ? (
+      ) : life.replayRecorded ? (
         <ReplayViewer
           lifeId={life.id}
           title={`${life.botName} v${life.version} · @${life.author}`}
@@ -91,7 +91,14 @@ function ReplayPage() {
       ) : (
         <Empty>No recording was kept for this life.</Empty>
       )}
-      {life.endedAt && <TracePanel trace={trace} onSeek={(tick) => seek.current?.(tick)} />}
+      {life.endedAt && (
+        <TracePanel
+          trace={trace}
+          // Rows jump to their tick in the player; without a replay there's nothing to jump in.
+          {...(life.replayRecorded &&
+            !life.replayExpired && { onSeek: (tick: number) => seek.current?.(tick) })}
+        />
+      )}
     </section>
   );
 }

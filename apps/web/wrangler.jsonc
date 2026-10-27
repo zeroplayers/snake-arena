@@ -4,6 +4,9 @@
  *
  * Bindings are not inherited by environments, so every binding is declared twice.
  *
+ * AUTH_KV (web sessions) is bound here only, never in apps/arena/wrangler.jsonc: apps/arena runs
+ * untrusted bot code and shares the D1 database, so session tokens are kept out of both.
+ *
  * Secrets (BETTER_AUTH_SECRET, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET) are not in this file:
  * `.dev.vars` locally (see `.dev.vars.example`), `wrangler secret put --env staging` on staging.
  *
@@ -18,9 +21,9 @@
   "compatibility_flags": ["nodejs_compat"],
   // Workers Logs: structured request logs (src/server/edge.ts) and invocation logs.
   "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": true } },
-  // Rating job every minute (src/server/ratings.ts), arena liveness check every five
-  // (src/server/liveness.ts), replay retention sweep every thirty (src/server/replays.ts);
-  // src/server.ts dispatches on the expression. Locally:
+  // Rating job every minute (src/server/ratings.ts), arena liveness check and revoked session
+  // pruning every five (src/server/liveness.ts, session-store.ts), replay retention sweep every
+  // thirty (src/server/replays.ts); src/server.ts dispatches on the expression. Locally:
   // curl "http://localhost:3000/cdn-cgi/handler/scheduled?cron=*+*+*+*+*" (or ?cron=*/5+*+*+*+*).
   "triggers": { "crons": ["* * * * *", "*/5 * * * *", "*/30 * * * *"] },
 
@@ -57,6 +60,8 @@
       "migrations_dir": "migrations"
     }
   ],
+  // Better Auth web sessions (src/server/session-store.ts). Local id is arbitrary.
+  "kv_namespaces": [{ "binding": "AUTH_KV", "id": "zerosnake-dev-auth" }],
   "r2_buckets": [
     { "binding": "BUNDLES", "bucket_name": "zerosnake-dev-bundles" },
     { "binding": "SOURCES", "bucket_name": "zerosnake-dev-sources" },
@@ -126,6 +131,8 @@
           "migrations_dir": "migrations"
         }
       ],
+      // `wrangler kv namespace create zerosnake-staging-auth` (see README "Staging").
+      "kv_namespaces": [{ "binding": "AUTH_KV", "id": "17570618d89f4dbf90c5b691193a14bb" }],
       "r2_buckets": [
         { "binding": "BUNDLES", "bucket_name": "zerosnake-staging-bundles" },
         { "binding": "SOURCES", "bucket_name": "zerosnake-staging-sources" },

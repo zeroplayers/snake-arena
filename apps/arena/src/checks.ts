@@ -236,7 +236,8 @@ async function giveUp(message: Message<unknown>, env: ChecksEnv): Promise<void> 
 
 /**
  * Cron: rejects versions that have been `validating` for {@link STALE_AFTER_MS} since queueing,
- * and those never queued {@link UNQUEUED_AFTER_MS} after being created.
+ * and those never queued {@link UNQUEUED_AFTER_MS} after being created, `REAP_LIMIT` of
+ * each per run (one `checks.finished` point each, under Analytics Engine's 250 an invocation).
  */
 export async function reapStaleVersions(
   env: Pick<ChecksEnv, "DB" | "METRICS">,

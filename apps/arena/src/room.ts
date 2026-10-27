@@ -31,6 +31,7 @@ import {
   DO_CPU_LIMIT_MS,
   METRICS_MS,
   NEXT_LIFE_RETRY_MS,
+  OUTBOX_PER_CYCLE,
   REALTIME_BATCH_TICKS,
   ROOM_CPU_BUDGET_MS,
   SAFETY_ALARM_MS,
@@ -172,6 +173,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   private reportedAt = 0;
   /** Sums of the batches since the last `room.batch` metric (in memory only). */
   private readonly metrics = new BatchMetrics(Date.now());
+  /** Outbox items the cycle in progress may still deliver (`drain`). */
+  private drainLeft = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -249,6 +252,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
           spectatorGraceMs: limits.spectatorGraceMs ?? SPECTATOR_GRACE_MS,
           spectatorAckTimeoutMs: limits.spectatorAckTimeoutMs ?? ACK_TIMEOUT_MS,
           metricsMs: limits.metricsMs ?? METRICS_MS,
+          outboxPerCycle: limits.outboxPerCycle ?? OUTBOX_PER_CYCLE,
         },
         livesEnded: 0,
         startedAt: Date.now(),
@@ -380,6 +384,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     try {
       const meta = this.store.meta();
       if (!meta) return;
+      this.drainLeft = meta.limits.outboxPerCycle ?? OUTBOX_PER_CYCLE;
       await this.drain();
       const outbox = this.store.outboxStats();
       if (meta.state !== "running") {
@@ -402,7 +407,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         // so the next cycle handles this like a batch that died.
         this.dropSim();
         this.spectators.abort();
-        this.reportIncident(meta.roomId, "exception", null, Date.now(), e);
+        this.reportIncident(meta.roomId, "exception", null, Date.now(), { error: e });
+        this.markReported();
         throw e;
       }
       await this.drain();
@@ -442,6 +448,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     await this.begin(meta, marker);
     const watcher = watch ? this.watchHooks(meta, marker) : null;
     const afterStep = this.spectators.beginBatch(sim.world);
+    // The batch's wall time (`room.batch`'s `wallMs`) runs from here, after the I/O before it.
+    const ranFrom = Date.now();
     const result = await sim.run(plan, { ...watcher?.hooks, ...(afterStep && { afterStep }) });
     const blamed = watcher?.blamed() ?? null;
     const overran = this.commit(sim, result, maxPendingSeq, () => {
@@ -458,9 +466,14 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     });
     if (overran) {
       const { verdict, counted, now } = overran;
-      this.reportIncident(meta.roomId, "overran", verdict, now, undefined, counted);
+      this.reportIncident(meta.roomId, "overran", verdict, now, { counted });
     }
     this.spectators.commit(sim.world, meta.limits.spectatorAckTimeoutMs ?? ACK_TIMEOUT_MS);
+    // Some bots ran a tick the world never stepped (or one was evicted): restart them from the
+    // saved frame.
+    if (result.aborted || blamed) this.dropSim();
+    // The clock stands still during CPU work: a timer moves it to the batch's end.
+    await new Promise((r) => setTimeout(r, 0));
     const now = Date.now();
     this.metrics.add({
       ticks: result.ticks,
@@ -468,14 +481,11 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       workUnits: result.work,
       livesStarted: result.spawned.filter((e) => e.versionId !== null).length,
       livesEnded: result.ended.filter((e) => e.entry.versionId !== null).length,
-      wallMs: now - invokedAt,
+      wallMs: now - ranFrom,
       watched: watch,
       cut: result.aborted || blamed !== null || result.ticks < plan.ticks,
     });
     this.flushMetrics(meta, sim.world, now);
-    // Some bots ran a tick the world never stepped (or one was evicted): restart them from the
-    // saved frame.
-    if (result.aborted || blamed) this.dropSim();
   }
 
   /**
@@ -569,7 +579,11 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       this.store.clearMarker();
       return this.countIncident(verdict, marker.watch, marker.fromTick, now);
     });
-    this.reportIncident(meta.roomId, counted.outcome, verdict, now, undefined, counted);
+    // An alarm that threw wrote this incident's point already (`exception`): only log it.
+    this.reportIncident(meta.roomId, counted.outcome, verdict, now, {
+      counted,
+      reported: marker.exception === true,
+    });
     await this.batch(invokedAt);
   }
 
@@ -643,15 +657,19 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
 
   /**
    * An incident (`countIncident`'s, a watched call that `overran`, or an alarm that threw):
-   * the `room.crashed` metric and a structured log.
+   * the `room.crashed` metric and a structured log. `reported`: the alarm that threw wrote the
+   * metric for this incident already, so only the log is written.
    */
   private reportIncident(
     roomId: string,
     cause: IncidentOutcome | "overran" | "exception",
     verdict: Verdict | null,
     now: number,
-    error?: unknown,
-    counted?: Counted,
+    {
+      error,
+      counted,
+      reported = false,
+    }: { error?: unknown; counted?: Counted; reported?: boolean } = {},
   ): void {
     let restarts = 0;
     try {
@@ -667,9 +685,10 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       gapMs: verdict?.gapMs ?? 0,
       callMs: verdict?.kind === "suspect" ? verdict.callMs : 0,
     };
-    writeMetric(this.env.METRICS, "room.crashed", fields);
+    if (!reported) writeMetric(this.env.METRICS, "room.crashed", fields);
     log(cause === "restart" ? "warn" : "error", "room.crashed", {
       ...fields,
+      ...(reported && { reportedAs: "exception" }),
       ...(verdict?.kind === "suspect" && { call: verdict.call }),
       ...(counted && { kills: counted.kills.length, evict: counted.evict }),
       error,
@@ -878,14 +897,17 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   /**
    * Delivers what committed batches queued: replay chunks and life traces to R2, lives (once their
    * chunk and trace are in R2) and quarantines to D1 and the matchmaker. Failures retry with
-   * exponential backoff; nothing is dropped.
+   * exponential backoff; nothing is dropped. A cycle delivers at most `outboxPerCycle` items
+   * (`drainLeft`, which `cycle` sets), so it writes at most that many `life.ended` points; the
+   * rest wait for the next cycle.
    */
   private async drain(): Promise<void> {
     for (let pass = 0; pass < 2; pass++) {
       const meta = this.store.meta();
-      if (!meta) return;
-      const due = this.store.dueOutbox(Date.now(), meta.openChunkTick);
+      if (!meta || this.drainLeft <= 0) return;
+      const due = this.store.dueOutbox(Date.now(), meta.openChunkTick, this.drainLeft);
       if (due.length === 0) return;
+      this.drainLeft -= due.length;
       for (const { seq, item } of due) {
         try {
           switch (item.kind) {
@@ -1207,6 +1229,16 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       meta.limits.metricsMs ?? METRICS_MS,
       force,
     );
+  }
+
+  /** Notes on the batch marker, if any, that the alarm's exception was reported (`recover`). */
+  private markReported(): void {
+    try {
+      const marker = this.store.marker();
+      if (marker) this.store.setMarker({ ...marker, exception: true });
+    } catch {
+      // Storage may be what threw: the recovery then reports the incident a second time.
+    }
   }
 
   private reportQuarantine(

@@ -108,10 +108,16 @@ ignored: metrics never stop a room, the matchmaker or the consumer.
 Overhead: nothing per tick. A room adds its batches up in memory and writes one `room.batch` per
 `RoomLimits.metricsMs` (30 s; an eviction loses at most that much of a room's counts), so 200
 rooms write ~7 points a second whatever their batch rate. Lives, incidents and check jobs write
-one point each; the matchmaker one a minute.
+one point each; the matchmaker one a minute. Analytics Engine takes at most 250 points per
+invocation, so a room's cycle delivers at most `RoomLimits.outboxPerCycle` (100) outbox items,
+and so at most 100 `life.ended`, and the cron reaps at most `REAP_LIMIT` (100) versions of each
+kind; a backlog (after an outage) waits for the next cycle or run instead of being undercounted.
 
 **CPU.** Workers freeze the clock during CPU work, so code can't measure its own CPU. `wallMs`
-is a batch's wall time, which only moves on I/O; `workUnits` (`double4`) is the sandbox's
+is the wall time of a batch's simulation, from its first bot call to its saved result (a timer
+moves the clock there): the bots, the engine, the commit and, in watch mode, the markers' syncs
+and random waits. The I/O around it (deliveries, the kill switch read, labels for spectators,
+loading bundles after a restart) is not in it. `workUnits` (`double4`) is the sandbox's
 deterministic cost of the bot code. DO CPU itself is in the dashboard (Workers & Pages →
 `zerosnake-arena-staging` → Metrics → Durable Objects) and the GraphQL dataset
 `durableObjectsInvocationsAdaptiveGroups` (`cpuTime`). `room.crashed` with cause `overrun` /
@@ -143,7 +149,7 @@ FROM zerosnake_staging WHERE blob1 = 'room.batch' AND timestamp > NOW() - INTERV
 GROUP BY t ORDER BY t
 
 -- Ticks per second per room, slowest first (last 10 minutes)
-SELECT blob3 AS room, any(blob4) AS mode,
+SELECT blob3 AS room, argMax(blob4, timestamp) AS mode,
        SUM(_sample_interval * double2) * 1000 / SUM(_sample_interval * double11) AS ticks_per_s,
        max(double12) AS spectators
 FROM zerosnake_staging WHERE blob1 = 'room.batch' AND timestamp > NOW() - INTERVAL '10' MINUTE
@@ -224,8 +230,8 @@ the query preview when saving. `<window>` is the Monitor's time range.
 | Kill storm        | `SELECT SUM(_sample_interval) AS value … blob1 = 'room.crashed' AND blob4 IN ('overrun', 'suspect', 'evicted', 'overran')` (15 minutes)                                                               | `> 5`     |
 | Quarantines       | `SELECT SUM(_sample_interval) AS value … blob1 = 'version.quarantined'` (1 hour)                                                                                                                      | `> 2`     |
 - **Room crashed** is #30's "an alert fires when a room crashes". `restart` is left out: a deploy
-  or an eviction interrupting a batch is one, and counts for nothing. (The same query in
-  `apps/web/README.md` predates this and counts restarts too; use this one.)
+  or an eviction interrupting a batch is one, and counts for nothing. An alarm that threw is
+  one `exception`: the recovery from its batch marker logs, but doesn't write, a second point.
 - **Rooms stuck** fires when the matchmaker finds a running room whose tick didn't move for a
   minute or more: `outbox_full` means D1, R2 or the matchmaker keep failing for that room (its
   `room.outbox_failed` logs say which), `no_progress` that its alarm stopped. **Arena not

@@ -38,6 +38,11 @@ export interface BatchMarker extends CrashMarker {
   fromTick: number;
   /** Pending tickets with `seq` up to this one spawn in the batch. */
   maxPendingSeq: number;
+  /**
+   * The alarm threw with this marker in place and reported it (`room.crashed`, `exception`), so
+   * the recovery doesn't report the same incident again.
+   */
+  exception?: boolean;
 }
 
 export interface Meta {
@@ -357,7 +362,11 @@ export class RoomStore {
    * (`openChunkTick` is past it, or no chunk is open) and no longer in the outbox; and until its
    * trace is (no longer in the outbox).
    */
-  dueOutbox(now: number, openChunkTick: number | null): { seq: number; item: OutboxItem }[] {
+  dueOutbox(
+    now: number,
+    openChunkTick: number | null,
+    limit: number,
+  ): { seq: number; item: OutboxItem }[] {
     return this.sql
       .exec<{
         seq: number;
@@ -371,9 +380,10 @@ export class RoomStore {
              (SELECT 1 FROM outbox c WHERE c.kind = 'chunk' AND c.tick = o.tick) AND
              (o.key IS NULL OR NOT EXISTS
                (SELECT 1 FROM outbox t WHERE t.kind = 'trace' AND t.key = o.key))))
-         ORDER BY seq`,
+         ORDER BY seq LIMIT ?3`,
         now,
         openChunkTick,
+        limit,
       )
       .toArray()
       .map((r) => {
@@ -549,7 +559,6 @@ export class RoomStore {
     );
   }
 
-  /** Batches that died with CPU-limit evidence (all but `restart`) since `since`. */
   /** Incidents of any outcome since `since` (wall ms). */
   incidentsSince(since: number): number {
     return this.sql
@@ -557,6 +566,7 @@ export class RoomStore {
       .one().n;
   }
 
+  /** Batches that died with CPU-limit evidence (all but `restart`) since `since`. */
   cpuIncidentsSince(since: number): number {
     return this.sql
       .exec<{ n: number }>(

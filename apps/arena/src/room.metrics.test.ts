@@ -197,6 +197,73 @@ describe("RoomDO metrics", () => {
   }, 60_000);
 });
 
+describe("RoomDO metrics, accuracy", () => {
+  it("times the simulation as wallMs, not the deliveries before it", async () => {
+    const SLOW_MS = 2500;
+    const hal = await ticket("hal", BOTS.thrower);
+    const ivy = await ticket("ivy", house.hard as string);
+    await startRoom("timed", [hal, ivy], {
+      limits: { batchTicks: 20, metricsMs: 0, arenaControlPollMs: 0 },
+    });
+    // Hal dies on his third tick; his trace's upload fails and is retried a second later...
+    await h.room("timed", "failTraces", 1);
+    await run("timed");
+    // ...by the next cycle, before its batch, and takes SLOW_MS.
+    await h.room("timed", "slowTraces", SLOW_MS);
+    await sleep(1100);
+    const before = (await points("timed")).length;
+    const from = performance.now();
+    await run("timed");
+    expect(performance.now() - from).toBeGreaterThanOrEqual(SLOW_MS);
+    const [batch] = metricsNamed((await points("timed")).slice(before), "room.batch");
+    expect(batch).toMatchObject({ batches: 1, ticks: 20 });
+    expect(batch?.wallMs).toBeLessThan(SLOW_MS);
+    expect(batch?.maxWallMs).toBe(batch?.wallMs);
+  }, 60_000);
+
+  it("delivers at most outboxPerCycle items a cycle, so life.ended stays under the cap", async () => {
+    const throwers = await Promise.all(
+      ["jo", "kim", "lee", "mo"].map((a) => ticket(a, BOTS.thrower)),
+    );
+    const ned = await ticket("ned", house.hard as string);
+    await startRoom("capped", [...throwers, ned], {
+      limits: {
+        batchTicks: 20,
+        chunkTicks: 50,
+        metricsMs: 0,
+        arenaControlPollMs: 0,
+        outboxPerCycle: 2,
+      },
+    });
+    const lives = async () => metricsNamed(await points("capped"), "life.ended").length;
+    // Four lives end on tick 3: four traces, four lives and the chunks, two items a cycle.
+    const perCycle: number[] = [];
+    for (let i = 0; i < 30 && (await lives()) < throwers.length; i++) {
+      const before = await lives();
+      await run("capped");
+      perCycle.push((await lives()) - before);
+    }
+    expect(await lives()).toBe(throwers.length);
+    expect(Math.max(...perCycle)).toBeLessThanOrEqual(2);
+    expect(perCycle.filter((n) => n > 0).length).toBeGreaterThan(1);
+  }, 120_000);
+
+  it("writes one room.crashed for an alarm that threw, not a second one on recovery", async () => {
+    const pat = await ticket("pat", house.hard as string);
+    const quin = await ticket("quin", house.medium as string);
+    await startRoom("thrown", [pat, quin], { limits: { batchTicks: 20, metricsMs: 0 } });
+    // The batch throws after its marker is saved: the next cycle recovers from it.
+    await h.room("thrown", "failInstrument", 1);
+    await expect(run("thrown")).rejects.toThrow(/instrumenting failed/);
+    const s = await run("thrown");
+    expect(s.tick).toBe(20);
+    const crashes = metricsNamed(await points("thrown"), "room.crashed");
+    expect(crashes).toEqual([
+      expect.objectContaining({ roomId: "thrown", cause: "exception", versionId: null }),
+    ]);
+  }, 60_000);
+});
+
 describe("RoomDO metrics, fail-open", () => {
   it("runs, delivers and closes when every metric write throws", async () => {
     const broken = await createHarness({ metrics: "throw" });

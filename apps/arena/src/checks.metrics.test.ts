@@ -5,7 +5,7 @@ import {
   DEAD_LETTER_QUEUE,
   type Harness,
 } from "./checks/testing/harness.ts";
-import { STALE_AFTER_MS } from "./checks/versions.ts";
+import { REAP_LIMIT, STALE_AFTER_MS } from "./checks/versions.ts";
 import { metricsNamed } from "./testing/metrics.ts";
 
 let h: Harness;
@@ -89,5 +89,33 @@ describe("checks consumer metrics", () => {
     expect(await finished()).toEqual([
       { outcome: "reaped", reason: "checks_failed_to_complete", durationMs: 0, attempt: 0 },
     ]);
+  });
+
+  it("reaps at most REAP_LIMIT versions a run, so a run stays under 250 points", async () => {
+    const now = Date.now();
+    const first = await h.deploy("flood", SUICIDAL, { enqueuedAt: now - STALE_AFTER_MS - 1 });
+    // REAP_LIMIT more stale versions of the same bot, copies of the first.
+    await h.db
+      .prepare(
+        `WITH RECURSIVE k(n) AS (SELECT 2 UNION ALL SELECT n + 1 FROM k WHERE n <= ?2)
+         INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key, enqueued_at)
+         SELECT 'version-flood-' || k.n, v.bot_id, k.n, 'validating', v.bundle_key, v.source_key,
+           v.enqueued_at
+         FROM k, versions v WHERE v.id = ?1`,
+      )
+      .bind(first.job.versionId, REAP_LIMIT)
+      .run();
+    await h.cron(now);
+    expect((await finished()).length).toBe(REAP_LIMIT);
+    // The rest is reaped by the next run.
+    await h.cron(now);
+    expect(await finished()).toEqual([
+      { outcome: "reaped", reason: "checks_failed_to_complete", durationMs: 0, attempt: 0 },
+    ]);
+    const rejected = await h.db
+      .prepare("SELECT count(*) AS n FROM versions WHERE bot_id = 'bot-flood' AND status = ?")
+      .bind("rejected")
+      .first<{ n: number }>();
+    expect(rejected?.n).toBe(REAP_LIMIT + 1);
   });
 });

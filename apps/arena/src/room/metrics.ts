@@ -13,6 +13,7 @@ export interface BatchSample {
   workUnits: number;
   livesStarted: number;
   livesEnded: number;
+  /** The simulation's wall time, first bot call to saved result (none of the I/O around it). */
   wallMs: number;
   watched: boolean;
   /** Watch mode ended the batch early (a tick abandoned, or a call named). */

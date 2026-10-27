@@ -18,7 +18,7 @@ A pnpm monorepo (workspaces in [`pnpm-workspace.yaml`](pnpm-workspace.yaml)):
 | `packages/cli`      | `zerosnake`             | `npx zerosnake`                                              |
 | `bots/house`        | `@zerosnake/house-bots` | built-in bots: easy, medium, hard, chaos                     |
 | `apps/web`          | `@zerosnake/web`        | site, auth and deploy API (TanStack Start on Workers, D1)    |
-| `apps/arena`        | `@zerosnake/arena`      | arena Worker: matchmaker, rooms, check consumer (stubs)      |
+| `apps/arena`        | `@zerosnake/arena`      | arena Worker: matchmaker, rooms, check consumer              |
 | `template/`         |                         | starter project for bot authors (`zerosnake init` copies it) |
 | `docs/`             | `@zerosnake/docs`       | user documentation and its link check                        |
 | `spikes/`           |                         | throwaway experiments with their results                     |

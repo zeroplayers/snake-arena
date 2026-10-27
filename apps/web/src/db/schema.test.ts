@@ -130,6 +130,38 @@ describe("constraints", () => {
     expect(await seq()).toBe(after + 1);
   });
 
+  it("bumps change_seq of the ready versions a bot or user ban covers, one value each", async () => {
+    const seqs = async () =>
+      (
+        await d1.db
+          .prepare("SELECT id, change_seq FROM versions WHERE id LIKE 'seed-%' ORDER BY id")
+          .all<{ id: string; change_seq: number }>()
+      ).results;
+    const run = (sql: string) => d1.db.prepare(sql).run();
+    const before = await seqs();
+    const max = Math.max(...before.map((r) => r.change_seq));
+    const changed = async () => {
+      const now = await seqs();
+      return now.filter((r, i) => r.change_seq !== before[i]?.change_seq).map((r) => r.change_seq);
+    };
+
+    // seed-ada's ready versions: seed-greedy-2 and seed-coward-1 (not the archived seed-greedy-1).
+    await run("UPDATE users SET banned_at = 1 WHERE id = 'seed-ada'");
+    expect((await changed()).sort()).toEqual([max + 1, max + 2]);
+    await run("UPDATE users SET banned_at = NULL WHERE id = 'seed-ada'");
+    expect(await changed()).toHaveLength(2);
+
+    const hunter = async () => (await seqs()).find((r) => r.id === "seed-hunter-1")?.change_seq;
+    const top = Math.max(...(await seqs()).map((r) => r.change_seq));
+    await run("UPDATE bots SET banned_at = 1 WHERE id = 'seed-hunter'");
+    expect(await hunter()).toBe(top + 1);
+    // The same value again isn't a change.
+    await run("UPDATE bots SET banned_at = 1 WHERE id = 'seed-hunter'");
+    expect(await hunter()).toBe(top + 1);
+    await run("UPDATE bots SET banned_at = NULL WHERE id = 'seed-hunter'");
+    expect(await hunter()).toBe(top + 2);
+  });
+
   it("enforces foreign keys", async () => {
     await expect(insertVersion("t-5", "no-such-bot", 1, "validating")).rejects.toThrow(
       /FOREIGN KEY/,

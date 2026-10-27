@@ -25,6 +25,14 @@ const wasmPlugin: Plugin = {
   },
 };
 
+export interface HarnessOptions {
+  /** Test worker entry, relative to `src/testing/`. Default `worker.ts` (the room tests'). */
+  worker?: string;
+  /** Classes the worker exports behind `ROOMS` and `MATCHMAKER`. */
+  rooms?: string;
+  matchmaker?: string;
+}
+
 export interface Harness {
   call<T = unknown>(
     target: "room" | "matchmaker" | "showcase",
@@ -42,15 +50,19 @@ export interface Harness {
   /** Restarts workerd: every object loses its memory and in-flight requests; storage stays. */
   restart(): Promise<void>;
   d1(): Promise<D1Database>;
-  r2(): Promise<R2Bucket>;
+  r2(binding?: "REPLAYS" | "BUNDLES"): Promise<R2Bucket>;
   traces(): Promise<R2Bucket>;
   dispose(): Promise<void>;
 }
 
-export async function createHarness(): Promise<Harness> {
+export async function createHarness({
+  worker = "worker.ts",
+  rooms = "RoomDO",
+  matchmaker = "TestMatchmaker",
+}: HarnessOptions = {}): Promise<Harness> {
   writeFileSync(OUTPUT, houseBundlesModule(await bundleHouseBots()));
   const out = await build({
-    entryPoints: [join(appDir, "src/testing/worker.ts")],
+    entryPoints: [join(appDir, "src/testing", worker)],
     bundle: true,
     format: "esm",
     platform: "neutral",
@@ -83,14 +95,15 @@ export async function createHarness(): Promise<Harness> {
           env: {
             DB: { type: "d1", id: "test" },
             REPLAYS: { type: "r2", name: "replays" },
+            BUNDLES: { type: "r2", name: "bundles" },
             TRACES: { type: "r2", name: "traces" },
-            ROOMS: { type: "durable-object", worker: "arena", exportName: "RoomDO" },
-            MATCHMAKER: { type: "durable-object", worker: "arena", exportName: "TestMatchmaker" },
+            ROOMS: { type: "durable-object", worker: "arena", exportName: rooms },
+            MATCHMAKER: { type: "durable-object", worker: "arena", exportName: matchmaker },
             SHOWCASE: { type: "durable-object", worker: "arena", exportName: "ShowcaseDO" },
           },
           exports: {
-            RoomDO: { type: "durable-object", storage: "sqlite" },
-            TestMatchmaker: { type: "durable-object", storage: "sqlite" },
+            [rooms]: { type: "durable-object", storage: "sqlite" },
+            [matchmaker]: { type: "durable-object", storage: "sqlite" },
             ShowcaseDO: { type: "durable-object", storage: "sqlite" },
           },
         },
@@ -131,7 +144,7 @@ export async function createHarness(): Promise<Harness> {
       await mf.ready;
     },
     d1: async () => (await mf.getD1Database("DB")) as unknown as D1Database,
-    r2: async () => (await mf.getR2Bucket("REPLAYS")) as unknown as R2Bucket,
+    r2: async (binding = "REPLAYS") => (await mf.getR2Bucket(binding)) as unknown as R2Bucket,
     traces: async () => (await mf.getR2Bucket("TRACES")) as unknown as R2Bucket,
     async dispose() {
       await mf.dispose();

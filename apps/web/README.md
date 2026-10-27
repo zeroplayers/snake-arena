@@ -198,8 +198,8 @@ Defined in `src/shared/arena.ts` (`@zerosnake/web/shared`):
 - **The RPC is a hint.** After each commit the site calls
   `MATCHMAKER.get(idFromName("global")).activeVersionChanged(change)`, a typed
   `ActiveVersionChange` with the bot, new and previous version, and reason. It is best effort:
-  2 s timeout, and errors are only logged. `MatchmakerDO` doesn't implement the method yet (#23),
-  so for now it only logs.
+  2 s timeout, and errors are only logged. `MatchmakerDO` takes it as a cue to poll `change_seq`
+  at once (it polls every few seconds anyway).
 - **Ratings** count only lives started at or after `versions.activated_at`, including when a
   rating is rebuilt from `lives`. Writers store that `activated_at` in `ratings.activated_at`; a
   trigger ignores writes for any other stint, so a rating computed before a rollback can't bring

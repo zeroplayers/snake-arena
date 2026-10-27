@@ -183,8 +183,10 @@ export const MODERATION_CHECK_NAME = "moderation";
  * `quarantined_at` back to `NULL` (no UI yet). The site shows it on the bot page and the CLI in
  * `zerosnake status` / `logs`.
  *
- * TODO(#23): the matchmaker should also count `evicted` lives per version across rooms and
- * quarantine at the same threshold; rooms only count their own.
+ * The matchmaker also counts `evicted` lives per version across rooms (each life once) and
+ * quarantines the version at the same threshold; rooms only count their own. It retires the
+ * running lives of a version once it can't play any more (quarantined, banned, archived, rolled
+ * back), rather than letting them play on.
  */
 export interface VersionQuarantine {
   /** ISO 8601. */

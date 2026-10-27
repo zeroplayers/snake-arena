@@ -58,6 +58,11 @@ export interface Meta {
   watch: WatchWindow;
   /** Start tick of the replay chunk still being recorded (not in R2 yet), or null. */
   openChunkTick: number | null;
+  /**
+   * Wall ms the room went idle while reports it holds could bring bots back (see
+   * `RoomDO.awaitingReports`); 0 (or missing) otherwise.
+   */
+  idleSince?: number;
   /** The kill window (see `backstop.ts`). Missing in rooms saved before it existed. */
   kills: NamedKill[];
   /** The version tally (see `backstop.ts`). Missing in rooms saved before it existed. */
@@ -74,6 +79,8 @@ export type OutboxItem =
    */
   | { kind: "life"; json: string; chunkTick: number; traceKey: string | null }
   | { kind: "quarantine"; json: string }
+  /** A ticket that never started a life (`LifeDrop`), for the matchmaker. */
+  | { kind: "dropped"; json: string }
   /** A named kill for D1 (`VersionKillRecord`), and named kills to retract (an array of them). */
   | { kind: "kill" | "retract"; json: string }
   | { kind: "closed" };
@@ -328,6 +335,7 @@ export class RoomStore {
         );
         break;
       case "quarantine":
+      case "dropped":
       case "kill":
       case "retract":
         this.sql.exec(
@@ -380,7 +388,12 @@ export class RoomStore {
             chunkTick: r.tick ?? 0,
             traceKey: r.key,
           };
-        } else if (r.kind === "quarantine" || r.kind === "kill" || r.kind === "retract") {
+        } else if (
+          r.kind === "quarantine" ||
+          r.kind === "dropped" ||
+          r.kind === "kill" ||
+          r.kind === "retract"
+        ) {
           item = { kind: r.kind, json: decoder.decode(body) };
         } else {
           item = { kind: "closed" };
@@ -408,6 +421,14 @@ export class RoomStore {
       )
       .one();
     return { size: r.size, failing: r.failing ?? 0, nextAt: r.next_at };
+  }
+
+  /** Whether reports of real lives (ended or dropped) wait in the outbox. */
+  hasReports(): boolean {
+    return (
+      this.sql.exec("SELECT 1 FROM outbox WHERE kind IN ('life', 'dropped') LIMIT 1").toArray()
+        .length > 0
+    );
   }
 
   done(seq: number): void {

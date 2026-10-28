@@ -67,8 +67,10 @@ export class FoodRenderer {
     alpha: number,
     heads: readonly number[],
     dt: number,
+    /** Absolute clock in seconds; when given it replaces the running one (`dt` is ignored). */
+    time?: number,
   ): void {
-    this.time += dt;
+    this.time = time ?? this.time + dt;
     this.ensureCapacity(prev.length + next.length);
 
     const prevById = this.prevById;

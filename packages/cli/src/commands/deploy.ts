@@ -121,7 +121,7 @@ export async function deployCommand(
   const bundle = await bundleBot(entry, { cwd: project.root, color: stderrHasColor() });
   const sources = readSources(project.root, bundle);
   io.out(
-    `${green("✓")} bundles ${dim(`(${(bundle.bytes / 1024).toFixed(1)} KB from ${sources.length} source files)`)}`,
+    `${green("✓")} bundles ${dim(`(${(bundle.bytes / 1024).toFixed(1)} KB from ${sources.length} source ${sources.length === 1 ? "file" : "files"})`)}`,
   );
   const meta = deployMeta(project.root, values.message);
   if (values["skip-local-checks"]) {

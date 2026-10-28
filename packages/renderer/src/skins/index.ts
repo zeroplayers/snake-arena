@@ -62,6 +62,16 @@ const TEXTURE_SIZE = 512;
  */
 export class SkinTextures {
   private cache = new Map<string, Texture>();
+  private pending: Promise<void>[] = [];
+
+  /** Resolves once every texture requested so far has its image drawn (or failed to load). */
+  async loaded(): Promise<void> {
+    while (this.pending.length > 0) {
+      const batch = this.pending;
+      this.pending = [];
+      await Promise.all(batch);
+    }
+  }
 
   get(svg: string, color: string | undefined): Texture {
     const key = `${color ?? ""}|${svg}`;
@@ -76,11 +86,19 @@ export class SkinTextures {
     this.cache.set(key, texture);
 
     const image = new Image();
-    image.onload = () => {
-      canvas.getContext("2d")?.drawImage(image, 0, 0, TEXTURE_SIZE, TEXTURE_SIZE);
-      texture.needsUpdate = true;
-    };
-    image.onerror = () => console.error("[renderer] failed to rasterise skin SVG");
+    this.pending.push(
+      new Promise<void>((resolve) => {
+        image.onload = () => {
+          canvas.getContext("2d")?.drawImage(image, 0, 0, TEXTURE_SIZE, TEXTURE_SIZE);
+          texture.needsUpdate = true;
+          resolve();
+        };
+        image.onerror = () => {
+          console.error("[renderer] failed to rasterise skin SVG");
+          resolve();
+        };
+      }),
+    );
     image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(prepareSvg(svg, color))}`;
     return texture;
   }

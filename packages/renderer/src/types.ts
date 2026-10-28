@@ -58,6 +58,16 @@ export type CameraMode =
       readonly snakeId: string;
       /** Keep at least this many world units around the snake in view (e.g. its vision). */
       readonly minViewRadius?: number;
+    }
+  | {
+      /**
+       * A camera set from outside (a video's own camera work): centred on `x`, `y`, showing
+       * `viewRadius` world units from the centre to the nearer edge of the screen. No smoothing.
+       */
+      readonly mode: "fixed";
+      readonly x: number;
+      readonly y: number;
+      readonly viewRadius: number;
     };
 
 /** A disc drawn around one snake's head, e.g. its vision radius. */

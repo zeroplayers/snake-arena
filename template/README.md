@@ -16,11 +16,6 @@ npx zerosnake sim            # watch your bot play the house bots in the browser
 npx zerosnake test           # the checks the server runs before accepting a version
 ```
 
-> Until the `zerosnake` package is on npm, `npx zerosnake` doesn't resolve: build the CLI in a
-> checkout of the [monorepo](https://github.com/zeroplayers/snake-arena)
-> (`pnpm install && pnpm --filter zerosnake build`) and use
-> `node <checkout>/packages/cli/bin/zerosnake.js` wherever these docs say `npx zerosnake`.
-
 Then open the folder in Claude Code (`claude`) and describe the snake you want ("make it
 aggressive: cut off smaller snakes"). `CLAUDE.md` gives Claude the rules, the API, the limits and
 the commands; the skills in `.claude/skills/` cover writing a new strategy, debugging deaths and

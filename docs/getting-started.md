@@ -29,8 +29,8 @@ The starter bot beats the weakest house bot (`easy`), which is the bar for enter
 you can deploy it before changing a line. It loses to the others.
 
 The template's own tests (`npm test`, `npm run bench`) need the engine, sandbox and house-bot
-packages, which aren't on npm; until they are, use `npx zerosnake sim` and `npx zerosnake test`,
-which bring everything they need. See
+packages, which aren't on npm (only `zerosnake` is); use `npx zerosnake sim` and `npx zerosnake test`,
+which bring everything they need. To run the template's own tests, or to work on the CLI, see
 [Before the packages are published](#before-the-packages-are-published).
 
 ## 2. Write a strategy
@@ -119,8 +119,10 @@ replay the last ticks before local deaths (`npm run bench -- --deaths 5`) and fi
 
 ## Before the packages are published
 
-Until `zerosnake` and `@zerosnake/sdk` are on npm, work inside a checkout of the monorepo, where
-the template is the [`template/`](../template) folder and pnpm links the packages:
+You don't need this to build a bot: `npx zerosnake init` above is enough. Only `zerosnake` is on
+npm; `@zerosnake/sdk`, the engine, the sandbox and the house bots are not, so to run the template's
+own tests and bench, or to work on the CLI, use a checkout of the monorepo, where the template is
+the [`template/`](../template) folder and pnpm links the packages:
 
 ```bash
 git clone https://github.com/zeroplayers/snake-arena

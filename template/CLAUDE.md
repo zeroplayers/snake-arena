@@ -26,10 +26,10 @@ The `@zerosnake/*` packages are not on npm yet, so this folder is one of two thi
   same thing), and the CLI is `node ../packages/cli/bin/zerosnake.js` (after
   `pnpm --filter zerosnake build`).
 
-Until the `zerosnake` package is on npm, `npx zerosnake` may not resolve; the author then runs the
-CLI from a monorepo checkout as `node <checkout>/packages/cli/bin/zerosnake.js` (ask for the path
-and use it wherever this file says `npx zerosnake`). If there is no CLI at all, say so; never invent
-CLI output.
+If `npx zerosnake` doesn't resolve (no network, or an old Node), the author can run the CLI from a
+monorepo checkout as `node <checkout>/packages/cli/bin/zerosnake.js` (ask for the path and use it
+wherever this file says `npx zerosnake`). If there is no CLI at all, say so; never invent CLI
+output.
 
 ## Files
 

@@ -8,6 +8,14 @@ monorepo. Copy and the launch-day details are in [kit.md](kit.md).
 
 Run the commands from a checkout of `main` unless a step says otherwise.
 
+**Relation to `go-live.md`.** PR #88 adds `docs/launch/go-live.md` with the same owner steps, and
+PR #89 (stacked on it) flips the flags. This checklist agrees with both and adds the audit, the
+security settings, trusted publishing and the clean-machine check. Where they differ, follow this
+file: npm orgs are created on npmjs.com (`npm org create` doesn't exist), and the flags flip
+**after** the repository is public and the CLI is on npm, as #89's description says (go-live.md's
+step 4 flips them first). Once #88 is merged, go-live.md can link here instead of repeating the
+steps.
+
 ## 1. Review the audit
 
 Read the verdict in [open-source-audit.md](open-source-audit.md) and decide:
@@ -136,15 +144,16 @@ provenance.
 
 ## 5. Flip the site's flags
 
-Once **both** step 3 and step 4 are done, tell Claude:
+Only once **both** step 3 and step 4 are done: merge PR #89 (after #88), which sets
+`REPO.public` and `CLI_PUBLISHED` to `true` in `apps/web/src/site.ts`. If #88 isn't going in,
+tell Claude instead:
 
 > Flip the launch flags for zeroplayers/snake-arena#31: in `apps/web/src/site.ts` set
 > `REPO.public` to `true` and `CLI_PUBLISHED` to `true`, run lint, typecheck and the web tests,
 > and open a PR into main.
 
-That is the whole change: `landing.test.tsx` already passes with every combination of the two
-flags. (PR #89 makes the same change but is stacked on #88; close it, or merge it after #88.)
-Merge the PR and let the deploy run. Then on the live site:
+Either way it's only those two values: `landing.test.tsx` (same change as in #89) already passes
+with every combination of the flags. Let the deploy run, then on the live site:
 
 - [ ] No "Coming at launch" or "Not on npm yet"; the GitHub links work; "Copy first steps"
   copies one line.

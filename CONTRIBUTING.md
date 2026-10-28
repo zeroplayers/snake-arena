@@ -67,6 +67,11 @@ Plain Node can't run the engine's TypeScript directly (it uses parameter propert
 - `pnpm lint && pnpm typecheck && pnpm test` must pass, and CI must be green.
 - Pull requests are squash-merged.
 
+## Conduct and security
+
+Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report vulnerabilities
+privately as described in [SECURITY.md](SECURITY.md), not in an issue.
+
 ## License
 
 By contributing you agree that your contributions are licensed under the [MIT License](LICENSE).

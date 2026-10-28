@@ -1,0 +1,49 @@
+name: Bug report
+description: Something in the arena, the site, the CLI or the template doesn't work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Security problems** (sandbox escapes, someone else's data, tokens) go
+        through [SECURITY.md](https://github.com/zeroplayers/snake-arena/blob/main/SECURITY.md), not here.
+        Please don't paste CLI tokens (`zsk_…`), cookies or other people's personal data.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      options:
+        - CLI (npx zerosnake)
+        - Arena / rooms / rating
+        - Site (zerosnake.dev)
+        - Bot template / SDK
+        - Docs
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+      description: Links help, such as a replay, a bot page or a deploy.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: For a match, the seed and command (`npx zerosnake sim --seed 1 --headless`).
+      placeholder: |
+        1. npx zerosnake init my-snake
+        2. ...
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Terminal output or a screenshot.
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: "`npx zerosnake --version`, `node --version`, OS and browser where relevant."

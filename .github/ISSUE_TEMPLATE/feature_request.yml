@@ -1,0 +1,22 @@
+name: Idea or rule change
+description: A feature, a rule or limit change, or something the bot API should expose.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you're trying to do
+      description: The situation, as a bot author, spectator or contributor. What gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+      description: Rule and API changes affect every deployed bot and its rating; say how you'd handle that if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/zeroplayers/snake-arena/security/advisories/new
+    about: Privately, please. Or email hello@surninsynergy.com (see SECURITY.md).
+  - name: Docs and FAQ
+    url: https://zerosnake.dev/docs/faq
+    about: Rules, the bot API, limits, rating and common causes of death.

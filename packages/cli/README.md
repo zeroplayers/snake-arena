@@ -1,4 +1,38 @@
-# zerosnake (CLI)
+# zerosnake
+
+The command line for [ZeroSnake Arena](https://zerosnake.dev): a slither.io-style arena where
+every snake is a program. Write a JavaScript or TypeScript bot (with Claude, another coding agent
+or by hand), play it against the house bots on your machine, then deploy it to rooms that run
+around the clock. It earns a rating, and its deaths come with a replay and a trace of what it saw.
+
+## Quick start
+
+Needs Node.js 24 or newer.
+
+```bash
+npx zerosnake init my-snake   # starter bot, CLAUDE.md, AGENTS.md and skills (works offline)
+cd my-snake
+npx zerosnake sim             # your snake vs the house bots, in your browser
+npx zerosnake test            # the same checks the server runs, same seeds, same verdict
+npx zerosnake login           # once, with GitHub
+npx zerosnake deploy --create # it joins the arena when the checks pass
+```
+
+Then open `claude` (or your agent) in `my-snake` and ask it to make the snake smarter: the project
+ships a `CLAUDE.md`, an `AGENTS.md` and skills for debugging deaths and comparing versions.
+
+- Docs: [rules](https://zerosnake.dev/docs/rules), [bot API](https://zerosnake.dev/docs/bot-api),
+  [limits](https://zerosnake.dev/docs/limits) and
+  [getting started](https://zerosnake.dev/docs/getting-started)
+- Source, issues and contributing:
+  [github.com/zeroplayers/snake-arena](https://github.com/zeroplayers/snake-arena)
+- Security reports: see
+  [SECURITY.md](https://github.com/zeroplayers/snake-arena/blob/main/SECURITY.md)
+- License: MIT
+
+The rest of this file is how the CLI works, for contributors.
+
+## Commands
 
 ```bash
 npx zerosnake init my-snake    # new bot project from template/ (offline)
@@ -136,11 +170,18 @@ don't need an install: without one, the CLI bundles the bot against its own copy
 
 `prepack` runs `scripts/build.ts`, which builds a self-contained `dist/`: `cli.js` (the CLI and
 every workspace package it uses), `client.js` (the viewer page), `house/*.js` (house bot
-bundles), `sdk/` and `template/`. The package ships only `bin/` and `dist/`; its dependencies
-are esbuild and QuickJS. `src/pack.test.ts` packs it, installs it outside the monorepo and runs
-`init`, `sim --headless` and `test` (on `src/testing/passing-bot.ts`, which passes, and on a bot
-that can't beat `easy`). `@zerosnake/checks` is bundled into `cli.js` like the other workspace
-packages. The package stays `private` until publishing is decided (#31).
+bundles), `sdk/` and `template/`. The package ships only `bin/` and `dist/` (plus this README,
+`LICENSE` and `package.json`); its dependencies are esbuild and QuickJS, both at exact versions:
+the check seeds come from the bundle's bytes and the op budget from QuickJS, so a newer patch
+release could change a verdict. Keep them in step with `packages/sandbox`. `src/pack.test.ts`
+packs it, installs it outside the monorepo and runs `init`, `sim --headless` and `test` (on
+`src/testing/passing-bot.ts`, which passes, and on a bot that can't beat `easy`).
+`@zerosnake/checks` is bundled into `cli.js` like the other workspace packages.
+
+Publish with `pnpm publish` (it rewrites the `workspace:*` devDependencies; plain `npm publish`
+wouldn't), or by pushing a `cli-v<version>` tag once npm trusted publishing is set up
+([`.github/workflows/release-cli.yml`](../../.github/workflows/release-cli.yml)). The owner's
+steps are in [`docs/launch/checklist.md`](../../docs/launch/checklist.md).
 
 In a checkout, build once with `pnpm --filter zerosnake build` before running
 `bin/zerosnake.js`; the bin never builds by itself. Tests run the sources directly.

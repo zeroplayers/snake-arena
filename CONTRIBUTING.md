@@ -39,7 +39,8 @@ pnpm lint          # Biome; `pnpm format` fixes formatting
 Run one package's tests with `pnpm vitest run packages/engine`, or a package script with
 `pnpm --filter <package> <script>`. CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs
 lint and typecheck in one job and the tests in parallel jobs (the arena, its CPU backstop's room
-tests, the site, the rest), on every pull request and push to main; the `check` job sums them up.
+tests, the site, the rest; see [`.github/test-shards.ts`](.github/test-shards.ts)), on every pull
+request and push to main; the `check` job sums them up.
 A new push to a pull request cancels its run in progress.
 
 Plain Node can't run the engine's TypeScript directly (it uses parameter properties); scripts use

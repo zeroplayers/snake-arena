@@ -1,6 +1,6 @@
 /**
  * The Worker's entry (wrangler.jsonc `main`). `www.` hosts redirect to the bare one
- * (`src/server/www.ts`). Other requests go through the edge checks
+ * (`src/server/www.ts`; static assets never get here). Other requests go through the edge checks
  * (`src/server/edge.ts`: rate limits, request log, metrics) into TanStack Start, except the live
  * showcase's WebSocket, which goes to the arena (`src/server/showcase.ts`). Cron Triggers
  * (`triggers.crons` in wrangler.jsonc) run the rating job every minute (`src/server/ratings.ts`),

@@ -71,10 +71,10 @@ published CLI has `https://zerosnake.dev` built in) but its config and resources
 `staging` (`env.staging`, `zerosnake-*-staging`). A separate staging can come later
 ([below](#separate-staging-later)).
 
-| Environment              | Site                                     | Arena API                   |
-| ------------------------ | ---------------------------------------- | --------------------------- |
-| public (`env.staging`)   | `zerosnake.dev` (`www.` redirects to it) | `api.zerosnake.dev`         |
-| separate staging (later) | `staging.zerosnake.dev`                  | `staging-api.zerosnake.dev` |
+| Environment              | Site                                                        | Arena API                   |
+| ------------------------ | ----------------------------------------------------------- | --------------------------- |
+| public (`env.staging`)   | `zerosnake.dev` (`www.` redirects to it, [see below](#www)) | `api.zerosnake.dev`         |
+| separate staging (later) | `staging.zerosnake.dev`                                     | `staging-api.zerosnake.dev` |
 
 All of them are in the `zerosnake.dev` zone (Cloudflare account "Surnin Synergy").
 
@@ -153,6 +153,19 @@ created beforehand.
 **Secrets** (web): `BETTER_AUTH_SECRET`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, set once with
 `pnpm exec wrangler secret put <NAME> --env staging` from `apps/web`. The GitHub App uses
 homepage `https://zerosnake.dev` and callback `https://zerosnake.dev/api/auth/callback/github`.
+
+### www
+
+`www.zerosnake.dev` is a second custom domain of the site Worker, which redirects it to the apex
+(301, path and query kept; `apps/web/src/server/www.ts`). Static assets (`/robots.txt`,
+`/sitemap.xml`, `/og.jpg`, `/assets/*`, the favicon) are served before the Worker runs, so on www
+they would answer 200 instead. Until the zone has this Redirect Rule, only pages redirect:
+dashboard → zone `zerosnake.dev` → **Rules → Redirect Rules → Create rule**: when the
+hostname equals `www.zerosnake.dev`, dynamic redirect to
+`concat("https://zerosnake.dev", http.request.uri.path)`, status 301, **Preserve query string** on
+(or the "Redirect from WWW to root" template). The Worker
+redirect stays as the fallback. `run_worker_first` would cover it too, but would run the Worker for
+every asset on the apex.
 
 ### Separate staging (later)
 

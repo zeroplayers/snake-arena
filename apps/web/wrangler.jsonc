@@ -93,7 +93,8 @@
   "env": {
     "staging": {
       // Deployed as `zerosnake-web-staging`.
-      // www only redirects to the apex (src/server/www.ts).
+      // www only redirects to the apex: pages via src/server/www.ts, static assets (served before
+      // the Worker) via the zone's Redirect Rule (README, "www").
       "routes": [
         { "pattern": "zerosnake.dev", "custom_domain": true },
         { "pattern": "www.zerosnake.dev", "custom_domain": true }

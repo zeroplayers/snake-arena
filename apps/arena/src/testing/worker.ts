@@ -1,9 +1,9 @@
 /**
- * Test entry for `room.test.ts`: the real `RoomDO` (with a sandbox that can be told to burn CPU),
- * a scriptable matchmaker in place of the stub, and `POST /rpc` to call either from Node
- * (`{ target, name, method, args }`). Spectators: `/showcase` as the site's proxy reaches it
- * (`ShowcaseEntrypoint` runs `handleShowcase`), `/spectate/<room name>` straight to a room, and
- * `/public/<path>` the production Worker's public `fetch`.
+ * Test entry for the room tests (`room*.test.ts`, `spectators.test.ts`): the real `RoomDO` (with a
+ * sandbox that can be told to burn CPU), a scriptable matchmaker in place of the stub, and
+ * `POST /rpc` to call either from Node (`{ target, name, method, args }`). Spectators: `/showcase`
+ * as the site's proxy reaches it (`ShowcaseEntrypoint` runs `handleShowcase`), `/spectate/<room
+ * name>` straight to a room, and `/public/<path>` the production Worker's public `fetch`.
  */
 import { DurableObject } from "cloudflare:workers";
 import type { BotLife, InstrumentResult } from "@zerosnake/sandbox";

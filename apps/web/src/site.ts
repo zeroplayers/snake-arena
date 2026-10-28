@@ -6,7 +6,7 @@
 export const REPO = {
   url: "https://github.com/zeroplayers/snake-arena",
   branch: "main",
-  public: false,
+  public: true,
 } as const;
 
 /**
@@ -14,7 +14,7 @@ export const REPO = {
  * landing page shows the `npx zerosnake …` commands as coming at launch and offers no copy: the
  * name isn't registered, so a pasted snippet could run anyone's code.
  */
-export const CLI_PUBLISHED = false;
+export const CLI_PUBLISHED = true;
 
 /**
  * The live showcase's WebSocket on this site (`src/server/showcase.ts` proxies it to the arena):

@@ -8,4 +8,4 @@ Disallow: /device
 Disallow: /welcome
 Disallow: /bots
 
-Sitemap: https://arena.surninsynergy.dev/sitemap.xml
+Sitemap: https://zerosnake.dev/sitemap.xml

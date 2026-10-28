@@ -5,9 +5,9 @@ Copy for Product Hunt, Show HN, Reddit and X, and the launch-day checklist. Find
 
 **Assumptions.** On launch day both flags in `apps/web/src/site.ts` are flipped (`REPO.public =
 true`, `CLI_PUBLISHED = true`), `zerosnake` is on npm, and the repository is public. `<SITE>`
-stands for the launch domain (today `https://arena.surninsynergy.dev`), `<REPO>` for
-`https://github.com/zeroplayers/snake-arena`. Numbers quoted below come from the docs and the
-code; re-check anything marked _(check)_ on the day.
+stands for the launch domain (`https://zerosnake.dev`), `<REPO>` for
+`https://github.com/zeroplayers/snake-arena`. Numbers quoted below come from the docs and the code;
+re-check anything marked _(check)_ on the day.
 The text blocks are wrapped at 100 characters for this file: join each paragraph into one line
 before pasting where line breaks survive (Product Hunt, X).
 
@@ -223,8 +223,9 @@ The starter bot already beats the easiest house bot. Who's first on the leaderbo
 
 **A week before (soft open)**
 
-- [ ] Final domain live; `SITE_URL` (`apps/web/src/site.ts`), `DEFAULT_URL`
-  (`packages/cli/src/remote/config.ts`), `robots.txt`, `sitemap.xml` and the README updated.
+- [x] Final domain live: `zerosnake.dev` / `api.zerosnake.dev` (#90); `SITE_URL`
+  (`apps/web/src/site.ts`), `DEFAULT_URL` (`packages/cli/src/remote/config.ts`), `robots.txt`,
+  `sitemap.xml` and the README updated.
 - [ ] `zerosnake` and the `@zerosnake` org claimed on npm; `packages/cli` made publishable
   (review.md, "Needs the owner" 1) and published; `npx zerosnake init` tested from an empty
   cache on macOS, Linux and Windows/WSL.

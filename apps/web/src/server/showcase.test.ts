@@ -19,7 +19,7 @@ function arena() {
 describe("/api/showcase", () => {
   it("hands the upgrade to the arena with the client it came from, and nothing else", async () => {
     const a = arena();
-    const request = new Request("https://arena.surninsynergy.dev/api/showcase?slot=1", {
+    const request = new Request("https://zerosnake.dev/api/showcase?slot=1", {
       // A browser can't speak for another client.
       headers: { ...upgrade, [SHOWCASE_CLIENT_HEADER]: "192.0.2.1" },
     });
@@ -34,7 +34,7 @@ describe("/api/showcase", () => {
 
   it("names an IPv6 client by its /64, as the rate limit does", async () => {
     const a = arena();
-    const request = new Request("https://arena.surninsynergy.dev/api/showcase", {
+    const request = new Request("https://zerosnake.dev/api/showcase", {
       headers: { Upgrade: "websocket", "cf-connecting-ip": "2001:db8:1:2:3:4:5:6" },
     });
     await handleShowcase(request, a.fetcher, noRateLimit);
@@ -43,7 +43,7 @@ describe("/api/showcase", () => {
 
   it("refuses plain requests and rate-limited clients without bothering the arena", async () => {
     const a = arena();
-    const plain = new Request("https://arena.surninsynergy.dev/api/showcase");
+    const plain = new Request("https://zerosnake.dev/api/showcase");
     expect((await handleShowcase(plain, a.fetcher, noRateLimit)).status).toBe(426);
 
     const keys: string[] = [];
@@ -53,7 +53,7 @@ describe("/api/showcase", () => {
         return { ok: false, rule, limit: 300, period: 60, retryAfter: 60 };
       },
     };
-    const request = new Request("https://arena.surninsynergy.dev/api/showcase", {
+    const request = new Request("https://zerosnake.dev/api/showcase", {
       headers: upgrade,
     });
     expect((await handleShowcase(request, a.fetcher, limited)).status).toBe(429);

@@ -11,8 +11,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { CliError, UsageError } from "../errors.ts";
 
-/** Until the arena has its final domain. `--url` or `ZEROSNAKE_URL` point elsewhere. */
-export const DEFAULT_URL = "https://arena.surninsynergy.dev";
+/**
+ * The public site (apps/web `SITE_URL`, a test checks). `--url` or `ZEROSNAKE_URL` point elsewhere.
+ */
+export const DEFAULT_URL = "https://zerosnake.dev";
 
 export type Env = Record<string, string | undefined>;
 

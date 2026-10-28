@@ -70,8 +70,7 @@ zerosnake test [--bot src/bot.ts] [--json]
 
 `login`, `logout`, `deploy`, `status` and `logs` talk to the site's API (`apps/web`, types from
 `@zerosnake/web/shared`, bundled into `dist/cli.js`). The server is `--url`, else `ZEROSNAKE_URL`,
-else `https://arena.surninsynergy.dev` (staging, until there's a final domain); plain `http` is
-allowed only for localhost.
+else `https://zerosnake.dev`; plain `http` is allowed only for localhost.
 
 - **`login`**: RFC 8628 device flow. `POST /api/auth/device/code` (client `zerosnake-cli`), print
   the code, open `verification_uri_complete`, poll `POST /api/auth/cli/token` at the given interval

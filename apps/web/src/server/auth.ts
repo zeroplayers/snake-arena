@@ -15,7 +15,7 @@ export interface AuthEnv {
   DB: D1Database;
   /** Web sessions (src/server/session-store.ts). Bound to this Worker only, never to apps/arena. */
   AUTH_KV: KVNamespace;
-  /** Public origin, e.g. `https://arena.surninsynergy.dev`. */
+  /** Public origin, e.g. `https://zerosnake.dev`. */
   BETTER_AUTH_URL: string;
   BETTER_AUTH_SECRET: string;
   GITHUB_CLIENT_ID: string;

@@ -5,7 +5,7 @@
  *   node .github/test-shards.ts check         every test file is in exactly one shard, and ci.yml
  *                                             has a job for every shard and no other
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 // The CPU backstop's room tests wait out wall-clock kills (minutes each): a job per file.
@@ -36,11 +36,12 @@ const files = (args: string[]) =>
 const [command, name] = process.argv.slice(2);
 
 if (command === "run" && name !== undefined && name in SHARDS) {
-  execFileSync(
+  const run = spawnSync(
     "pnpm",
     ["exec", "vitest", "run", "--passWithNoTests=false", ...(SHARDS[name] as string[])],
     { stdio: "inherit" },
   );
+  process.exit(run.status ?? 1);
 } else if (command === "check") {
   const problems: string[] = [];
   const seen = new Map<string, string>();

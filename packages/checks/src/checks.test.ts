@@ -43,12 +43,16 @@ describe("honest bots", () => {
     FULL,
   );
 
-  it("get the same report every time", async () => {
-    const first = await runChecks(input(medium), QUICK);
-    const second = await runChecks(input(medium), QUICK);
-    expect(first.passed).toBe(true);
-    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
-  });
+  it(
+    "get the same report every time",
+    async () => {
+      const first = await runChecks(input(medium), QUICK);
+      const second = await runChecks(input(medium), QUICK);
+      expect(first.passed).toBe(true);
+      expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+    },
+    FULL,
+  );
 
   it(
     "easy itself qualifies: a tie passes, and easy scores the same in the sandbox as natively",

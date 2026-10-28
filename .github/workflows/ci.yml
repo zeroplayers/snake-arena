@@ -11,6 +11,7 @@ concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Pull requests from forks run this too: keep the token read-only.
 permissions:
   contents: read
 

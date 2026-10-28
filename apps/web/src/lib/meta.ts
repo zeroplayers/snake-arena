@@ -33,7 +33,7 @@ export function siteMeta(): Meta[] {
 }
 
 const OG_ALT =
-  "Snake bots in a glowing round arena, next to the words: Your snake bot vs. everyone else's.";
+  "Snake bots in a glowing square arena, next to the words: Your snake bot vs. everyone else's.";
 
 /**
  * A public page's canonical URL, as `og:url` meta and a `canonical` link, so shares with

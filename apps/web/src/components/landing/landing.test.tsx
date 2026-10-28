@@ -11,9 +11,9 @@ import {
 import type { ReactNode } from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { REPO, SITE_URL } from "../../site";
+import { CLI_PUBLISHED, REPO, SITE_URL } from "../../site";
 import { DocArticle } from "../docs/DocArticle";
-import { claudePrompt } from "./claudePrompt";
+import { claudePrompt, claudePromptWorks } from "./claudePrompt";
 import { Landing } from "./Landing";
 import { QUICKSTART_COMMANDS, quickstartScript } from "./quickstart";
 
@@ -76,10 +76,15 @@ describe("landing page", () => {
     const links = hrefs(await renderAt("/", () => <Landing signedIn onSignIn={() => {}} />));
     expect(links).toEqual(
       expect.arrayContaining([
-        "#start",
         "/docs",
         "/leaderboard",
-        ...(REPO.public ? ["/docs/getting-started#before-the-packages-are-published"] : []),
+        // The hero's second button: the start section once the CLI is on npm, building from a
+        // checkout while only the repo is public, and "Build your bot" before either.
+        claudePromptWorks()
+          ? CLI_PUBLISHED
+            ? "#by-hand"
+            : "/docs/getting-started#before-the-packages-are-published"
+          : "#start",
       ]),
     );
     for (const href of links) {

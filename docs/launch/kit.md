@@ -223,9 +223,10 @@ The starter bot already beats the easiest house bot. Who's first on the leaderbo
 
 **A week before (soft open)**
 
-- [x] Final domain live: `zerosnake.dev` / `api.zerosnake.dev` (#90); `SITE_URL`
-  (`apps/web/src/site.ts`), `DEFAULT_URL` (`packages/cli/src/remote/config.ts`), `robots.txt`,
-  `sitemap.xml` and the README updated.
+- [ ] Final domain deployed and verified: `https://zerosnake.dev` and
+  `https://api.zerosnake.dev/health` answer, GitHub sign-in works, `www.zerosnake.dev` redirects
+  pages and assets (README, "www"). `SITE_URL`, `DEFAULT_URL`, `robots.txt`, `sitemap.xml` and the
+  README already point there (#90).
 - [ ] `zerosnake` and the `@zerosnake` org claimed on npm; `packages/cli` made publishable
   (review.md, "Needs the owner" 1) and published; `npx zerosnake init` tested from an empty
   cache on macOS, Linux and Windows/WSL.
@@ -236,7 +237,8 @@ The starter bot already beats the easiest house bot. Who's first on the leaderbo
   published CLI and follow it to a deployed bot. Fix the prompt (`claudePrompt.ts`) if any step
   stumbles. Try the button on an iPhone and an Android phone.
 - [ ] Invite 30–50 people; target 15–25 bots from 10+ authors past 30 lives before launch.
-- [ ] Production GitHub OAuth app (homepage and callback on the final domain), secrets set.
+- [ ] The existing GitHub App (one environment) has homepage `https://zerosnake.dev` and callback
+  `https://zerosnake.dev/api/auth/callback/github`; secrets unchanged.
 - [ ] Footer "Made by …" and FAQ "About the project" (who pays, self-hosting, fair play) written.
 
 **The day before**

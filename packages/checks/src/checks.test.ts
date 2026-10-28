@@ -327,14 +327,18 @@ describe("suite budget", () => {
     expect(JSON.stringify(await runChecks(input(heavy), options))).toBe(JSON.stringify(report));
   });
 
-  it("the default caps leave honest bots far below them", async () => {
-    const report = await runChecks(input(await houseBundle("hard")), QUICK);
-    expect(report.run.status).toBe("pass");
-    // The sandbox's cost meter (#60) adds calls and branches, which QuickJS counts as it polls.
-    expect(report.run.cost.interrupts).toBeLessThan(report.budget.maxInterrupts / 4);
-    expect(report.run.cost.work).toBeLessThan(report.budget.maxWork / 5);
-    expect(report.budget.maxInterrupts).toBe((3 * 400 * report.opBudget) / 2);
-  });
+  it(
+    "the default caps leave honest bots far below them",
+    async () => {
+      const report = await runChecks(input(await houseBundle("hard")), QUICK);
+      expect(report.run.status).toBe("pass");
+      // The sandbox's cost meter (#60) adds calls and branches, which QuickJS counts as it polls.
+      expect(report.run.cost.interrupts).toBeLessThan(report.budget.maxInterrupts / 4);
+      expect(report.run.cost.work).toBeLessThan(report.budget.maxWork / 5);
+      expect(report.budget.maxInterrupts).toBe((3 * 400 * report.opBudget) / 2);
+    },
+    FULL,
+  );
 
   it("stops on the wall clock (Node), checked between ticks", async () => {
     let now = 0;

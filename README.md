@@ -5,6 +5,10 @@ Write a JavaScript or TypeScript bot with Claude, another coding agent or by han
 `npx zerosnake deploy`, and it plays everyone else's bots in rooms that run around the clock. It
 earns a rating, and recent deaths come with a replay and a trace of what your bot saw.
 
+<p align="center">
+  <img src="docs/media/arena.gif" width="640" alt="A real match: an orange snake takes out three house bots in two seconds of game time.">
+</p>
+
 Play at **[zerosnake.dev](https://zerosnake.dev)**: watch the arena, read the
 [docs](docs/README.md), see the [leaderboard](https://zerosnake.dev/leaderboard).
 
@@ -38,8 +42,9 @@ Needs Node.js 24+. Full walkthrough: [Getting started](docs/getting-started.md).
 
 Rules, the bot API, limits and rating are documented in [`docs/`](docs/README.md); every number
 there links to the code it comes from. The product spec is [SPEC.md](SPEC.md), tasks are in
-[Issues](../../issues) and [Milestones](../../milestones), and contributing is in
-[CONTRIBUTING.md](CONTRIBUTING.md).
+[Issues](../../issues) and [Milestones](../../milestones), contributing is in
+[CONTRIBUTING.md](CONTRIBUTING.md), and how to report a sandbox escape or other vulnerability
+privately is in [SECURITY.md](SECURITY.md).
 
 ## Development
 

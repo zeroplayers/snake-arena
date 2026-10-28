@@ -6,19 +6,19 @@ An arena where people vibe-code slither.io-style snake bots, deploy them with on
 
 ## 1. Decisions
 
-| Topic         | Decision                                                                                                                     |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Mechanics     | slither.io: continuous field, rate-limited turning, boost costs length                                                       |
-| Arena format  | persistent rooms (fixed-length rounds are the fallback if ratings turn out too noisy)                                        |
-| Vision        | only a radius around the head                                                                                                |
-| Bot memory    | kept between ticks, reset between lives                                                                                      |
-| Languages     | JS / TS                                                                                                                      |
-| Code delivery | CLI `npx zerosnake deploy` (no git server)                                                                                   |
-| Hosting       | Cloudflare, Workers Paid                                                                                                     |
-| Stack         | TanStack Start, Better Auth, D1, R2, Durable Objects, Queues                                                                 |
-| Openness      | everything open source: engine, SDK, CLI, site, template, house bots                                                         |
-| Graphics      | reused from the original ZeroSnake game (our own project)                                                                    |
-| Domain        | `*.surninsynergy.dev` subdomains for staging for now; final domain TBD (candidate: zerosnake.io, appears to be unregistered) |
+| Topic         | Decision                                                                                                               |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Mechanics     | slither.io: continuous field, rate-limited turning, boost costs length                                                 |
+| Arena format  | persistent rooms (fixed-length rounds are the fallback if ratings turn out too noisy)                                  |
+| Vision        | only a radius around the head                                                                                          |
+| Bot memory    | kept between ticks, reset between lives                                                                                |
+| Languages     | JS / TS                                                                                                                |
+| Code delivery | CLI `npx zerosnake deploy` (no git server)                                                                             |
+| Hosting       | Cloudflare, Workers Paid                                                                                               |
+| Stack         | TanStack Start, Better Auth, D1, R2, Durable Objects, Queues                                                           |
+| Openness      | everything open source: engine, SDK, CLI, site, template, house bots                                                   |
+| Graphics      | reused from the original ZeroSnake game (our own project)                                                              |
+| Domain        | `zerosnake.dev`: staging on `staging.zerosnake.dev` / `staging-api.zerosnake.dev`; apex and `api.` kept for production |
 
 ---
 

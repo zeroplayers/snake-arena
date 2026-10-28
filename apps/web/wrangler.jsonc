@@ -1,6 +1,6 @@
 /**
  * Site worker. Top level is local dev (`pnpm dev`, everything simulated by Miniflare);
- * `env.staging` is what CI deploys to arena.surninsynergy.dev.
+ * `env.staging` is what CI deploys to staging.zerosnake.dev.
  *
  * Bindings are not inherited by environments, so every binding is declared twice.
  *
@@ -92,12 +92,12 @@
   "env": {
     "staging": {
       // Deployed as `zerosnake-web-staging`.
-      "routes": [{ "pattern": "arena.surninsynergy.dev", "custom_domain": true }],
+      "routes": [{ "pattern": "staging.zerosnake.dev", "custom_domain": true }],
       "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": true } },
       "triggers": { "crons": ["* * * * *", "*/5 * * * *", "*/30 * * * *"] },
       "vars": {
         "ENVIRONMENT": "staging",
-        "BETTER_AUTH_URL": "https://arena.surninsynergy.dev",
+        "BETTER_AUTH_URL": "https://staging.zerosnake.dev",
         "DEPLOYS_PER_DAY": "20",
         "BOTS_PER_AUTHOR": "3",
         "ADMIN_USER_IDS": "",

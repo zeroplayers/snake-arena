@@ -5,8 +5,8 @@ Write a JavaScript or TypeScript bot with Claude, another coding agent or by han
 `npx zerosnake deploy`, and it plays everyone else's bots in rooms that run around the clock. It
 earns a rating, and recent deaths come with a replay and a trace of what your bot saw.
 
-Play at **[arena.surninsynergy.dev](https://arena.surninsynergy.dev)**: watch the arena, read the
-[docs](docs/README.md), see the [leaderboard](https://arena.surninsynergy.dev/leaderboard).
+Play at **[staging.zerosnake.dev](https://staging.zerosnake.dev)**: watch the arena, read the
+[docs](docs/README.md), see the [leaderboard](https://staging.zerosnake.dev/leaderboard).
 
 ```bash
 npx zerosnake init my-snake   # starter bot, CLAUDE.md, AGENTS.md and skills
@@ -66,19 +66,22 @@ pnpm lint        # biome; `pnpm format` to fix
 
 ## Operations
 
-| Environment | Domain                                              |
-| ----------- | --------------------------------------------------- |
-| staging     | `*.surninsynergy.dev` (temporary, final domain TBD) |
+| Environment        | Site                    | Arena API                   |
+| ------------------ | ----------------------- | --------------------------- |
+| staging            | `staging.zerosnake.dev` | `staging-api.zerosnake.dev` |
+| production (later) | `zerosnake.dev`         | `api.zerosnake.dev`         |
+
+All of them are in the `zerosnake.dev` zone (Cloudflare account "Surnin Synergy").
 
 ### Staging
 
 Cloudflare account "Surnin Synergy". Config lives in the `env.staging` blocks of
 `apps/web/wrangler.jsonc` and `apps/arena/wrangler.jsonc`.
 
-| Worker                    | URL                                   | Health                                                             |
-| ------------------------- | ------------------------------------- | ------------------------------------------------------------------ |
-| `zerosnake-web-staging`   | `https://arena.surninsynergy.dev`     | [`/api/health`](https://arena.surninsynergy.dev/api/health)        |
-| `zerosnake-arena-staging` | `https://api.arena.surninsynergy.dev` | [`/health`](https://api.arena.surninsynergy.dev/health) (pings DO) |
+| Worker                    | URL                                 | Health                                                           |
+| ------------------------- | ----------------------------------- | ---------------------------------------------------------------- |
+| `zerosnake-web-staging`   | `https://staging.zerosnake.dev`     | [`/api/health`](https://staging.zerosnake.dev/api/health)        |
+| `zerosnake-arena-staging` | `https://staging-api.zerosnake.dev` | [`/health`](https://staging-api.zerosnake.dev/health) (pings DO) |
 
 Resources: D1 `zerosnake-staging` (shared by both Workers), KV `zerosnake-staging-auth` (web only),
 R2 `zerosnake-staging-{bundles,sources,replays,traces}`, queues `zerosnake-staging-checks` and
@@ -96,7 +99,10 @@ SHA-256 hashes, GitHub OAuth tokens encrypted. The namespace was made once with
 migrations, deploys the built web, then curls both health endpoints. The old web runs against the new
 schema for a short while, so migrations must not break the code they replace (empty a table before
 dropping it in a later release). It skips while the repo secrets
-`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are unset.
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are unset. The token needs the account
+permissions listed at the top of the workflow plus the zone `zerosnake.dev` (Workers Routes: Edit,
+DNS: Edit) for the custom domains. Each deploy makes a Worker's custom domains exactly those in its
+`routes` (wrangler replaces the set), so a hostname removed from `wrangler.jsonc` is detached.
 
 Manual deploy (needs `wrangler login` with access to the account):
 
@@ -141,4 +147,11 @@ created beforehand.
 
 **Secrets** (web): `BETTER_AUTH_SECRET`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, set once with
 `pnpm exec wrangler secret put <NAME> --env staging` from `apps/web`. The staging GitHub OAuth app uses
-homepage `https://arena.surninsynergy.dev` and callback `https://arena.surninsynergy.dev/api/auth/callback/github`.
+homepage `https://staging.zerosnake.dev` and callback `https://staging.zerosnake.dev/api/auth/callback/github`.
+
+### Production (later)
+
+Not set up yet. The apex `zerosnake.dev` (site) and `api.zerosnake.dev` (arena) are kept free for
+it: an `env.production` in both `wrangler.jsonc` files with its own resources, secrets and GitHub
+App. Moving the public site there also means changing `SITE_URL` (`apps/web/src/site.ts`),
+`DEFAULT_URL` (`packages/cli/src/remote/config.ts`), `robots.txt` and `sitemap.xml`.

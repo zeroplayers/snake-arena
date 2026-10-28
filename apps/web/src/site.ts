@@ -26,4 +26,4 @@ export const SHOWCASE_PATH = "/api/showcase";
  * The site's public origin, for absolute URLs in link previews (`og:image` must be absolute).
  * Change it with the launch domain.
  */
-export const SITE_URL = "https://arena.surninsynergy.dev";
+export const SITE_URL = "https://staging.zerosnake.dev";

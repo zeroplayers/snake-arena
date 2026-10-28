@@ -5,21 +5,60 @@ on:
     branches: [main]
   pull_request:
 
+# A new push to a PR cancels the PR's run in progress. Every push to main gets a run of its own
+# (staging deploys from it), so main's runs are never cancelled or replaced.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # Pull requests from forks run this too: keep the token read-only.
 permissions:
   contents: read
 
 jobs:
-  check:
+  lint:
+    name: lint + typecheck
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
         with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+          save-cache: "true"
       - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm test
+      - run: node .github/test-shards.ts check
+
+  # The suite in parallel jobs, one per shard of `.github/test-shards.ts` (the lint job checks
+  # that every test file is in exactly one).
+  test:
+    name: test (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: arena
+          - shard: arena-backstop
+          - shard: arena-backstop-memory
+          - shard: arena-backstop-restarts
+          - shard: web
+          - shard: packages
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node .github/test-shards.ts run ${{ matrix.shard }}
+
+  # One result for the whole run, for branch protection to require ("check", as the single job
+  # used to be called).
+  check:
+    if: always()
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          for r in $RESULTS; do [ "$r" = success ] || exit 1; done

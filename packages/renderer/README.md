@@ -41,6 +41,17 @@ renderer.screenToWorld(event.clientX, event.clientY); // for picking
 renderer.destroy();
 ```
 
+Offline rendering (a video, frame by frame, possibly out of order): pass the frame's time so
+animations don't depend on the wall clock, set the camera yourself, and wait for the skins.
+
+```ts
+const renderer = new ArenaRenderer(container, { preserveDrawingBuffer: true, maxPixelRatio: 1 });
+renderer.setCamera({ mode: "fixed", x, y, viewRadius: 24 }); // no easing
+renderer.draw(prevFrame, nextFrame, alpha, frameIndex / fps); // same input, same picture
+await renderer.ready(); // skin textures decoded; draw again before capturing
+renderer.worldToScreen(head); // CSS pixels, for overlays (name tags)
+```
+
 The match viewer (timeline, snake list, logs) is built on top of this in `@zerosnake/viewer`.
 
 Snake bodies are blended point by point between ticks and resampled at a fixed spacing, so

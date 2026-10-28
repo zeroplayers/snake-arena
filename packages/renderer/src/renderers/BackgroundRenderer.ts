@@ -119,8 +119,9 @@ export class BackgroundRenderer {
     this.scene.add(this.grid, this.glow, this.border);
   }
 
-  update(dt: number): void {
-    this.hue = (this.hue + dt * HUE_SPEED) % 1;
+  /** Advances the wall's hue by `dt` seconds, or sets it for absolute `time` seconds. */
+  update(dt: number, time?: number): void {
+    this.hue = time === undefined ? (this.hue + dt * HUE_SPEED) % 1 : (time * HUE_SPEED) % 1;
     this.border?.material.color.setHSL(this.hue, 1, 0.5);
     this.glow?.material.uniforms.color?.value.setHSL(this.hue, 1, 0.6);
   }

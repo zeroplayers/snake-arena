@@ -24,6 +24,6 @@ export const SHOWCASE_PATH = "/api/showcase";
 
 /**
  * The site's public origin, for absolute URLs in link previews (`og:image` must be absolute).
- * Change it with the launch domain.
+ * The CLI's `DEFAULT_URL` must match (a test checks): published CLIs keep it, so it's permanent.
  */
 export const SITE_URL = "https://zerosnake.dev";

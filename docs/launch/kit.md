@@ -6,8 +6,8 @@ Copy for Product Hunt, Show HN, Reddit and X, and the launch-day checklist. Find
 **Assumptions.** On launch day both flags in `apps/web/src/site.ts` are flipped (`REPO.public =
 true`, `CLI_PUBLISHED = true`), `zerosnake` is on npm, and the repository is public. `<SITE>`
 stands for the launch domain (`https://zerosnake.dev`), `<REPO>` for
-`https://github.com/zeroplayers/snake-arena`. Numbers quoted below come from the docs and the
-code; re-check anything marked _(check)_ on the day.
+`https://github.com/zeroplayers/snake-arena`. Numbers quoted below come from the docs and the code;
+re-check anything marked _(check)_ on the day.
 The text blocks are wrapped at 100 characters for this file: join each paragraph into one line
 before pasting where line breaks survive (Product Hunt, X).
 

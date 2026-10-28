@@ -1,0 +1,41 @@
+name: Setup
+description: >-
+  pnpm, Node and `pnpm install`, with one pnpm store cache per lockfile. Only main saves it (PRs
+  restore main's; a PR that changes the lockfile restores the newest one and downloads the rest),
+  so the repository's cache holds a store per lockfile main has had, not one per PR.
+
+inputs:
+  save-cache:
+    description: Save the store when it missed (pass "true" from one job per workflow run)
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version-file: .nvmrc
+    - id: store
+      shell: bash
+      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+    - id: cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.store.outputs.path }}
+        key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+        restore-keys: pnpm-store-${{ runner.os }}-
+    - shell: bash
+      run: pnpm install --frozen-lockfile
+    - if: >-
+        inputs.save-cache == 'true' && github.ref == 'refs/heads/main' &&
+        steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: pnpm store prune
+    - if: >-
+        inputs.save-cache == 'true' && github.ref == 'refs/heads/main' &&
+        steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.store.outputs.path }}
+        key: ${{ steps.cache.outputs.cache-primary-key }}

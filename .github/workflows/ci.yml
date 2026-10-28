@@ -5,17 +5,65 @@ on:
     branches: [main]
   pull_request:
 
+# A new push to a PR cancels the PR's run in progress. Every push to main gets a run of its own
+# (staging deploys from it), so main's runs are never cancelled or replaced.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
 jobs:
-  check:
+  lint:
+    name: lint + typecheck
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/setup
         with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+          save-cache: "true"
       - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm test
+
+  # The suite in parallel jobs. The CPU backstop's room tests wait out wall-clock kills (minutes
+  # each), so each of their files gets a job; the shards are complements, so a new test file
+  # always lands in one of them.
+  test:
+    name: test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: arena
+            args: --project @zerosnake/arena --exclude '**/room.backstop*.test.ts'
+          - name: arena backstop
+            args: --project @zerosnake/arena src/room.backstop.test.ts
+          - name: arena backstop memory
+            args: --project @zerosnake/arena src/room.backstop-memory.test.ts
+          - name: arena backstop restarts
+            args: --project @zerosnake/arena src/room.backstop-restarts.test.ts
+          - name: web
+            args: --project web
+          - name: packages
+            args: --project '!web' --project '!@zerosnake/arena'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: pnpm vitest run ${{ matrix.args }}
+
+  # One result for the whole run, for branch protection to require ("check", as the single job
+  # used to be called).
+  check:
+    if: always()
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          for r in $RESULTS; do [ "$r" = success ] || exit 1; done

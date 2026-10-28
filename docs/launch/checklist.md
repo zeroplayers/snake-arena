@@ -21,8 +21,8 @@ steps.
 Read the verdict in [open-source-audit.md](open-source-audit.md) and decide:
 
 - [ ] Issue #80 (plaintext device codes): fix before launch, or accept that it is public.
-- [ ] Commit email `bromkrololo@gmail.com` in history: accept, and use the GitHub noreply address
-  from now on:
+- [ ] The personal gmail in commit metadata: accept, and use the GitHub noreply address from now
+  on:
 
   ```bash
   git config --global user.email "<id>+oleksiisurnin@users.noreply.github.com"   # github.com/settings/emails shows it
@@ -32,28 +32,42 @@ Read the verdict in [open-source-audit.md](open-source-audit.md) and decide:
   PR first.
 - [ ] The spike Worker `zerosnake-spike-quickjs`: delete it if it is still deployed
   (`pnpm exec wrangler delete --name zerosnake-spike-quickjs` from `spikes/quickjs-do`).
+- [ ] Claim the `@zerosnake` scope on npm now, before the repository is public: `init` tells
+  people that `@zerosnake/*` packages are "not on npm yet", so someone could register them.
+  npmjs.com (signed in, 2FA on) → your avatar → **Add Organization** → `zerosnake`, free plan
+  for public packages. `npm` itself can't create orgs.
 - [ ] `LICENSE` holder: keep "ZeroPlayers contributors" or switch to "Surnin Synergy Ltd and
   contributors" (then ask Claude to change `LICENSE` and `packages/cli/LICENSE` together).
 
-## 2. Domain, GitHub sign-in, analytics
+## 2. Finish the domain move
 
-The CLI bakes its default server into the published package, so the domain must be final before
-step 4. If the domain move (#90, PR #91) isn't finished:
+PR #91 is merged: the site is `https://zerosnake.dev`, the arena `https://api.zerosnake.dev`, and
+the CLI's `DEFAULT_URL` is `https://zerosnake.dev`. Its owner steps, before the next deploy:
 
-- [ ] Merge PR #91 and let the staging deploy run.
-- [ ] Cloudflare API token for CI: add zone `zerosnake.dev` (Workers Routes: Edit, DNS: Edit).
-- [ ] GitHub sign-in app: homepage and callback URL on the live site's domain
-  (`https://<site>/api/auth/callback/github`); try "Sign in with GitHub" on the live site.
-- [ ] Cloudflare Web Analytics: add the site for the live domain and put its token in
-  `CF_BEACON_TOKEN` (`apps/web/wrangler.jsonc`, ask Claude to open the PR).
-- [ ] Decide which URL the CLI should talk to for good. Check what `main` has:
+- [ ] **GitHub App** (sign-in): Homepage URL `https://zerosnake.dev`, callback URL
+  `https://zerosnake.dev/api/auth/callback/github`. Remove the old
+  `https://arena.surninsynergy.dev/api/auth/callback/github` callback.
+- [ ] **Cloudflare API token for CI** (`CLOUDFLARE_API_TOKEN` repo secret): add zone
+  `zerosnake.dev` with Workers Routes: Edit and DNS: Edit (the zone must be in the Surnin Synergy
+  account). Keep zone `surninsynergy.dev` until the first deploy has detached the old domains,
+  then remove it from the token.
+- [ ] **Web Analytics**: Add a site → `zerosnake.dev`, manual JavaScript snippet ("Automatic
+  setup" off). Its token goes in `env.staging.vars.CF_BEACON_TOKEN` in `apps/web/wrangler.jsonc`
+  (vars aren't inherited from the top level; it's public, a normal commit: ask Claude to open the
+  PR). Delete the old `arena.surninsynergy.dev` Web Analytics site.
+- [ ] **www Redirect Rule** on the `zerosnake.dev` zone: `www.zerosnake.dev/*` →
+  `https://zerosnake.dev/${path}`, 301, query kept (README, "www"; the Worker only redirects
+  pages, static assets answer before it).
+- [ ] Let the deploy run (Actions → Deploy staging, or the next push to `main`).
 
-  ```bash
-  grep -n 'DEFAULT_URL =' packages/cli/src/remote/config.ts
-  ```
+**Hard gate before step 4.** A published `zerosnake@0.1.0` talks to `https://zerosnake.dev`
+forever; if that host doesn't answer, the version can't be fixed. All of these must pass:
 
-  #91 sets `https://staging.zerosnake.dev`. If the launch site is `https://zerosnake.dev`, ask
-  Claude to change `DEFAULT_URL` (and `SITE_URL`, `robots.txt`, `sitemap.xml`) first.
+```bash
+curl -fsS https://zerosnake.dev/api/health && curl -fsS https://api.zerosnake.dev/health
+```
+
+- [ ] "Sign in with GitHub" works on `https://zerosnake.dev`.
 
 ## 3. Make the repository public
 
@@ -85,6 +99,10 @@ gh repo edit zeroplayers/snake-arena --delete-branch-on-merge \
   --add-topic slither-io,snake,game-ai,programming-game,ai-arena,quickjs,cloudflare-workers,claude-code
 ```
 
+Discussions stay off (go-live.md had `--enable-discussions`): one more place to moderate in launch
+week, and questions fit issues for now. Add `--enable-discussions` to the last command if you'd
+rather have them.
+
 By hand on github.com → the repository → **Settings**:
 
 - [ ] General → Social preview: upload `apps/web/public/og.jpg`.
@@ -101,10 +119,6 @@ npm login                      # opens the browser
 npm whoami
 ```
 
-Claim the scope, so nobody else can publish `@zerosnake/*` (the CLI lists them as dev
-dependencies, and the SDK may be published there later): npmjs.com → your avatar → **Add
-Organization** → name `zerosnake` (free, public packages). `npm` itself can't create orgs.
-
 Build, check and publish exactly the tarball you checked:
 
 ```bash
@@ -113,7 +127,8 @@ pnpm install --frozen-lockfile
 pnpm lint && pnpm typecheck && pnpm test
 cd packages/cli
 pnpm build
-grep -n 'var DEFAULT_URL' dist/cli.js            # must print the URL from step 2
+grep -n 'var DEFAULT_URL' dist/cli.js            # must print "https://zerosnake.dev"
+curl -fsS https://zerosnake.dev/api/health       # the hard gate from step 2, once more
 rm -rf /tmp/zerosnake-pack && pnpm pack --pack-destination /tmp/zerosnake-pack
 tar -tzf /tmp/zerosnake-pack/zerosnake-0.1.0.tgz # bin/, dist/, LICENSE, README.md, package.json
 npm publish /tmp/zerosnake-pack/zerosnake-0.1.0.tgz --access public   # asks for 2FA
@@ -128,8 +143,22 @@ Then, for later releases without tokens, on npmjs.com → **zerosnake** → Sett
 - [ ] **Trusted Publisher** → GitHub Actions: organization or user `zeroplayers`, repository
   `snake-arena`, workflow filename `release-cli.yml`, environment `npm`.
 - [ ] **Publishing access** → "Require two-factor authentication and disallow tokens".
-- [ ] Optional: GitHub → Settings → Environments → `npm` → required reviewers: you. Then each
-  release waits for your click.
+
+And on GitHub, so that every release needs you:
+
+```bash
+# Required reviewer on the `npm` environment (creates it if needed): each release waits for you
+gh api -X PUT repos/zeroplayers/snake-arena/environments/npm --input - <<EOF
+{"reviewers": [{"type": "User", "id": $(gh api user --jq .id)}]}
+EOF
+# Only repository admins may create, move or delete `cli-v*` tags
+gh api -X POST repos/zeroplayers/snake-arena/rulesets --input - <<'EOF'
+{"name": "CLI release tags", "target": "tag", "enforcement": "active",
+ "conditions": {"ref_name": {"include": ["refs/tags/cli-v*"], "exclude": []}},
+ "rules": [{"type": "creation"}, {"type": "update"}, {"type": "deletion"}],
+ "bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]}
+EOF
+```
 
 A later release: bump `version` in `packages/cli/package.json` in a PR, merge, then
 
@@ -138,9 +167,10 @@ git switch main && git pull
 git tag cli-v0.1.1 && git push origin cli-v0.1.1
 ```
 
-[`.github/workflows/release-cli.yml`](../../.github/workflows/release-cli.yml) checks the tag
-against the version, runs the CLI's tests (including the packed-install test) and publishes with
-provenance.
+[`.github/workflows/release-cli.yml`](../../.github/workflows/release-cli.yml) checks that the
+tag is on `main` and matches the version, runs the CLI's tests (including the packed-install
+test) and packs in one job, then publishes that tarball with provenance from a second job, the
+only one that can mint an npm token.
 
 ## 5. Flip the site's flags
 

@@ -177,10 +177,12 @@ packs it, installs it outside the monorepo and runs `init`, `sim --headless` and
 `src/testing/passing-bot.ts`, which passes, and on a bot that can't beat `easy`).
 `@zerosnake/checks` is bundled into `cli.js` like the other workspace packages.
 
-Publish with `pnpm publish` (it rewrites the `workspace:*` devDependencies; plain `npm publish`
-wouldn't), or by pushing a `cli-v<version>` tag once npm trusted publishing is set up
-([`.github/workflows/release-cli.yml`](../../.github/workflows/release-cli.yml)). The owner's
-steps are in [`docs/launch/checklist.md`](../../docs/launch/checklist.md).
+Releases are packed with `pnpm pack` (it runs `prepack` and rewrites the `workspace:*`
+devDependencies; `npm pack` wouldn't) and that tarball is published with `npm publish <tgz>`:
+by hand for the first release, then by pushing a `cli-v<version>` tag
+([release-cli.yml](https://github.com/zeroplayers/snake-arena/blob/main/.github/workflows/release-cli.yml),
+npm trusted publishing). The owner's steps are in
+[docs/launch/checklist.md](https://github.com/zeroplayers/snake-arena/blob/main/docs/launch/checklist.md).
 
 In a checkout, build once with `pnpm --filter zerosnake build` before running
 `bin/zerosnake.js`; the bin never builds by itself. Tests run the sources directly.

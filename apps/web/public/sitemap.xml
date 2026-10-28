@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://staging.zerosnake.dev/</loc></url>
-  <url><loc>https://staging.zerosnake.dev/leaderboard</loc></url>
-  <url><loc>https://staging.zerosnake.dev/docs</loc></url>
-  <url><loc>https://staging.zerosnake.dev/docs/getting-started</loc></url>
-  <url><loc>https://staging.zerosnake.dev/docs/rules</loc></url>
-  <url><loc>https://staging.zerosnake.dev/docs/bot-api</loc></url>
-  <url><loc>https://staging.zerosnake.dev/docs/limits</loc></url>
-  <url><loc>https://staging.zerosnake.dev/docs/rating</loc></url>
-  <url><loc>https://staging.zerosnake.dev/docs/faq</loc></url>
+  <url><loc>https://zerosnake.dev/</loc></url>
+  <url><loc>https://zerosnake.dev/leaderboard</loc></url>
+  <url><loc>https://zerosnake.dev/docs</loc></url>
+  <url><loc>https://zerosnake.dev/docs/getting-started</loc></url>
+  <url><loc>https://zerosnake.dev/docs/rules</loc></url>
+  <url><loc>https://zerosnake.dev/docs/bot-api</loc></url>
+  <url><loc>https://zerosnake.dev/docs/limits</loc></url>
+  <url><loc>https://zerosnake.dev/docs/rating</loc></url>
+  <url><loc>https://zerosnake.dev/docs/faq</loc></url>
 </urlset>

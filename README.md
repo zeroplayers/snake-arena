@@ -5,8 +5,8 @@ Write a JavaScript or TypeScript bot with Claude, another coding agent or by han
 `npx zerosnake deploy`, and it plays everyone else's bots in rooms that run around the clock. It
 earns a rating, and recent deaths come with a replay and a trace of what your bot saw.
 
-Play at **[staging.zerosnake.dev](https://staging.zerosnake.dev)**: watch the arena, read the
-[docs](docs/README.md), see the [leaderboard](https://staging.zerosnake.dev/leaderboard).
+Play at **[zerosnake.dev](https://zerosnake.dev)**: watch the arena, read the
+[docs](docs/README.md), see the [leaderboard](https://zerosnake.dev/leaderboard).
 
 ```bash
 npx zerosnake init my-snake   # starter bot, CLAUDE.md, AGENTS.md and skills
@@ -66,22 +66,27 @@ pnpm lint        # biome; `pnpm format` to fix
 
 ## Operations
 
-| Environment        | Site                    | Arena API                   |
-| ------------------ | ----------------------- | --------------------------- |
-| staging            | `staging.zerosnake.dev` | `staging-api.zerosnake.dev` |
-| production (later) | `zerosnake.dev`         | `api.zerosnake.dev`         |
+One public environment for now, deployed from `main`. It sits at the permanent addresses (the
+published CLI has `https://zerosnake.dev` built in) but its config and resources are still named
+`staging` (`env.staging`, `zerosnake-*-staging`). A separate staging can come later
+([below](#separate-staging-later)).
+
+| Environment              | Site                                     | Arena API                   |
+| ------------------------ | ---------------------------------------- | --------------------------- |
+| public (`env.staging`)   | `zerosnake.dev` (`www.` redirects to it) | `api.zerosnake.dev`         |
+| separate staging (later) | `staging.zerosnake.dev`                  | `staging-api.zerosnake.dev` |
 
 All of them are in the `zerosnake.dev` zone (Cloudflare account "Surnin Synergy").
 
-### Staging
+### Public environment
 
 Cloudflare account "Surnin Synergy". Config lives in the `env.staging` blocks of
 `apps/web/wrangler.jsonc` and `apps/arena/wrangler.jsonc`.
 
-| Worker                    | URL                                 | Health                                                           |
-| ------------------------- | ----------------------------------- | ---------------------------------------------------------------- |
-| `zerosnake-web-staging`   | `https://staging.zerosnake.dev`     | [`/api/health`](https://staging.zerosnake.dev/api/health)        |
-| `zerosnake-arena-staging` | `https://staging-api.zerosnake.dev` | [`/health`](https://staging-api.zerosnake.dev/health) (pings DO) |
+| Worker                    | URL                         | Health                                                   |
+| ------------------------- | --------------------------- | -------------------------------------------------------- |
+| `zerosnake-web-staging`   | `https://zerosnake.dev`     | [`/api/health`](https://zerosnake.dev/api/health)        |
+| `zerosnake-arena-staging` | `https://api.zerosnake.dev` | [`/health`](https://api.zerosnake.dev/health) (pings DO) |
 
 Resources: D1 `zerosnake-staging` (shared by both Workers), KV `zerosnake-staging-auth` (web only),
 R2 `zerosnake-staging-{bundles,sources,replays,traces}`, queues `zerosnake-staging-checks` and
@@ -146,12 +151,12 @@ in `env.staging.vars` for `/admin`. The rate limit and Analytics Engine bindings
 created beforehand.
 
 **Secrets** (web): `BETTER_AUTH_SECRET`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, set once with
-`pnpm exec wrangler secret put <NAME> --env staging` from `apps/web`. The staging GitHub OAuth app uses
-homepage `https://staging.zerosnake.dev` and callback `https://staging.zerosnake.dev/api/auth/callback/github`.
+`pnpm exec wrangler secret put <NAME> --env staging` from `apps/web`. The GitHub App uses
+homepage `https://zerosnake.dev` and callback `https://zerosnake.dev/api/auth/callback/github`.
 
-### Production (later)
+### Separate staging (later)
 
-Not set up yet. The apex `zerosnake.dev` (site) and `api.zerosnake.dev` (arena) are kept free for
-it: an `env.production` in both `wrangler.jsonc` files with its own resources, secrets and GitHub
-App. Moving the public site there also means changing `SITE_URL` (`apps/web/src/site.ts`),
-`DEFAULT_URL` (`packages/cli/src/remote/config.ts`), `robots.txt` and `sitemap.xml`.
+Not set up yet. It would get its own `wrangler.jsonc` env with its own resources, secrets and
+GitHub App, on `staging.zerosnake.dev` (site) and `staging-api.zerosnake.dev` (arena). `SITE_URL`
+(`apps/web/src/site.ts`), `DEFAULT_URL` (`packages/cli/src/remote/config.ts`), `robots.txt` and
+`sitemap.xml` stay on `zerosnake.dev`: they describe the public site.

@@ -8,4 +8,4 @@ Disallow: /device
 Disallow: /welcome
 Disallow: /bots
 
-Sitemap: https://staging.zerosnake.dev/sitemap.xml
+Sitemap: https://zerosnake.dev/sitemap.xml

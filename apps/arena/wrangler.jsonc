@@ -2,7 +2,7 @@
  * Arena worker: MatchmakerDO, RoomDO, the version-checks Queue consumer, spectator WebSockets
  * (`ShowcaseEntrypoint`, reached only by apps/web's `SHOWCASE` service binding; ShowcaseDO picks
  * the room) and later MCP. Top level is local dev (`pnpm dev`);
- * `env.staging` is what CI deploys to staging-api.zerosnake.dev.
+ * `env.staging` is what CI deploys to api.zerosnake.dev (the only public environment for now).
  *
  * Bindings are not inherited by environments, so every binding is declared twice.
  */
@@ -69,7 +69,7 @@
   "env": {
     "staging": {
       // Deployed as `zerosnake-arena-staging`.
-      "routes": [{ "pattern": "staging-api.zerosnake.dev", "custom_domain": true }],
+      "routes": [{ "pattern": "api.zerosnake.dev", "custom_domain": true }],
       "vars": { "ENVIRONMENT": "staging" },
       "limits": { "cpu_ms": 300000 },
       "d1_databases": [

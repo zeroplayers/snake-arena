@@ -217,8 +217,8 @@ Ordered by how badly launch day goes without them.
    during launch week so the hero says "Live from the arena". Run Show HN and PH on different
    days.
 3. **Pick the launch domain** before anything is posted (links are permanent; `surninsynergy.dev`
-   reads as a personal staging host). _Picked: `zerosnake.dev`; staging moved to
-   `staging.zerosnake.dev` (#90), the apex is kept for production._ Then change `SITE_URL`
+   reads as a personal staging host). _Picked: `zerosnake.dev`; the site moved to
+   `zerosnake.dev` and the arena to `api.zerosnake.dev` (#90)._ Then change `SITE_URL`
    (`apps/web/src/site.ts`), `DEFAULT_URL` (`packages/cli/src/remote/config.ts`), `robots.txt`,
    `sitemap.xml` and the README.
 4. **The template's `npm test` / `npm run bench` / `npm run typecheck` fail in a project made by

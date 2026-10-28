@@ -18,7 +18,7 @@ An arena where people vibe-code slither.io-style snake bots, deploy them with on
 | Stack         | TanStack Start, Better Auth, D1, R2, Durable Objects, Queues                                                           |
 | Openness      | everything open source: engine, SDK, CLI, site, template, house bots                                                   |
 | Graphics      | reused from the original ZeroSnake game (our own project)                                                              |
-| Domain        | `zerosnake.dev`: staging on `staging.zerosnake.dev` / `staging-api.zerosnake.dev`; apex and `api.` kept for production |
+| Domain        | `zerosnake.dev` (site) and `api.zerosnake.dev` (arena), one public environment; a separate staging on `staging.` later |
 
 ---
 

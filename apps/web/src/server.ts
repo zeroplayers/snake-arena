@@ -1,5 +1,6 @@
 /**
- * The Worker's entry (wrangler.jsonc `main`). Requests go through the edge checks
+ * The Worker's entry (wrangler.jsonc `main`). `www.` hosts redirect to the bare one
+ * (`src/server/www.ts`). Other requests go through the edge checks
  * (`src/server/edge.ts`: rate limits, request log, metrics) into TanStack Start, except the live
  * showcase's WebSocket, which goes to the arena (`src/server/showcase.ts`). Cron Triggers
  * (`triggers.crons` in wrangler.jsonc) run the rating job every minute (`src/server/ratings.ts`),
@@ -23,10 +24,13 @@ import { RATINGS_CRON, runRatingJob } from "./server/ratings";
 import { REPLAYS_CRON, runReplaySweep } from "./server/replays";
 import { pruneRevokedSessions } from "./server/session-store";
 import { handleShowcase } from "./server/showcase";
+import { wwwRedirect } from "./server/www";
 import { SHOWCASE_PATH } from "./site";
 
 export default {
   fetch(request, env) {
+    const redirect = wwwRedirect(request);
+    if (redirect) return redirect;
     if (new URL(request.url).pathname === SHOWCASE_PATH) {
       return handleShowcase(request, env.SHOWCASE, getRateLimiter());
     }

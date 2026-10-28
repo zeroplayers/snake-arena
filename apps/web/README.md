@@ -429,7 +429,7 @@ Cloudflare Web Analytics is cookieless, so it needs no consent banner. The root 
 beacon when `CF_BEACON_TOKEN` (a `vars` entry in `wrangler.jsonc`, per environment; public, not
 a secret) is set and `ENVIRONMENT` isn't `development`; never on `/device`, whose URL carries the
 CLI's one-time code. To turn it on: dashboard → **Analytics & Logs → Web Analytics → Add a
-site**, enter the hostname (`staging.zerosnake.dev`), choose the manual JavaScript snippet,
+site**, enter the hostname (`zerosnake.dev`), choose the manual JavaScript snippet,
 copy the `token` value out of it into `CF_BEACON_TOKEN` under `env.staging.vars`, and deploy.
 Then check the zone has no automatic Web Analytics injection (Web Analytics → the site →
 "Automatic setup" off, or RUM off for the zone): Cloudflare would inject the beacon into every

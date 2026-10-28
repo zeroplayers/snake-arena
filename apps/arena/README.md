@@ -1,7 +1,7 @@
 # @zerosnake/arena
 
 The arena Worker (SPEC §4–5): `MatchmakerDO` (one, global), `RoomDO` (one per room), the checks
-Queue consumer, and a cron. Deployed to `staging-api.zerosnake.dev` (`wrangler.jsonc`,
+Queue consumer, and a cron. Deployed to `api.zerosnake.dev` (`wrangler.jsonc`,
 `env.staging`).
 
 | File                       | What                                                              |

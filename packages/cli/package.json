@@ -1,8 +1,29 @@
 {
   "name": "zerosnake",
-  "version": "0.0.0",
-  "private": true,
-  "description": "npx zerosnake: init, sim, test, login, deploy",
+  "version": "0.1.0",
+  "description": "ZeroSnake Arena CLI: create a snake bot, play it locally, deploy it to the arena",
+  "keywords": [
+    "zerosnake",
+    "snake",
+    "slither.io",
+    "bot",
+    "game-ai",
+    "programming-game",
+    "ai-arena",
+    "claude-code",
+    "quickjs"
+  ],
+  "homepage": "https://zerosnake.dev",
+  "bugs": {
+    "url": "https://github.com/zeroplayers/snake-arena/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zeroplayers/snake-arena.git",
+    "directory": "packages/cli"
+  },
+  "license": "MIT",
+  "author": "Surnin Synergy Ltd <hello@surninsynergy.com>",
   "type": "module",
   "bin": {
     "zerosnake": "./bin/zerosnake.js"
@@ -14,6 +35,9 @@
   "engines": {
     "node": ">=24"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "node scripts/build.ts",
     "prepack": "node scripts/build.ts",
@@ -21,9 +45,9 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
-    "@jitl/quickjs-wasmfile-release-sync": "^0.32.0",
+    "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
     "esbuild": "0.28.2",
-    "quickjs-emscripten-core": "^0.32.0"
+    "quickjs-emscripten-core": "0.32.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

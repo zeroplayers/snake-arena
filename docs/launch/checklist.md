@@ -9,7 +9,7 @@ monorepo. Copy and the launch-day details are in [kit.md](kit.md).
 Run the commands from a checkout of `main` unless a step says otherwise.
 
 **Relation to `go-live.md`.** PR #88 adds `docs/launch/go-live.md` with the same owner steps, and
-PR #89 (stacked on it) flips the flags. This checklist agrees with both and adds the audit, the
+PR #89 (stacked on it) flips the flags (the flag commit also went into `main` separately). This checklist agrees with both and adds the audit, the
 security settings, trusted publishing and the clean-machine check. Where they differ, follow this
 file: npm orgs are created on npmjs.com (`npm org create` doesn't exist), and the flags flip
 **after** the repository is public and the CLI is on npm, as #89's description says (go-live.md's
@@ -174,16 +174,10 @@ only one that can mint an npm token.
 
 ## 5. Flip the site's flags
 
-Only once **both** step 3 and step 4 are done: merge PR #89 (after #88), which sets
-`REPO.public` and `CLI_PUBLISHED` to `true` in `apps/web/src/site.ts`. If #88 isn't going in,
-tell Claude instead:
-
-> Flip the launch flags for zeroplayers/snake-arena#31: in `apps/web/src/site.ts` set
-> `REPO.public` to `true` and `CLI_PUBLISHED` to `true`, run lint, typecheck and the web tests,
-> and open a PR into main.
-
-Either way it's only those two values: `landing.test.tsx` (same change as in #89) already passes
-with every combination of the flags. Let the deploy run, then on the live site:
+**Done in code**: `REPO.public` and `CLI_PUBLISHED` are `true` in `apps/web/src/site.ts` (steps 3 and
+4 were done first; PR #89's flag commit went in on its own, so #88 doesn't have to land for it).
+`landing.test.tsx` passes with every combination of the flags, so a rollback is the same two
+values set back to `false`. Let the deploy run, then on the live site:
 
 - [ ] No "Coming at launch" or "Not on npm yet"; the GitHub links work; "Copy first steps"
   copies one line.

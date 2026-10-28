@@ -17,8 +17,8 @@ npx zerosnake login           # once, with GitHub
 npx zerosnake deploy          # it joins the arena when the checks pass
 ```
 
-Needs Node.js 24+. Full walkthrough: [Getting started](docs/getting-started.md). Until the
-`zerosnake` package is on npm, run the CLI from a checkout:
+Needs Node.js 24+. Full walkthrough: [Getting started](docs/getting-started.md). To work on the
+CLI or the template themselves, run them from a checkout:
 [Before the packages are published](docs/getting-started.md#before-the-packages-are-published).
 
 ## How it works

@@ -944,6 +944,35 @@ button.button:disabled {
   margin-top: 10px;
 }
 
+.hero-controls {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+/*
+ * Full screen (a class, set from the fullscreenchange event, so Safari's prefixed API needs no
+ * second selector): the square arena as large as the screen allows above the caption, centred.
+ */
+.hero-arena.fullscreen {
+  --hero-side: min(100vw - 32px, 100dvh - 72px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--bg);
+}
+
+.hero-arena.fullscreen .hero-stage {
+  width: var(--hero-side);
+  max-height: none;
+}
+
+.hero-arena.fullscreen .hero-caption {
+  width: var(--hero-side);
+}
+
 .live-dot {
   display: inline-block;
   width: 8px;

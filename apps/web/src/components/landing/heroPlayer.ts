@@ -15,7 +15,9 @@ export interface HeroPlayer {
  * local engine play the same way; a broadcast is kept a little behind its newest tick
  * (`followLive`) so its bursts play smoothly. A finished recording starts over. Paused (scrolled
  * away, a hidden tab, the visitor's pause), a live source closes its socket (`holdLive`), so no
- * room stays in real time for nobody; playing again reconnects at the newest tick.
+ * room stays in real time for nobody; playing again reconnects at the newest tick. The renderer
+ * follows the container's size (full screen and back); resizing clears the canvas, so a paused
+ * arena draws its frame again at the new size.
  */
 export function playHero(container: HTMLElement, source: MatchSource): HeroPlayer {
   const renderer = new ArenaRenderer(container, { tps: source.info.tps, maxPixelRatio: 1.5 });
@@ -41,6 +43,11 @@ export function playHero(container: HTMLElement, source: MatchSource): HeroPlaye
     raf = requestAnimationFrame(frame);
   };
   draw();
+  // Created after the renderer's own observer, so this runs after it has resized.
+  const resized = new ResizeObserver(() => {
+    if (!raf) draw();
+  });
+  resized.observe(container);
 
   return {
     play() {
@@ -60,6 +67,7 @@ export function playHero(container: HTMLElement, source: MatchSource): HeroPlaye
     destroy() {
       cancelAnimationFrame(raf);
       raf = 0;
+      resized.disconnect();
       renderer.destroy();
       source.dispose?.();
     },

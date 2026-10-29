@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { EngineConfig } from "./config.ts";
 import { Grid } from "./grid.ts";
 import { createRng } from "./rng.ts";
 import { step } from "./step.ts";
@@ -163,7 +162,7 @@ describe("remains", () => {
 
   it("a world from before #101 (no remainsPerSegment) keeps the old layout", () => {
     const world = quiet({ remainsJitter: 0 });
-    delete (world.config as Partial<EngineConfig>).remainsPerSegment;
+    delete (world.config as { remainsPerSegment?: number }).remainsPerSegment;
     const small = place(world, { id: "a", x: 0, y: 0, angle: 0, mass: 10 });
     const big = place(world, { id: "b", x: 0, y: 20, angle: 0, mass: 137 });
     const segs = big.segments.map((p) => ({ ...p }));

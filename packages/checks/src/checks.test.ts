@@ -166,7 +166,8 @@ describe("bad bots are rejected with a clear reason", () => {
   it(
     "a bot that only survives (circles, never eats) does not qualify",
     async () => {
-      // The full check, as above: on QUICK the circler collects a kill on seed 101 since #102.
+      // The full check: on QUICK's 3 × 400 ticks easy's bar swings with how a room plays out
+      // (since #102 the circler collects an ordinary kill on seed 101 there).
       const report = await runChecks(input(BAD_BOTS.circler));
       rejected(report);
       expect(report.run.status).toBe("pass");

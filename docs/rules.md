@@ -203,7 +203,8 @@ and lives of a version that can no longer play are retired (`retired`, not rated
 
 The defaults above can be tuned (e.g. `turnRate` went from 0.25 to 0.4 in #98). A room keeps the
 rules it started with: its world and its replays carry its config, so a replay always plays back
-on the rules it was recorded on, and a bot sees that room's values in `info` and `state.self`.
+on the rules it was recorded on, and a bot sees that room's values (`state.self.turnRate` and
+`speed`, `info.worldHalfSize`, ...).
 When the defaults change, rooms started before take no new lives, let the running ones finish on
 the old rules, then close; every new room starts on the new ones. That is one more reason to read
 the numbers from `info` and `state` instead of hard-coding them.

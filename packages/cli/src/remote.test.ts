@@ -367,6 +367,33 @@ describe("zerosnake deploy", () => {
     expect(textOnly.err).toContain("✗ Arena: It crashed its room 3 times.");
   });
 
+  it("shows the server's note that the version was tested locally on other rules", async () => {
+    const { arena, run } = setUp();
+    arena.addBot("my-snake");
+    const suite = await runChecks(
+      { bundle: "export default {}", sources: [{ path: "src/bot.ts", bytes: 17 }] },
+      { seeds: [1], ticks: 10 },
+    );
+    const note =
+      "zerosnake 0.1.0 tested this version on other rules than the arena's (a turn rate of " +
+      "0.25; the arena's is 0.4), so its `zerosnake test` can disagree with this verdict.";
+    // As the checks consumer writes it (apps/arena `noteOtherRules`).
+    const report = {
+      ok: false,
+      checks: [
+        { name: "qualification", ok: false, message: "scores below easy" },
+        { name: "rules", ok: false, message: note },
+      ],
+      suite,
+      text: formatReport(suite),
+    };
+    arena.outcome = { status: "rejected", report: report as WebCheckReport, polls: 1 };
+    const r = await run(["deploy", "--skip-local-checks"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(`✗ Local rules: ${note}`);
+    expect(r.err.indexOf("✗ Local rules")).toBeLessThan(r.err.indexOf("Checks failed"));
+  });
+
   it("deploys to --bot, or the bot named in package.json", async () => {
     const { arena, run } = setUp();
     arena.addBot("greedy");

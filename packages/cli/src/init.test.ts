@@ -147,6 +147,22 @@ describe("zerosnake init", () => {
     expect(readdirSync(join(cwd, "my-bot")).length).toBeGreaterThan(1);
   });
 
+  it("scaffolds a bot that passes `zerosnake test` on its own seeds", async () => {
+    // An author's first `init` + `test` (+ `deploy`) plays the seeds of the template bot's bundle
+    // exactly as `init` copies it. Any edit to the bot, the SDK or the game re-rolls them, and the
+    // bot passes by a margin on almost every seed set but not all (template/MAINTAINING.md): this
+    // catches an edit that lands on one of those.
+    const cwd = makeProject({});
+    expect(await main(["init", "first-bot"], captureIo(cwd))).toBe(0);
+    // As after `npm install`: the file: dependency is linked into node_modules.
+    const dir = join(cwd, "first-bot");
+    mkdirSync(join(dir, "node_modules/@zerosnake"), { recursive: true });
+    symlinkSync(join(dir, VENDORED_SDK), join(dir, "node_modules/@zerosnake/sdk"));
+    const io = captureIo(dir);
+    expect(await main(["test"], io)).toBe(0);
+    expect(io.stdout()).toContain("Ready to deploy");
+  }, 120_000);
+
   it("is a usage error without a folder", async () => {
     const io = captureIo(makeProject({}));
     expect(await main(["init"], io)).toBe(2);

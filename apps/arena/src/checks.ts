@@ -170,7 +170,9 @@ export async function checkVersion(job: CheckJob, env: ChecksEnv): Promise<Check
  * A CLI tests a version locally on its own engine's rules. When those aren't the arena's (an
  * older CLI after a rule change: `zerosnake@0.1.0` plays `turnRate` 0.25, #98), its `test` can
  * pass a version that plays differently here, so a rejection for how it played (`seeds`,
- * `qualification`) says why the two can disagree. The verdict itself stays the arena's.
+ * `qualification`) says why the two can disagree, in a failed check of its own (`rules`): CLIs
+ * print the suite's checks from the suite's report, and other failed checks as they are. The
+ * verdict itself stays the arena's.
  */
 export function noteOtherRules(report: VersionReport, meta: DeployMeta | null): VersionReport {
   if (meta?.cliVersion === undefined || meta.rules === rulesId(DEFAULT_CONFIG)) return report;
@@ -178,11 +180,16 @@ export function noteOtherRules(report: VersionReport, meta: DeployMeta | null): 
   if (failed?.name !== "seeds" && failed?.name !== "qualification") return report;
   const which =
     meta.rules === undefined
-      ? `zerosnake ${meta.cliVersion} plays a turn rate of 0.25; the arena's is ${DEFAULT_CONFIG.turnRate}`
-      : `zerosnake ${meta.cliVersion}`;
-  failed.message +=
-    `. Your CLI tested this version on other rules than the arena's (${which}), so its ` +
-    "`zerosnake test` can disagree with this verdict: update it (`npx zerosnake@latest`) and test again";
+      ? `a turn rate of 0.25; the arena's is ${DEFAULT_CONFIG.turnRate}`
+      : `rules ${meta.rules}; the arena's are ${rulesId(DEFAULT_CONFIG)}`;
+  report.checks.push({
+    name: "rules",
+    ok: false,
+    message:
+      `zerosnake ${meta.cliVersion} tested this version on other rules than the arena's ` +
+      `(${which}), so its \`zerosnake test\` can disagree with this verdict. Update it ` +
+      "(`npx zerosnake@latest`) and test again.",
+  });
   return report;
 }
 

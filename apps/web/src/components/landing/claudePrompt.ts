@@ -7,7 +7,7 @@ import { CLI_PUBLISHED, REPO, SITE_URL } from "../../site";
  * the person, since it opens their browser and waits for them.
  *
  * While the CLI isn't on npm but the repository is public, it runs the CLI from a checkout
- * (`docs/getting-started.md`, "Before the packages are published"). While both are closed it reads
+ * (`docs/getting-started.md`, "Working from a checkout"). While both are closed it reads
  * as it will on launch day; the page shows it without a copy button then.
  */
 export function claudePrompt(

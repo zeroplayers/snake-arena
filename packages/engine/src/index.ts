@@ -42,6 +42,8 @@ export {
   createConfig,
   DEFAULT_CONFIG,
   type EngineConfig,
+  rulesId,
+  sameRules,
   TICK_RATE,
 } from "./config.ts";
 export { hungerDecay, lifeScore, segmentCountForMass, sizeForMass } from "./growth.ts";
@@ -64,6 +66,7 @@ export {
   replayChunkVersion,
 } from "./replay.ts";
 export { createRng, type Rng, type RngState } from "./rng.ts";
+export { spawnGraceLeft } from "./spawn.ts";
 export { quantizeTurn, step, TURN_STEPS } from "./step.ts";
 export type {
   Action,

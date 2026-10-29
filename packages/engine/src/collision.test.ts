@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
+import type { EngineConfig } from "./config.ts";
+import { addFood } from "./food.ts";
 import { Grid } from "./grid.ts";
 import { createRng } from "./rng.ts";
 import { step } from "./step.ts";
 import { place, QUIET } from "./testing/setup.ts";
-import type { World } from "./types.ts";
-import { createWorld } from "./world.ts";
+import type { Snake, World } from "./types.ts";
+import { createWorld, layoutSegments } from "./world.ts";
 
-const quiet = (config = {}) => createWorld({ seed: 1, config: { ...QUIET, ...config } });
+// Placed snakes are newborns: no spawn grace, so they collide from the first tick.
+const quiet = (config = {}) =>
+  createWorld({ seed: 1, config: { ...QUIET, spawnGraceTicks: 0, ...config } });
 
 const remainsValue = (world: World) =>
   world.food.filter((f) => f.kind === "remains").reduce((sum, f) => sum + f.value, 0);
@@ -128,12 +132,143 @@ describe("remains", () => {
     expect(new Set(pellets.map((f) => Math.round(f.x))).size).toBeGreaterThan(5);
   });
 
+  const pelletXs = (world: World) => world.food.filter((f) => f.kind === "remains").map((f) => f.x);
+
+  it("a small snake's remains are split along its whole body (#101)", () => {
+    const world = quiet({ remainsJitter: 0 });
+    // Mass 10: 5 segments, body from x = -4 × size to the head at 0.
+    const a = place(world, { id: "a", x: 0, y: 0, angle: 0, mass: 10 });
+    step(world, {}, { a: "error" });
+    // 3 pellets of 10/3 at 1/6, 1/2 and 5/6 of the body (before: 1 pellet of 10 on the head).
+    expect(pelletXs(world)).toEqual(
+      [1, 3, 5].map((sixths) => expect.closeTo((-4 * a.size * sixths) / 6, 9)),
+    );
+    expect(remainsValue(world)).toBeCloseTo(10, 9);
+  });
+
+  it("remains are spread by length, also over a tail stacked by growth", () => {
+    const world = quiet({ remainsJitter: 0 });
+    const a = place(world, { id: "a", x: 0, y: 0, angle: 0, mass: 137 });
+    // A body that just grew: head and 2 segments laid out, the other 14 piled on the tail end.
+    a.trail = [
+      { x: -2 * a.size, y: 0 },
+      { x: 0, y: 0 },
+    ];
+    layoutSegments(a, a.segments.length);
+    expect(a.segments.filter((p) => p.x === -2 * a.size)).toHaveLength(15);
+    step(world, {}, { a: "error" });
+    // 14 pellets evenly spaced, half a gap from the head and from the tail.
+    const gap = (2 * a.size) / 14;
+    const want = Array.from({ length: 14 }, (_, k) => expect.closeTo(-(k + 0.5) * gap, 9));
+    expect(pelletXs(world)).toEqual(want);
+    expect(remainsValue(world)).toBeCloseTo(137, 9);
+  });
+
+  it("a world from before #101 (no remainsPerSegment) keeps the old layout", () => {
+    const world = quiet({ remainsJitter: 0 });
+    delete (world.config as { remainsPerSegment?: number }).remainsPerSegment;
+    const small = place(world, { id: "a", x: 0, y: 0, angle: 0, mass: 10 });
+    const big = place(world, { id: "b", x: 0, y: 20, angle: 0, mass: 137 });
+    const segs = big.segments.map((p) => ({ ...p }));
+    step(world, {}, { a: "error", b: "error" });
+    const [head, ...rest] = world.food.filter((f) => f.kind === "remains");
+    expect(head).toMatchObject({ x: small.head.x, y: 0, value: 10 });
+    expect(rest).toHaveLength(14);
+    rest.forEach((f, k) => {
+      const p = segs[Math.floor((k * segs.length) / 14)];
+      expect(f).toMatchObject({ x: p?.x, y: p?.y });
+    });
+  });
+
   it("the killer can eat the remains", () => {
     const world = quiet();
     const a = place(world, { id: "a", x: -3, y: 0, angle: 0, mass: 50 });
     place(world, { id: "b", x: 3, y: 0, angle: Math.PI, mass: 20 });
     for (let t = 0; t < 12; t++) step(world, {});
     expect(a.mass).toBeGreaterThan(55);
+  });
+});
+
+describe("spawn grace", () => {
+  /** Grace on (the default); `old` snakes are past it. */
+  const graced = () => createWorld({ seed: 1, config: QUIET });
+  const age = (snake: Snake, lifeTick = 100) => {
+    snake.lifeTick = lifeTick;
+    return snake;
+  };
+  const run = (world: World, ticks: number) => {
+    const deaths = [];
+    for (let t = 0; t < ticks; t++) deaths.push(...step(world, {}).deaths);
+    return deaths;
+  };
+
+  it("a newborn's body isn't solid: a head passes through it", () => {
+    const world = graced();
+    place(world, { id: "new", x: 0, y: 0, angle: 0, mass: 200 });
+    age(place(world, { id: "old", x: -10, y: -2.5, angle: Math.PI / 2 }));
+    expect(run(world, 6)).toEqual([]);
+    // It went through the body to the other side.
+    expect(world.snakes.find((s) => s.id === "old")?.head.y).toBeGreaterThan(5);
+  });
+
+  it("a newborn's head passes through bodies", () => {
+    const world = graced();
+    age(place(world, { id: "old", x: 0, y: 0, angle: 0, mass: 200 }));
+    place(world, { id: "new", x: -10, y: -2.5, angle: Math.PI / 2 });
+    expect(run(world, 6)).toEqual([]);
+  });
+
+  it("heads meeting a newborn pass through each other, whatever the masses", () => {
+    for (const [mNew, mOld] of [
+      [20, 50],
+      [50, 20],
+      [30, 30],
+    ] as const) {
+      const world = graced();
+      place(world, { id: "new", x: -3, y: 0, angle: 0, mass: mNew });
+      age(place(world, { id: "old", x: 3, y: 0, angle: Math.PI, mass: mOld }));
+      expect(run(world, 4)).toEqual([]);
+    }
+  });
+
+  it("the wall still kills a newborn", () => {
+    const world = graced();
+    const h = world.config.arenaHalfSize;
+    place(world, { id: "new", x: h - 1, y: 0, angle: 0, mass: 40 });
+    step(world, {});
+    expect(world.deaths).toMatchObject([{ id: "new", cause: "wall" }]);
+  });
+
+  it("a newborn eats", () => {
+    const world = graced();
+    const me = place(world, { id: "new", x: 0, y: 0, angle: 0 });
+    addFood(world, 3, 0, 5, "ambient");
+    step(world, {});
+    expect(world.food).toHaveLength(0);
+    expect(me.mass).toBeGreaterThan(world.config.startMass + 4);
+  });
+
+  it("ends after spawnGraceTicks: the body is solid from then on", () => {
+    const world = graced();
+    const grace = world.config.spawnGraceTicks;
+    // As in "collision: head into another body", which kills on the second step; that step is
+    // the newborn's first one out of grace.
+    const b = age(place(world, { id: "b", x: 0, y: 0, angle: 0, mass: 200 }), grace - 1);
+    age(place(world, { id: "a", x: -10, y: -2.5, angle: Math.PI / 2 }));
+    step(world, {});
+    expect(world.deaths).toEqual([]);
+    step(world, {});
+    expect(world.deaths).toMatchObject([{ id: "a", cause: "collision", killerId: "b" }]);
+    expect(b.kills).toBe(1);
+  });
+
+  it("is off in worlds saved before it (no spawnGraceTicks)", () => {
+    const world = graced();
+    const config: Partial<EngineConfig> = world.config;
+    delete config.spawnGraceTicks;
+    place(world, { id: "b", x: 0, y: 0, angle: 0, mass: 200 });
+    place(world, { id: "a", x: -10, y: -2.5, angle: Math.PI / 2 });
+    expect(run(world, 2)).toMatchObject([{ id: "a", cause: "collision", killerId: "b" }]);
   });
 });
 

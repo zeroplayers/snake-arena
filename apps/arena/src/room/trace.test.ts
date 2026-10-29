@@ -52,6 +52,7 @@ function state(lifeTick: number, extra: Partial<BotState> = {}): BotState {
       radius: 0.5,
       turnRate: 0.1,
       boosting: false,
+      spawnGrace: 0,
       segments: [{ x: 10, y: 0 }],
     },
     snakes: [],
@@ -92,6 +93,7 @@ const ENEMY = {
   head: { x: 1, y: 1 },
   angle: 0,
   boosting: true,
+  spawnGrace: 0,
   segments: [{ x: 1, y: 1 }],
 };
 
@@ -215,6 +217,7 @@ describe("TraceRecorder", () => {
       head: { x: 1, y: 1 },
       angle: 0,
       boosting: true,
+      spawnGrace: 0,
       segments: [{ x: 1, y: 1 }],
     };
     for (let t = 0; t < 20_000; t++) {
@@ -416,6 +419,7 @@ describe("TraceRecorder", () => {
             head: null,
             angle: null,
             boosting: false,
+            spawnGrace: 0,
             segments: [{ x: 30, y: 0 }],
           },
           {
@@ -426,6 +430,7 @@ describe("TraceRecorder", () => {
             head: { x: 13, y: 4 },
             angle: 1,
             boosting: false,
+            spawnGrace: 0,
             segments: [
               { x: 13, y: 4 },
               { x: 12, y: 1 },

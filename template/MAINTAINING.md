@@ -2,8 +2,7 @@
 
 This folder is what `npx zerosnake init` gives a bot author. This file is for people working on
 the template inside the monorepo. `init` (#14) copies everything except `node_modules`,
-`.zerosnake` and caches, so this file goes along too; harmless, but adding it to the CLI's skip list
-would be tidier.
+`.zerosnake`, caches and this file (`SKIP` in `packages/cli/src/template.ts`).
 
 ## Workspace member, copyable standalone
 
@@ -23,26 +22,28 @@ it imports from outside the folder, so a copy works once the dependencies resolv
 `zerosnake init` (#14) copies the folder, names the package after the new directory and rewrites
 every `workspace:*` range to `^<version>` of that package.
 
-**Today that is not enough:** `@zerosnake/sdk`, `@zerosnake/engine`, `@zerosnake/sandbox` and
-`@zerosnake/house-bots` are private `0.0.0` packages, so `npm install` fails in any copy (on
-`workspace:*` in a plain copy, on `^0.0.0` after `init`). Authors have to work inside a monorepo
-checkout; README.md and CLAUDE.md say so. `zerosnake sim` / `test` from a checkout's CLI work in an
-`init`ed folder without an install (the CLI resolves the SDK itself), but `npm test` and
-`npm run bench` there need the packages.
+**Today only the CLI is on npm** (`zerosnake`, since 0.1.0). `@zerosnake/sdk`,
+`@zerosnake/engine`, `@zerosnake/sandbox` and `@zerosnake/house-bots` are private `0.0.0`
+packages, so `init` copies the SDK into `vendor/zerosnake-sdk` (a `file:` dependency) and leaves
+the other three out with a note (`PUBLISHED` in `packages/cli/src/init.ts` is empty). `npm install`
+works in an `init` project and `npx zerosnake sim` / `test` need nothing more, but `npm test` and
+`npm run bench` need the packages: README.md ("Inside the monorepo") and CLAUDE.md (Setup) say so.
+The CLI's build ships this folder with `.gitignore` renamed to `gitignore`, which `init` renames
+back.
 
-When the packages are published:
+When the other packages are published:
 
-- drop the "not on npm yet" notes from README.md (Quick start) and CLAUDE.md (Setup);
-- add `"zerosnake": "workspace:*"` to `devDependencies` so `npx zerosnake` resolves locally;
-- if the template ships inside the published CLI, rename `.gitignore` to `gitignore` (npm drops
-  `.gitignore` from packages; `init` renames `gitignore` back, and otherwise writes a default one
-  without `.zerosnake/`).
+- add each to `PUBLISHED` in `packages/cli/src/init.ts`, and drop the vendored SDK once
+  `@zerosnake/sdk` is in it;
+- drop the "not on npm yet" notes from README.md and CLAUDE.md;
+- consider `"zerosnake": "^<version>"` in `devDependencies`, so a project pins its CLI instead of
+  `npx` fetching the latest.
 
 ## Why the tests need engine, sandbox and house bots
 
 `test/match.ts` plays real matches: the bot bundled by esbuild, run in `@zerosnake/sandbox` with the
 arena's budget, in `@zerosnake/engine` worlds, against `@zerosnake/house-bots`. That gives authors
-(and their Claude) a deterministic local loop (`npm test`, `npm run bench`) before the CLI exists.
+(and their Claude) a deterministic local loop (`npm test`, `npm run bench`) inside the monorepo.
 In an `init` project those packages are left out, so `npm test`, `npm run bench` and
 `npm run typecheck` fail there; `CLAUDE.md`, README.md and the skills therefore lead with the CLI
 (`npx tsc -p .`, `zerosnake sim --headless`, `zerosnake test`) and mark the bench as monorepo-only.
@@ -74,18 +75,27 @@ pnpm --filter zerosnake margin --sets 1000    # the real checks on 1000 seed set
 ```
 
 It prints the distribution of the margin (mean score per life / easy's in the same seat) and the
-budget used. Use `--from` for seed sets nobody tuned on. The current bot on the square arena (#76,
-October 2026; corners rounded off to 3 turning radii), with the real checks: no failures on 600 seed
-sets (`--from 100000`: lowest 1.06×, 1% 1.54×, 5% 2.08×, median 4.20×) and one on 600 more minified
-(`--from 200000 --minify`: set 200310 at 0.84×, easy 93.9 per life against 79.4; 1% 1.48×, 5% 2.15×,
-median 4.43×), so 1 failure and 12 sets below 1.5× in 1200; at most 0.7× of the per-tick budget on
-its costliest tick and 0.2× of the suite's average allowance. (On the round arena it had 1 failure
-in 3600 sets, 1% about 1.55×, median about 4.7×.) `easy`'s own mean score per life ranges from under
-10 to over 150 between seed sets (median about 30), and its best sets come from long lucky lives and
+budget used. Use `--from` for seed sets nobody tuned on. The current bot at `turnRate` 0.4 (#98,
+October 2026; look-ahead 2 U-turns, margins 0.5, tuned on sets 300000+), with the real checks: no
+failures on 600 seed sets (`--from 100000`: lowest 1.14×, 1% 1.42×, 5% 1.74×, median 3.71×) and 3
+on 600 more minified (`--from 200000 --minify`: lowest set 200203 at 0.63×, easy 152.7 per life
+against 95.7; 1% 1.39×, 5% 1.73×, median 3.86×), so 3 failures and 25 sets below 1.5× in 1200; at
+most 0.4× of the per-tick budget on its costliest tick and 0.14× of the suite's average allowance.
+The sharper turn made `easy` stronger (about 40 per life instead of 30: it dies less), more than
+the bot. (At `turnRate` 0.25 the previous bot had 1 failure and 12 sets below 1.5× in the same
+1200, 1% 1.54×, median 4.20×; on the round arena 1 failure in 3600 sets.) `easy`'s own mean score per life ranges from under
+10 to over 150 between seed sets (median about 40), and its best sets come from long lucky lives and
 kills, which a bot that avoids everyone can't always match. Watch the 1% figure and the failures.
 `cli.test.ts` checks three fixed seed sets at ≥ 1.5×; the CLI's other tests use a bot whose seeds
 never change (`packages/cli/src/testing/passing-bot.ts`), so a change here doesn't put them at risk.
 When the numbers change, update "Keep a margin over `easy`" in `CLAUDE.md`.
+
+Safe spawns and spawn grace (#102) made `easy` a little stronger again: it dies less at spawn, about
+42 per life instead of 40.5 on the sets below, while the bot stayed at about 140. On top of
+`turnRate` 0.4 (#98) and the remains spread (#103), the standard 1200 sets give 3 failures (as
+before), 35 sets below 1.5× (32 before) and 137 below 2× (110 before); 1% 1.26× / 1.37×, 5%
+1.58× / 1.68×, median 3.56× / 3.62× (`--from 100000` / `--from 200000 --minify`; worst set 100001,
+easy 177.7 per life against 144.9). Getting back to ≤ 1 failure in 1200 with 1% ≥ 1.5× is #105.
 
 The bot must also stay well inside the per-tick budget (the smoke test wants at most half of it
 on its seeds). QuickJS counts interrupts per ~10 000 branches or calls, and the sandbox's metering

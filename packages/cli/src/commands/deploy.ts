@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { formatReport as formatCheckReport } from "@zerosnake/checks";
+import { DEFAULT_CONFIG, rulesId } from "@zerosnake/engine";
 import type {
   BotInfo,
   DeployMeta,
@@ -185,7 +186,10 @@ async function createBot(
 }
 
 function deployMeta(root: string, message: string | undefined): DeployMeta {
-  const meta: DeployMeta = { cliVersion: cliVersion().slice(0, 32) };
+  const meta: DeployMeta = {
+    cliVersion: cliVersion().slice(0, 32),
+    rules: rulesId(DEFAULT_CONFIG),
+  };
   const sdk = join(root, "node_modules", "@zerosnake", "sdk", "package.json");
   const sdkVersion = existsSync(sdk) ? readJson(sdk).version : undefined;
   if (typeof sdkVersion === "string") meta.sdkVersion = sdkVersion.slice(0, 32);

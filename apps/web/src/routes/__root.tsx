@@ -16,7 +16,7 @@ import { signInWithGithub } from "../lib/auth-client";
 import { siteMeta } from "../lib/meta";
 import { getViewer } from "../server/functions";
 import { getSiteConfig } from "../server/site-config";
-import { REPO } from "../site";
+import { CLI_PUBLISHED, NPM_URL, REPO } from "../site";
 import appCss from "../styles/app.css?url";
 
 export const Route = createRootRoute({
@@ -100,6 +100,7 @@ function RootLayout() {
             <Link to="/leaderboard">Leaderboard</Link>
             <Link to="/docs">Docs</Link>
             <GithubLink />
+            {CLI_PUBLISHED && <a href={NPM_URL}>npm</a>}
             <Link to="/terms">Terms</Link>
             <Link to="/acceptable-use">Acceptable Use</Link>
             <Link to="/privacy">Privacy</Link>

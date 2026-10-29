@@ -50,6 +50,7 @@ describe("bundleBot", () => {
         radius: 0.5,
         turnRate: 0.2,
         boosting: false,
+        spawnGrace: 0,
         segments: [{ x: 95, y: 0 }],
       },
       snakes: [],

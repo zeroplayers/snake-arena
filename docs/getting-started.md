@@ -31,7 +31,7 @@ you can deploy it before changing a line. It loses to the others.
 The template's own tests (`npm test`, `npm run bench`) need the engine, sandbox and house-bot
 packages, which aren't on npm (only `zerosnake` is); use `npx zerosnake sim` and `npx zerosnake test`,
 which bring everything they need. To run the template's own tests, or to work on the CLI, see
-[Before the packages are published](#before-the-packages-are-published).
+[Working from a checkout](#working-from-a-checkout).
 
 ## 2. Write a strategy
 
@@ -117,7 +117,7 @@ your bot saw and returned in its last ticks. Locally, the template's `debug-deat
 replay the last ticks before local deaths (`npm run bench -- --deaths 5`) and fix the cause;
 [FAQ](faq.md) lists the common causes.
 
-## Before the packages are published
+## Working from a checkout
 
 You don't need this to build a bot: `npx zerosnake init` above is enough. Only `zerosnake` is on
 npm; `@zerosnake/sdk`, the engine, the sandbox and the house bots are not, so to run the template's

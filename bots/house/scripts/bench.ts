@@ -1,7 +1,7 @@
 /**
  * Long house-bot ordering run (the CI test is a small slice of this):
  *
- *   pnpm --filter @zerosnake/house-bots bench [matches=100] [ticks=1500] [lineup=easy,medium,...]
+ *   pnpm --filter @zerosnake/house-bots bench [matches=100] [ticks=1500] [lineup=easy,medium,...] [turnRate]
  *
  * Prints per-slot and per-life score, deaths per slot and how often each pair is ordered.
  */
@@ -12,7 +12,7 @@ import { runMatch, type SlotResult, summarize } from "../src/match.ts";
 declare const process: { argv: string[] };
 declare const console: { log(message: string): void };
 
-const [matchesArg, ticksArg, lineupArg] = process.argv.slice(2);
+const [matchesArg, ticksArg, lineupArg, turnRateArg] = process.argv.slice(2);
 const matches = Number(matchesArg ?? 100);
 const ticks = Number(ticksArg ?? 1500);
 const lineup = lineupArg
@@ -24,7 +24,8 @@ const results: SlotResult[][] = [];
 const pairWins = new Map<string, number>();
 const started = Date.now();
 for (let m = 0; m < matches; m++) {
-  const match = runMatch({ seed: 1000 + m, lineup, ticks });
+  const config = turnRateArg ? { turnRate: Number(turnRateArg) } : undefined;
+  const match = runMatch({ seed: 1000 + m, lineup, ticks, ...(config && { config }) });
   results.push(match);
   const byBot = summarize([match]);
   for (const a of bots) {

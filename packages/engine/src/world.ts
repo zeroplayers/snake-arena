@@ -1,8 +1,9 @@
 import { createConfig, type EngineConfig } from "./config.ts";
 import { spawnAmbientFood } from "./food.ts";
 import { segmentCountForMass, sizeForMass } from "./growth.ts";
-import { atan2, cos, sin } from "./math.ts";
+import { cos, sin } from "./math.ts";
 import { rngFromState, seedRngState } from "./rng.ts";
+import { spawnPoint } from "./spawn.ts";
 import type { Snake, SnakeId, Vec2, World } from "./types.ts";
 
 export interface CreateWorldOptions {
@@ -32,8 +33,9 @@ export interface SpawnOptions {
 }
 
 /**
- * Starts a new life at a random clear spot, facing the centre, body laid out straight behind
- * it. Part of the replayable input: call it at the same point between steps to reproduce a run.
+ * Starts a new life at a random spot with room around it, facing open space (see `spawnPoint`),
+ * body laid out straight behind it. Part of the replayable input: call it at the same point
+ * between steps to reproduce a run.
  */
 export function spawnSnake(world: World, { id, author }: SpawnOptions): Snake {
   if (world.snakes.some((s) => s.id === id)) throw new Error(`snake ${id} already exists`);
@@ -41,18 +43,9 @@ export function spawnSnake(world: World, { id, author }: SpawnOptions): Snake {
   const rng = rngFromState(world.rng);
   const seed = rng.int(4294967296);
 
-  let x = 0;
-  let y = 0;
-  const h = c.arenaHalfSize * c.spawnHalfSizeFactor;
-  for (let attempt = 0; attempt < c.spawnAttempts; attempt++) {
-    x = rng.range(-h, h);
-    y = rng.range(-h, h);
-    if (isClear(world, x, y, c.spawnClearance)) break;
-  }
-
-  const angle = atan2(-y, -x);
   const mass = c.startMass;
   const size = sizeForMass(mass, c);
+  const { x, y, angle } = spawnPoint(world, rng, size / 2);
   const bodyLength = (segmentCountForMass(mass, c) - 1) * size;
   const snake: Snake = {
     id,
@@ -79,18 +72,6 @@ export function spawnSnake(world: World, { id, author }: SpawnOptions): Snake {
   layoutSegments(snake, segmentCountForMass(mass, c));
   world.snakes.push(snake);
   return snake;
-}
-
-function isClear(world: World, x: number, y: number, clearance: number): boolean {
-  const c2 = clearance * clearance;
-  for (const s of world.snakes) {
-    for (const p of s.segments) {
-      const dx = p.x - x;
-      const dy = p.y - y;
-      if (dx * dx + dy * dy < c2) return false;
-    }
-  }
-  return true;
 }
 
 /**

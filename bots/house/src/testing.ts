@@ -36,8 +36,9 @@ export function self(o: Partial<SelfState> = {}): SelfState {
     length: 10,
     speed: 1.5,
     radius: 0.5,
-    turnRate: 0.25,
+    turnRate: 0.4,
     boosting: false,
+    spawnGrace: 0,
     segments: [0, 1, 2, 3, 4, 5].map((i) => ({
       x: head.x - Math.cos(angle) * i,
       y: head.y - Math.sin(angle) * i,
@@ -58,6 +59,7 @@ export function snake(segments: Vec[], o: Partial<SnakeView> = {}): SnakeView {
     head: segments[0] ?? null,
     angle: 0,
     boosting: false,
+    spawnGrace: 0,
     segments,
     ...o,
   };

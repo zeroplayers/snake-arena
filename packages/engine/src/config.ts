@@ -1,3 +1,5 @@
+import { stateHash } from "./hash.ts";
+
 /**
  * Every tunable coefficient of the simulation. A world stores its config, so replays stay
  * reproducible after the defaults change.
@@ -19,7 +21,10 @@ export interface EngineConfig {
   speed: number;
   /** Speed multiplier while boosting. */
   boostMultiplier: number;
-  /** Max heading change per tick at `turn = ±1`. */
+  /**
+   * Max heading change per tick at `turn = ±1`. The tightest circle a snake can drive has radius
+   * `speed / turnRate` (doubled while boosting).
+   */
   turnRate: number;
 
   // --- Growth (original `snake_growth_simulation_guide.md`) ----------------------------------
@@ -78,6 +83,12 @@ export interface EngineConfig {
   remainsMaxValue: number;
   /** Remains are scattered up to this × size from their segment. */
   remainsJitter: number;
+  /**
+   * Fewest remains pellets per body segment, so a small snake's remains still trace its body;
+   * they are spread evenly by length along it (#101). Worlds made before it lack the key and
+   * keep the old layout (see `dropRemains`), so their replays still play back.
+   */
+  remainsPerSegment: number;
 
   // --- Life ----------------------------------------------------------------------------------
   /** A snake retires after this many ticks alive. */
@@ -90,10 +101,24 @@ export interface EngineConfig {
   // --- Spawning ------------------------------------------------------------------------------
   /** New snakes spawn within the centred square of half-side arenaHalfSize × this. */
   spawnHalfSizeFactor: number;
-  /** Preferred clear distance from other snakes' segments at spawn. */
+  /**
+   * A spawn point with this much room (between body circles) to every other snake's body, head
+   * and the road its head takes next is good enough; failing that, the roomiest point is taken.
+   * The old spawn (`spawnCandidates` absent) only measured it to body points.
+   */
   spawnClearance: number;
-  /** Random positions tried before settling for the last one. */
+  /** Random positions the old spawn tries before settling for the last one. */
   spawnAttempts: number;
+  /**
+   * Random positions scored per spawn (#102). Absent (worlds saved before it) or 0: the old
+   * spawn, the first of `spawnAttempts` positions clear of bodies, facing the centre.
+   */
+  spawnCandidates: number;
+  /**
+   * For its first this many ticks a new snake takes no part in snake-to-snake collisions (#102):
+   * its body isn't solid and nothing but the wall kills it. Absent (worlds saved before it): 0.
+   */
+  spawnGraceTicks: number;
 
   // --- Vision (bot state) --------------------------------------------------------------------
   /** A bot sees snake points and food at most this far from its head. */
@@ -122,7 +147,8 @@ export const DEFAULT_CONFIG: Readonly<EngineConfig> = Object.freeze({
 
   speed: 1.5,
   boostMultiplier: 2,
-  turnRate: 0.25,
+  // Radius 3.75 turning circle at normal speed (#98; 0.25 and radius 6 before).
+  turnRate: 0.4,
 
   minSize: 1,
   maxSize: 5,
@@ -152,6 +178,7 @@ export const DEFAULT_CONFIG: Readonly<EngineConfig> = Object.freeze({
   deathDropRatio: 1,
   remainsMaxValue: 10,
   remainsJitter: 0.5,
+  remainsPerSegment: 0.5,
 
   lifeCap: 6000,
   massScoreFactor: 0.001,
@@ -160,6 +187,8 @@ export const DEFAULT_CONFIG: Readonly<EngineConfig> = Object.freeze({
   spawnHalfSizeFactor: 0.8,
   spawnClearance: 10,
   spawnAttempts: 30,
+  spawnCandidates: 24,
+  spawnGraceTicks: 15,
 
   visionRadius: 40,
   visionMaxSnakes: 32,
@@ -169,6 +198,27 @@ export const DEFAULT_CONFIG: Readonly<EngineConfig> = Object.freeze({
 
   gridCellSize: 8,
 });
+
+/**
+ * Whether two configs play the same game: equal in every key but the internals that don't affect
+ * results (`gridCellSize`). A room's saved world keeps the config it started with, so after the
+ * defaults change this tells which rooms still run the old rules.
+ */
+export function sameRules(a: Readonly<EngineConfig>, b: Readonly<EngineConfig>): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)] as (keyof EngineConfig)[]);
+  for (const key of keys) if (key !== "gridCellSize" && a[key] !== b[key]) return false;
+  return true;
+}
+
+/**
+ * A short fingerprint of a config's rules (8 hex digits): equal for configs {@link sameRules}
+ * calls the same, almost surely different otherwise. The CLI sends its engine's with a deploy,
+ * so the server can tell a version was tested locally on other rules than the arena's.
+ */
+export function rulesId(config: Readonly<EngineConfig>): string {
+  const { gridCellSize: _, ...rules } = config;
+  return stateHash(rules).toString(16).padStart(8, "0");
+}
 
 export function createConfig(overrides: Partial<EngineConfig> = {}): EngineConfig {
   return { ...DEFAULT_CONFIG, ...overrides };

@@ -1,9 +1,19 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ContactEmail, LegalPage } from "../components/LegalPage";
 import { LEGAL, MINIMUM_AGE } from "../legal";
+import { canonical, pageMeta } from "../lib/meta";
 
 export const Route = createFileRoute("/terms")({
-  head: () => ({ meta: [{ title: "Terms of Service · ZeroSnake Arena" }] }),
+  head: () => ({
+    meta: [
+      ...pageMeta(
+        "Terms of Service",
+        "The terms for using ZeroSnake Arena: your account, the bots you deploy and their public source, fair play, and what we may do.",
+      ),
+      ...canonical("/terms").meta,
+    ],
+    links: canonical("/terms").links,
+  }),
   component: Terms,
 });
 

@@ -120,7 +120,8 @@ describe("broadcast", () => {
   }, 30_000);
 
   it("reports deaths with their killer and lets a late spectator start from a keyframe", () => {
-    const world = createWorld({ seed: 1, config: { foodBase: 0, foodPerSnake: 0 } });
+    const config = { foodBase: 0, foodPerSnake: 0, spawnGraceTicks: 0 };
+    const world = createWorld({ seed: 1, config });
     // b runs head-first into a's body (as in collision.test.ts).
     place(world, { id: "a", x: 0, y: 0, angle: 0, mass: 200 });
     place(world, { id: "b", x: -10, y: -2.5, angle: Math.PI / 2 });

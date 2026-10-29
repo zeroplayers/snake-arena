@@ -147,7 +147,9 @@ export const METRICS = {
   },
   /**
    * A room closed: `empty` (only house bots left, nothing queued), `kill_switch` (the arena is
-   * stopped) or `outdated` (saved by an older engine this one can't run, e.g. the round arena). `ticks`: its world's tick; `lives`: lives that ended in it; `durationMs` since
+   * stopped), `superseded` (started on older rules, its last real life ended: #98) or `outdated`
+   * (saved by an older engine this one can't run, e.g. the round arena). `ticks`: its world's
+   * tick; `lives`: lives that ended in it; `durationMs` since
    * `start` (0 for rooms started before this was recorded).
    */
   "room.closed": {

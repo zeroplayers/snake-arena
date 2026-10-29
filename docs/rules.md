@@ -21,10 +21,15 @@ Sources: [`config.ts`](../packages/engine/src/config.ts),
   about the area of a disc of radius 100). `x` grows east (right), `y` grows **north (up)**.
 - Angles are radians, counter-clockwise from +x: `0` is east, `π/2` north. Headings are kept in
   (−π, π].
-- A new snake spawns at a uniformly random spot of the centred square [−71.2, 71.2]²
-  (`arenaHalfSize × 0.8`), trying up to 30 spots for one at least 10 units from every other
-  snake's body, then taking the last one tried. It faces the centre, with its body laid out
-  straight behind it.
+- A new snake spawns in the centred square [−71.2, 71.2]² (`arenaHalfSize × 0.8`), at the
+  roomiest of up to 24 random spots (`spawnCandidates`, [`spawn.ts`](../packages/engine/src/spawn.ts)).
+  Room is the gap to the nearest other snake's body point, head (counted 5 ticks of its movement
+  closer, since it can turn toward you) or the road that head drives over the next 2 s on its
+  current heading. The first spot with 10 units of room (`spawnClearance`) is taken. The snake
+  faces the one of 16 headings whose straight road over 2 s keeps the most room (other snakes and
+  the wall), the centre when several have 10 units, with its body laid out straight behind it.
+- For its first **15 ticks** (1.5 s, `spawnGraceTicks`) a new snake is in **spawn grace**; see
+  [Collisions](#collisions-and-death).
 
 ## Mass, size and body
 
@@ -44,14 +49,16 @@ A snake's **mass** (called `length` in the bot state) drives everything else:
 
 Every tick, in this order, each snake:
 
-1. **Turns.** The heading changes by `−turn × turnRate`, with `turnRate` = **0.25 rad per tick**
-   (about 14°). `turn` is your action's value in [−1, 1]: negative turns left (counter-clockwise),
+1. **Turns.** The heading changes by `−turn × turnRate`, with `turnRate` = **0.4 rad per tick**
+   (about 23°). `turn` is your action's value in [−1, 1]: negative turns left (counter-clockwise),
    positive turns right (clockwise).
 2. **Moves** forward along the new heading by `speed`: **1.5** units per tick, **3** while
    boosting.
 
 So a snake can't stop or reverse. At full turn it describes a circle of radius
-`speed / turnRate` = **6** units (12 while boosting), and a U-turn takes about 13 ticks.
+`speed / turnRate` = **3.75** units (7.5 while boosting), and a U-turn takes 8 ticks. (Until
+#98 `turnRate` was 0.25: radius 6, 12 while boosting. Rooms and replays keep the rules they
+started with, see [Rule changes](#rule-changes).)
 
 ### Turn quantization (1/128)
 
@@ -84,11 +91,11 @@ snakes have to keep eating to stay big, so circling in a corner doesn't pay.
 
 ## Food
 
-| Kind      | Value               | Pellet radius | Where it appears                      |
-| --------- | ------------------- | ------------- | ------------------------------------- |
-| `ambient` | 1                   | 0.5           | uniformly at random in [−87.2, 87.2]² |
-| `boost`   | the mass burned (1) | 0.5           | at a boosting snake's tail            |
-| `remains` | about 10 per pellet | 1.5           | along the body of a snake that died   |
+| Kind      | Value                           | Pellet radius | Where it appears                      |
+| --------- | ------------------------------- | ------------- | ------------------------------------- |
+| `ambient` | 1                               | 0.5           | uniformly at random in [−87.2, 87.2]² |
+| `boost`   | the mass burned (1)             | 0.5           | at a boosting snake's tail            |
+| `remains` | up to 10 (more above mass ~380) | 1.5           | along the body of a snake that died   |
 - **Ambient food** spawns, at most 4 pellets per tick, while the arena holds fewer than
   `150 + 40 × living snakes` pellets (at most 3000). Pellets of every kind count toward that
   target, so remains and boost drops hold ambient spawning back. A new world starts with 150.
@@ -121,6 +128,11 @@ head touches during its move is what kills it.
 - **Wall.** You die when your head point ends a tick outside the square, i.e. when
   `max(|x|, |y|) > 89` and `state.wallDistance` would drop below 0. Your body radius doesn't count
   here. Corners are the dangerous spots: heading into one, a snake has two walls to turn away from.
+- **Spawn grace.** For its first 15 ticks a new snake takes no part in snake-to-snake collisions:
+  heads pass through its body and its head passes through bodies and heads, so it can't kill and
+  can't be killed by another snake. The wall still kills it, and it eats as usual. Bots see the
+  ticks left as `spawnGrace` (on `self` and on every visible snake). When it runs out its body is
+  solid again, wherever it lies.
 - **Your own body** never kills you.
 - A snake that dies this tick still kills others: its body and head stay in place for this tick's
   collisions.
@@ -138,12 +150,14 @@ head touches during its move is what kills it.
 `timeout` and `error` are decided by the sandbox before the tick is simulated: the snake dies
 where it stands without moving.
 
-When a snake dies for any reason, **all its mass** is dropped as `remains` pellets spread along its
-body: `ceil(mass / 10)` pellets of equal value, but never more pellets than the body has segments,
-each moved by up to half a segment gap in x and y (and kept within 87.2 of the centre on both
-axes, so remains of a snake that died at the wall can still be eaten). So pellets are worth at most 10 for small snakes
-and more for big ones (above mass ~380 the segment cap takes over: mass 1000 drops 76 pellets of
-about 13).
+When a snake dies for any reason, **all its mass** is dropped as `remains` pellets spread evenly
+along its body from head to tail: `ceil(mass / 10)` pellets of equal value, but at least one per
+two body segments and never more than one per segment, each moved by up to half a segment gap in
+x and y (and kept within 87.2 of the centre on both axes, so remains of a snake that died at the
+wall can still be eaten). So a newborn (mass 10, 5 segments) drops 3 pellets of about 3.3, pellets
+are worth less than 10 below mass ~40, 10 at most up to mass ~380, and more for big ones above it,
+where the segment cap takes over (mass 1000 drops 76 pellets of about 13). (Until #101 small
+snakes dropped as few as one pellet, on the head; rooms and replays from before keep that.)
 
 ## Life cap
 
@@ -196,3 +210,13 @@ the queue; a room closes when only house bots are left in it and the queue is em
 up to 100 lives per UTC day (see [Limits](limits.md#bundle-and-deploy-limits)); after that it
 waits for the next day. Rolling back, archiving, a ban or a quarantine take effect within seconds,
 and lives of a version that can no longer play are retired (`retired`, not rated).
+
+## Rule changes
+
+The defaults above can be tuned (e.g. `turnRate` went from 0.25 to 0.4 in #98). A room keeps the
+rules it started with: its world and its replays carry its config, so a replay always plays back
+on the rules it was recorded on, and a bot sees that room's values (`state.self.turnRate` and
+`speed`, `info.worldHalfSize`, ...).
+When the defaults change, rooms started before take no new lives, let the running ones finish on
+the old rules, then close; every new room starts on the new ones. That is one more reason to read
+the numbers from `info` and `state` instead of hard-coding them.

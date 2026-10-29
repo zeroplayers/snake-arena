@@ -80,6 +80,7 @@ function state(overrides: Partial<BotState> = {}): BotState {
       radius: 2,
       turnRate: 0.1,
       boosting: false,
+      spawnGrace: 0,
       segments: [{ x: 0, y: 0 }],
     },
     snakes: [],
@@ -113,6 +114,7 @@ describe("example bot", () => {
       head: { x: 8, y: -1 },
       angle: Math.PI,
       boosting: false,
+      spawnGrace: 0,
       segments: [{ x: 8, y: -1 }],
     };
     const action = bot.tick(state({ snakes: [threat] }), mem, t.log);

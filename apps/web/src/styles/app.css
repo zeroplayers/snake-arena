@@ -1221,6 +1221,10 @@ button.link-card:hover {
   color: var(--text-muted);
 }
 
+.nowrap {
+  white-space: nowrap;
+}
+
 .soon-tag {
   white-space: nowrap;
   padding: 1px 6px;

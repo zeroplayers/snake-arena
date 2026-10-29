@@ -111,30 +111,32 @@ Passed to every `tick`. Plain JSON data.
 
 ### `self`
 
-| Field      | Meaning                                                                                           |
-| ---------- | ------------------------------------------------------------------------------------------------- |
-| `id`       | same as `info.snakeId`                                                                            |
-| `head`     | head position, `{ x, y }`; equals `segments[0]`                                                   |
-| `angle`    | heading in radians, counter-clockwise from +x, in (−π, π]                                         |
-| `length`   | your **mass** (not a segment count): grows by eating, shrinks with hunger and boost; drives score |
-| `speed`    | distance moved last tick (1.5, or 3 when boosting)                                                |
-| `radius`   | body radius (`size / 2`); collisions use it                                                       |
-| `turnRate` | max heading change per tick at `turn = ±1` (0.25); read it, don't hard-code it                    |
-| `boosting` | whether you boosted last tick                                                                     |
-| `segments` | body points head to tail; at most 128, evenly downsampled, head and tail kept                     |
+| Field        | Meaning                                                                                                  |
+| ------------ | -------------------------------------------------------------------------------------------------------- |
+| `id`         | same as `info.snakeId`                                                                                   |
+| `head`       | head position, `{ x, y }`; equals `segments[0]`                                                          |
+| `angle`      | heading in radians, counter-clockwise from +x, in (−π, π]                                                |
+| `length`     | your **mass** (not a segment count): grows by eating, shrinks with hunger and boost; drives score        |
+| `speed`      | distance moved last tick (1.5, or 3 when boosting)                                                       |
+| `radius`     | body radius (`size / 2`); collisions use it                                                              |
+| `turnRate`   | max heading change per tick at `turn = ±1` (0.4); read it, don't hard-code it                            |
+| `boosting`   | whether you boosted last tick                                                                            |
+| `segments`   | body points head to tail; at most 128, evenly downsampled, head and tail kept                            |
+| `spawnGrace` | ticks of [spawn grace](rules.md#collisions-and-death) left (15 at birth, down to 0): no kills either way |
 
 ### `snakes[]` (`SnakeView`)
 
-| Field      | Meaning                                                                                      |
-| ---------- | -------------------------------------------------------------------------------------------- |
-| `id`       | unique in the room for that snake's life                                                     |
-| `author`   | an opaque id of the bot's author (a user id in rooms); compare it, don't parse or display it |
-| `length`   | the snake's full mass, even if you see only part of it                                       |
-| `radius`   | its body radius                                                                              |
-| `head`     | head position, or `null` if its head is outside your vision                                  |
-| `angle`    | its heading, or `null` if its head is outside your vision                                    |
-| `boosting` | whether it boosted last tick                                                                 |
-| `segments` | only its points within your vision, head to tail; may have gaps and may be downsampled       |
+| Field        | Meaning                                                                                      |
+| ------------ | -------------------------------------------------------------------------------------------- |
+| `id`         | unique in the room for that snake's life                                                     |
+| `author`     | an opaque id of the bot's author (a user id in rooms); compare it, don't parse or display it |
+| `length`     | the snake's full mass, even if you see only part of it                                       |
+| `radius`     | its body radius                                                                              |
+| `head`       | head position, or `null` if its head is outside your vision                                  |
+| `angle`      | its heading, or `null` if its head is outside your vision                                    |
+| `boosting`   | whether it boosted last tick                                                                 |
+| `segments`   | only its points within your vision, head to tail; may have gaps and may be downsampled       |
+| `spawnGrace` | its spawn grace left: while above 0 it can't kill you, nor you it                            |
 
 Treat bodies as circles of `radius` around each point; the spacing between listed points is not
 guaranteed.

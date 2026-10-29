@@ -8,6 +8,7 @@ import {
   type Fault,
   REPLAY_VERSION,
   replayChunkVersion,
+  sameRules,
   TICK_RATE,
   type World,
 } from "@zerosnake/engine";
@@ -152,6 +153,10 @@ const REPORT_GRACE_MS = 60_000;
  * The arena's kill switch (`arena_control.paused` in D1, re-read every `ARENA_CONTROL_POLL_MS`):
  * while it's on, the room starts no lives, retires the running ones and closes.
  *
+ * A room keeps the rules (`EngineConfig`) it started with: its saved world and replay carry them.
+ * One started before the defaults changed (e.g. `turnRate` in #98) is superseded: it takes no new
+ * lives, lets the running ones play out on the old rules, then closes; new rooms get the new ones.
+ *
  * After any reload (eviction or crash) every bot restarts with `init` and empty memory; the
  * world, replay and roster continue exactly.
  *
@@ -177,6 +182,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   private readonly metrics = new BatchMetrics(Date.now());
   /** Outbox items the cycle in progress may still deliver (`drain`). */
   private drainLeft = 0;
+  /** Whether the world's rules are today's defaults (`superseded`); null until known. */
+  private rulesCurrent: boolean | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -282,7 +289,9 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
 
   async join(ticket: LifeTicket): Promise<JoinResult> {
     const meta = this.store.meta();
-    if (meta?.state !== "running" || this.paused) return { ok: false, reason: "closed" };
+    if (meta?.state !== "running" || this.paused || this.superseded()) {
+      return { ok: false, reason: "closed" };
+    }
     if (this.store.isQuarantined(ticket.versionId) || (await this.quarantinedInD1(ticket))) {
       return { ok: false, reason: "quarantined" };
     }
@@ -420,7 +429,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       await this.drain();
       const queueEmpty = this.paused || (await this.refill());
       const idle = queueEmpty && !this.hasRealLives();
-      if (idle && !this.awaitingReports()) await this.close();
+      // A superseded room's bots can't come back: no reason to wait for their reports.
+      if (idle && (this.superseded() || !this.awaitingReports())) await this.close();
       else {
         if (!idle && this.store.meta()?.idleSince) {
           this.store.updateMeta((m) => {
@@ -1016,7 +1026,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   private async refill(): Promise<boolean> {
     const meta = this.store.meta();
     if (meta?.state !== "running") return false;
-    if (Date.now() < meta.nextLifeAfter) return true;
+    if (this.superseded() || Date.now() < meta.nextLifeAfter) return true;
     const present: LifeEntry[] = [...this.store.roster(), ...this.store.pending()];
     const excludeAuthors = present.map((p) => p.author);
     let vacancies = meta.maxSnakes - present.length;
@@ -1086,7 +1096,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     this.flushMetrics(meta, sim.world, now, true);
     const closed = {
       roomId: meta.roomId,
-      reason: this.paused ? "kill_switch" : "empty",
+      reason: this.paused ? "kill_switch" : this.superseded() ? "superseded" : "empty",
       ticks: sim.world.tick,
       lives: meta.livesEnded,
       durationMs: meta.startedAt ? now - meta.startedAt : 0,
@@ -1114,6 +1124,20 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     if (world && !(world.config.arenaHalfSize > 0)) return true;
     const chunk = this.store.getBlob("chunk");
     return chunk !== null && replayChunkVersion(chunk) !== REPLAY_VERSION;
+  }
+
+  /**
+   * Whether the room's world runs on other rules than this engine's defaults: it started before
+   * they changed. It then takes no new lives and closes once its real lives have ended (see the
+   * class comment). A world's config never changes, so the answer is kept.
+   */
+  private superseded(): boolean {
+    if (this.rulesCurrent === null) {
+      const world = this.sim?.world ?? this.store.getJson<World>("world");
+      if (!world) return false;
+      this.rulesCurrent = sameRules(world.config, DEFAULT_CONFIG);
+    }
+    return !this.rulesCurrent;
   }
 
   /**

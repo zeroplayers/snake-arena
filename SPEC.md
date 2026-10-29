@@ -46,7 +46,7 @@ Based on the original ZeroSnake (growth formulas from `frontend/docs/snake_growt
 
 - **Arena:** a square centred on (0, 0), half-side 89 (about the area of the original disc of radius 100, #76).
 - **Tick:** 10 per second (to be tuned on the prototype). All physics is tick-based, no `deltaTime`.
-- **Bot action:** `{ turn: -1..1, boost?: boolean }`. Turn rate is limited; boost burns length and drops food.
+- **Bot action:** `{ turn: -1..1, boost?: boolean }`. Turn rate is limited (0.4 rad/tick, a turning circle of radius 3.75 at speed 1.5; 0.25 before #98); boost burns length and drops food.
 - **What the bot sees (`state`)**:
   - `self`: head position, angle, length, speed, segments;
   - `snakes[]`: only segments within the vision radius (id, author, length);

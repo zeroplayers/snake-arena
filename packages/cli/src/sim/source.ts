@@ -1,4 +1,4 @@
-import { type Food, ReplayPlayer, type World } from "@zerosnake/engine";
+import { type Food, ReplayPlayer, spawnGraceLeft, type World } from "@zerosnake/engine";
 import { type RenderFood, type RenderSnake, SNAKE_PALETTE } from "@zerosnake/renderer";
 import type {
   BotTrace,
@@ -154,6 +154,7 @@ export class RecordedMatchSource implements MatchSource {
         length: snake.mass,
         radius: snake.size / 2,
         ...(life && { skin: { color: life.color } }),
+        ...(spawnGraceLeft(snake, world.config) > 0 && { ghost: true }),
       });
     }
     return {

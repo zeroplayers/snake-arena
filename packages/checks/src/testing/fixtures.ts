@@ -76,13 +76,22 @@ export const BAD_BOTS = {
   missingExport: "export const bot = { tick() { return { turn: 0 }; } };",
   noTick: "export default { init() { return {}; } };",
   async: botWithTick("return { turn: 0 };", "async function later() {}"),
-  /**
-   * init() throws on some lives: with the test seeds (101, 202, 303) the load check's life loads,
-   * so it passes, and a later one throws. It drives straight into the wall, so it has many lives
-   * (and life seeds) even in a short check.
-   */
-  flakyInit: `export default {
-    init(info) { if (info.seed % 3 === 1) throw new Error("bad seed " + info.seed); return {}; },
+  /** init() always throws, naming its life's seed: tells a test the load check's life seed. */
+  seedTeller: `export default {
+    init(info) { throw new Error("life seed " + info.seed); },
     tick() { return { turn: 0 }; },
   };`,
 };
+
+/**
+ * A bot whose init() throws on every life but the one with seed `good`. Given the load check's
+ * life seed (from {@link BAD_BOTS.seedTeller} on the same check seeds), the load check passes and
+ * a later life throws, whatever the rules do to life seeds. It drives straight into the wall, so
+ * it has more lives even in a short check.
+ */
+export function flakyInit(good: number): string {
+  return `export default {
+    init(info) { if (info.seed !== ${good}) throw new Error("bad seed " + info.seed); return {}; },
+    tick() { return { turn: 0 }; },
+  };`;
+}

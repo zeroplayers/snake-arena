@@ -21,6 +21,7 @@ import {
   ReplayPlayer,
   type ReplayTick,
   replayChunkInfo,
+  spawnGraceLeft,
   spawnSnake,
   step,
   TICK_RATE,
@@ -288,6 +289,7 @@ export class ReplaySource implements MatchSource {
         length: snake.mass,
         radius: snake.size / 2,
         ...(life && { skin: { color: life.color } }),
+        ...(spawnGraceLeft(snake, world.config) > 0 && { ghost: true }),
       });
     });
     return {

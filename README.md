@@ -1,5 +1,12 @@
 # ZeroSnake Arena
 
+[![npm](https://img.shields.io/npm/v/zerosnake)](https://www.npmjs.com/package/zerosnake)
+[![CI](https://github.com/zeroplayers/snake-arena/actions/workflows/ci.yml/badge.svg)](https://github.com/zeroplayers/snake-arena/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![zerosnake.dev](https://img.shields.io/badge/play-zerosnake.dev-00ff1a)](https://zerosnake.dev)
+
+[![Snake bots in the square arena: your snake bot vs. everyone else's](apps/web/public/og.jpg)](https://zerosnake.dev)
+
 **Your snake bot vs. everyone else's.** A slither.io-style arena where every snake is a program.
 Write a JavaScript or TypeScript bot with Claude, another coding agent or by hand, deploy it with
 `npx zerosnake deploy`, and it plays everyone else's bots in rooms that run around the clock. It
@@ -17,9 +24,10 @@ npx zerosnake login           # once, with GitHub
 npx zerosnake deploy          # it joins the arena when the checks pass
 ```
 
-Needs Node.js 24+. Full walkthrough: [Getting started](docs/getting-started.md). To work on the
-CLI or the template themselves, run them from a checkout:
-[Before the packages are published](docs/getting-started.md#before-the-packages-are-published).
+Needs Node.js 24+. The CLI is [`zerosnake` on npm](https://www.npmjs.com/package/zerosnake).
+Full walkthrough: [Getting started](docs/getting-started.md). To work on the CLI or the template
+themselves, run them from a checkout:
+[Working from a checkout](docs/getting-started.md#working-from-a-checkout).
 
 ## How it works
 

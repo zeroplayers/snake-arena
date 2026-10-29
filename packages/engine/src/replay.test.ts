@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_CONFIG } from "./config.ts";
 import { hashWorld } from "./hash.ts";
+import { wrapAngle } from "./math.ts";
 import {
   BitModel,
   F64Model,
@@ -23,11 +25,11 @@ import {
   replayChunkVersion,
 } from "./replay.ts";
 import { createRng } from "./rng.ts";
-import { quantizeTurn, TURN_STEPS } from "./step.ts";
+import { quantizeTurn, step, TURN_STEPS } from "./step.ts";
 import { actionsFor, farm, type Policy, wander } from "./testing/policies.ts";
 import { place } from "./testing/setup.ts";
 import type { Fault, World } from "./types.ts";
-import { cloneWorld, createWorld } from "./world.ts";
+import { cloneWorld, createWorld, spawnSnake } from "./world.ts";
 
 interface Recording {
   chunks: Uint8Array[];
@@ -238,6 +240,30 @@ describe("replay", () => {
     expect(hashWorld(lax.world)).toBe(long.hashes.get(1300));
   });
 
+  it("plays a world from before #101 (no remainsPerSegment) back on the old remains layout", () => {
+    const world = createWorld({ seed: 9 });
+    delete (world.config as { remainsPerSegment?: number }).remainsPerSegment;
+    const chunks: Uint8Array[] = [];
+    const recorder = new ReplayRecorder(world, { onChunk: (bytes) => chunks.push(bytes) });
+    for (const id of ["a", "b", "c"]) recorder.spawn({ id, author: id });
+    // A newborn dies: the old layout drops 1 pellet of 10 (the new one 3), then the rest fly
+    // straight into the wall.
+    recorder.step({}, { a: "error" });
+    for (let t = 1; t < 250; t++) recorder.step({});
+    recorder.flush();
+
+    const player = new ReplayPlayer(chunks);
+    expect(Object.keys(player.world.config)).not.toContain("remainsPerSegment");
+    player.seek(1);
+    expect(player.world.food.filter((f) => f.kind === "remains")).toEqual([
+      expect.objectContaining({ value: expect.closeTo(10, 1) }),
+    ]);
+    // Hash checked on the way: no desync.
+    player.seek(250);
+    expect(player.world).toEqual(recorder.world);
+    expect(recorder.world.snakes).toEqual([]);
+  });
+
   it("rejects chunks that are not consecutive or not replays", () => {
     expect(() => new ReplayPlayer([long.chunks[0], long.chunks[2]] as Uint8Array[])).toThrow(
       /consecutive/,
@@ -324,6 +350,34 @@ describe("replay", () => {
       }
     }
   });
+  it("plays a room back on the config it was recorded with, not today's defaults", () => {
+    // A room recorded before #98 turned at 0.25 rad/tick; the default is 0.4 now.
+    const old = 0.25;
+    expect(DEFAULT_CONFIG.turnRate).not.toBe(old);
+    const world = createWorld({ seed: 5, config: { turnRate: old } });
+    const chunks: Uint8Array[] = [];
+    const recorder = new ReplayRecorder(world, { onChunk: (b) => chunks.push(b), hashEvery: 1 });
+    recorder.spawn({ id: "a", author: "alice" });
+    const angles = [world.snakes[0]?.angle ?? 0];
+    for (let t = 0; t < 8; t++) {
+      recorder.step({ a: { turn: 1 } });
+      angles.push(world.snakes[0]?.angle ?? 0);
+    }
+    recorder.flush();
+
+    const player = new ReplayPlayer(chunks);
+    expect(player.world.config.turnRate).toBe(old);
+    for (let t = 1; t <= 8; t++) {
+      const snake = player.next().snakes[0];
+      expect(snake?.angle).toBe(angles[t]);
+      expect(Math.abs(wrapAngle((angles[t - 1] ?? 0) - (snake?.angle ?? 0)))).toBeCloseTo(old, 12);
+    }
+    // The same inputs on today's rules end somewhere else: the player can't have used them.
+    const today = createWorld({ seed: 5 });
+    spawnSnake(today, { id: "a", author: "alice" });
+    for (let t = 0; t < 8; t++) step(today, { a: { turn: 1 } });
+    expect(today.snakes[0]?.angle).not.toBe(angles[8]);
+  });
 });
 
 describe("hostile input", () => {
@@ -366,6 +420,7 @@ describe("hostile input", () => {
       { minSize: 0 },
       { baseSegments: 1e9 },
       { spawnAttempts: 1e12 },
+      { spawnCandidates: 1e12 },
     ]) {
       const w = cloneWorld(world);
       Object.assign(w.config, config);

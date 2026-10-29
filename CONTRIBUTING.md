@@ -15,7 +15,7 @@ A pnpm monorepo (workspaces in [`pnpm-workspace.yaml`](pnpm-workspace.yaml)):
 | `packages/renderer` | `@zerosnake/renderer`   | three.js renderer                                            |
 | `packages/viewer`   | `@zerosnake/viewer`     | match and replay viewer on top of the renderer               |
 | `packages/rating`   | `@zerosnake/rating`     | version rating: windowed mean, confidence interval, ranking  |
-| `packages/cli`      | `zerosnake`             | `npx zerosnake`                                              |
+| `packages/cli`      | `zerosnake`             | `npx zerosnake`, the only package on npm                     |
 | `bots/house`        | `@zerosnake/house-bots` | built-in bots: easy, medium, hard, chaos                     |
 | `apps/web`          | `@zerosnake/web`        | site, auth and deploy API (TanStack Start on Workers, D1)    |
 | `apps/arena`        | `@zerosnake/arena`      | arena Worker: matchmaker, rooms, check consumer              |

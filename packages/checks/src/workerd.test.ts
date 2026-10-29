@@ -71,8 +71,9 @@ describe("workerd", () => {
     const fromNode = [];
     for (const i of inputs) fromNode.push(await runChecks(i, options));
     expect(fromWorkerd).toEqual(JSON.parse(JSON.stringify(fromNode)));
-    // Too short to judge qualification (the full run below does); the bad bots fail anyway.
-    expect(fromNode.slice(1).map((r) => r.passed)).toEqual([false, false, false, false, false]);
+    // Too short to judge qualification (the full run below does), so the suicidal bot, which
+    // only fails that, can pass here by luck; the other bad bots fail anyway.
+    expect(fromNode.slice(2).map((r) => r.passed)).toEqual([false, false, false, false]);
   }, 180_000);
 
   it("gives the same report as Node with the full deploy configuration", async () => {

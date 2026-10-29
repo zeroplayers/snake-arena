@@ -214,8 +214,17 @@ describe("spectators", () => {
     expect(now.lastBatchTicks).toBeLessThanOrEqual(10);
     expect(s.view.tick).toBe(now.tick);
     expect(s.view.snakes).toHaveLength(now.snakes.length);
-    // Public names only: the username, the bot's slug and the version's number.
-    const lives = s.view.snakes.map(({ life: { slot: _, bornTick: __, ...label } }) => label);
+    // Public names only: the username, the bot's slug and the version's number. Every life the
+    // spectator was told about, not just those alive now: either user's snake may have died in
+    // an ordinary collision by the last batch, depending on how the rules play the room out.
+    const told = s.messages.flatMap((m) =>
+      m.kind === "keyframe" ? m.snakes : m.ticks.flatMap((t) => t.snakes),
+    );
+    const lives = told.flatMap(({ life }) => {
+      if (!life) return [];
+      const { slot: _, bornTick: __, ...label } = life;
+      return [label];
+    });
     expect(lives).toContainEqual({
       author: "watch-a-name",
       bot: "watch-a",
@@ -228,7 +237,7 @@ describe("spectators", () => {
       version: 1,
       house: false,
     });
-    const houses = lives.filter((l) => l.house);
+    const houses = s.view.snakes.map((v) => v.life).filter((l) => l.house);
     expect(houses.length).toBe(now.snakes.filter((x) => x.house !== null).length);
     for (const l of houses) expect(l).toMatchObject({ author: "house", version: 0 });
     // A second of ticks: a few KB.

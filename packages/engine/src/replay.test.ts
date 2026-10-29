@@ -366,6 +366,7 @@ describe("hostile input", () => {
       { minSize: 0 },
       { baseSegments: 1e9 },
       { spawnAttempts: 1e12 },
+      { spawnCandidates: 1e12 },
     ]) {
       const w = cloneWorld(world);
       Object.assign(w.config, config);

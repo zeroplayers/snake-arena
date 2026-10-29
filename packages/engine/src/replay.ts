@@ -509,7 +509,14 @@ function checkConfig(config: Record<string, number>): void {
   if (!(c.arenaHalfSize > 0 && c.gridCellSize > 0)) throw bad("arena or grid size");
   if (c.arenaHalfSize / c.gridCellSize > MAX_GRID_CELLS_PER_SIDE / 2) throw bad("grid too fine");
   if (!(c.minSize > 0 && c.maxSize >= c.minSize)) throw bad("snake size");
-  for (const key of ["baseSegments", "spawnAttempts", "maxFood", "foodBase"] as const) {
+  const loops = [
+    "baseSegments",
+    "spawnAttempts",
+    "spawnCandidates",
+    "maxFood",
+    "foodBase",
+  ] as const;
+  for (const key of loops) {
     if (c[key] > MAX_LOOP_CONFIG) throw bad(key);
   }
 }

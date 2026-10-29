@@ -48,7 +48,8 @@ async function stopRoom(name: string): Promise<RoomStatus> {
 describe("RoomDO metrics", () => {
   it("writes room.started, room.batch per batch, life.ended once delivered, room.closed", async () => {
     const dave = await ticket("dave", BOTS.thrower);
-    const erin = await ticket("erin", house.hard as string);
+    // Erin circles in open space: she can't die before the stop, whatever the rules.
+    const erin = await ticket("erin", BOTS.circler);
     await startRoom("metered", [dave, erin], {
       limits: { chunkTicks: 50, metricsMs: 0, arenaControlPollMs: 0 },
     });

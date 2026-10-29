@@ -4,7 +4,7 @@ import { createRng } from "./rng.ts";
 import { step } from "./step.ts";
 import { place, QUIET } from "./testing/setup.ts";
 import type { World } from "./types.ts";
-import { createWorld } from "./world.ts";
+import { createWorld, layoutSegments } from "./world.ts";
 
 const quiet = (config = {}) => createWorld({ seed: 1, config: { ...QUIET, ...config } });
 
@@ -126,6 +126,54 @@ describe("remains", () => {
     expect(pellets.length).toBe(Math.ceil(137 / world.config.remainsMaxValue));
     for (const f of pellets) expect(f.value).toBeLessThanOrEqual(world.config.remainsMaxValue);
     expect(new Set(pellets.map((f) => Math.round(f.x))).size).toBeGreaterThan(5);
+  });
+
+  const pelletXs = (world: World) => world.food.filter((f) => f.kind === "remains").map((f) => f.x);
+
+  it("a small snake's remains are split along its whole body (#101)", () => {
+    const world = quiet({ remainsJitter: 0 });
+    // Mass 10: 5 segments, body from x = -4 × size to the head at 0.
+    const a = place(world, { id: "a", x: 0, y: 0, angle: 0, mass: 10 });
+    step(world, {}, { a: "error" });
+    // 3 pellets of 10/3 at 1/6, 1/2 and 5/6 of the body (before: 1 pellet of 10 on the head).
+    expect(pelletXs(world)).toEqual(
+      [1, 3, 5].map((sixths) => expect.closeTo((-4 * a.size * sixths) / 6, 9)),
+    );
+    expect(remainsValue(world)).toBeCloseTo(10, 9);
+  });
+
+  it("remains are spread by length, also over a tail stacked by growth", () => {
+    const world = quiet({ remainsJitter: 0 });
+    const a = place(world, { id: "a", x: 0, y: 0, angle: 0, mass: 137 });
+    // A body that just grew: head and 2 segments laid out, the other 14 piled on the tail end.
+    a.trail = [
+      { x: -2 * a.size, y: 0 },
+      { x: 0, y: 0 },
+    ];
+    layoutSegments(a, a.segments.length);
+    expect(a.segments.filter((p) => p.x === -2 * a.size)).toHaveLength(15);
+    step(world, {}, { a: "error" });
+    // 14 pellets evenly spaced, half a gap from the head and from the tail.
+    const gap = (2 * a.size) / 14;
+    const want = Array.from({ length: 14 }, (_, k) => expect.closeTo(-(k + 0.5) * gap, 9));
+    expect(pelletXs(world)).toEqual(want);
+    expect(remainsValue(world)).toBeCloseTo(137, 9);
+  });
+
+  it("a world from before #101 (no remainsPerSegment) keeps the old layout", () => {
+    const world = quiet({ remainsJitter: 0 });
+    delete (world.config as { remainsPerSegment?: number }).remainsPerSegment;
+    const small = place(world, { id: "a", x: 0, y: 0, angle: 0, mass: 10 });
+    const big = place(world, { id: "b", x: 0, y: 20, angle: 0, mass: 137 });
+    const segs = big.segments.map((p) => ({ ...p }));
+    step(world, {}, { a: "error", b: "error" });
+    const [head, ...rest] = world.food.filter((f) => f.kind === "remains");
+    expect(head).toMatchObject({ x: small.head.x, y: 0, value: 10 });
+    expect(rest).toHaveLength(14);
+    rest.forEach((f, k) => {
+      const p = segs[Math.floor((k * segs.length) / 14)];
+      expect(f).toMatchObject({ x: p?.x, y: p?.y });
+    });
   });
 
   it("the killer can eat the remains", () => {

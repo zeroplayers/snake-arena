@@ -240,6 +240,30 @@ describe("replay", () => {
     expect(hashWorld(lax.world)).toBe(long.hashes.get(1300));
   });
 
+  it("plays a world from before #101 (no remainsPerSegment) back on the old remains layout", () => {
+    const world = createWorld({ seed: 9 });
+    delete (world.config as { remainsPerSegment?: number }).remainsPerSegment;
+    const chunks: Uint8Array[] = [];
+    const recorder = new ReplayRecorder(world, { onChunk: (bytes) => chunks.push(bytes) });
+    for (const id of ["a", "b", "c"]) recorder.spawn({ id, author: id });
+    // A newborn dies: the old layout drops 1 pellet of 10 (the new one 3), then the rest fly
+    // straight into the wall.
+    recorder.step({}, { a: "error" });
+    for (let t = 1; t < 250; t++) recorder.step({});
+    recorder.flush();
+
+    const player = new ReplayPlayer(chunks);
+    expect(Object.keys(player.world.config)).not.toContain("remainsPerSegment");
+    player.seek(1);
+    expect(player.world.food.filter((f) => f.kind === "remains")).toEqual([
+      expect.objectContaining({ value: expect.closeTo(10, 1) }),
+    ]);
+    // Hash checked on the way: no desync.
+    player.seek(250);
+    expect(player.world).toEqual(recorder.world);
+    expect(recorder.world.snakes).toEqual([]);
+  });
+
   it("rejects chunks that are not consecutive or not replays", () => {
     expect(() => new ReplayPlayer([long.chunks[0], long.chunks[2]] as Uint8Array[])).toThrow(
       /consecutive/,

@@ -34,7 +34,8 @@ and the empty cases `/@newbie`, `/@linus/draft`, `/@grace/wip`.
   key the room caps sockets by). Paused, the hero closes the socket, so an idle tab doesn't keep
   a room in real time; playing again reconnects. With no showcase within 4 s, or once it is lost
   (3 failed reconnects, or 10 s without it), it's a house-bot match simulated in the page, and
-  the caption says which.
+  the caption says which. Expand, offered where the browser has the Fullscreen API (not iPhone
+  Safari; `fullscreen.ts`), puts the arena and its caption full screen, which counts as on screen.
   The quick-start commands and the "Before launch" notes are in `quickstart.ts`.
 - `/docs`, `/docs/<page>`: the repository's `docs/*.md`, rendered at build time by the Vite plugin
   in `src/docs/plugin.ts` (markdown-it with raw HTML escaped; page links become site links, other

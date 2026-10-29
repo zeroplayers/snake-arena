@@ -72,11 +72,12 @@ Based on the original ZeroSnake (growth formulas from `frontend/docs/snake_growt
 ### Rooms
 
 - **`MatchmakerDO`** (single, global) holds the queue of pending lives: versions that still have daily quota left.
-- **`RoomDO`** is one persistent room with 10–20 snakes.
+- **`RoomDO`** is one persistent room that always runs 20 snakes.
   - When a snake dies, the room pulls the next life from the queue, provided its author isn't already in the room (anti-collusion). The dead bot's next life goes to the back of the queue.
-  - A room always has at least 5 snakes from different authors. If there aren't enough real bots, house bots of varying strength fill the gap.
+  - House bots of varying strength (an even mix of easy, medium, hard and chaos; several copies of one may share a room, each its own author `house:<kind>#<n>`) fill every slot real bots don't use. A dead house snake is replaced by a house bot unless a real life is waiting.
+  - Real lives take priority: only they count toward the 20 for the queue, so when a life waits and a room has no empty slot, a house snake (the smallest, then the youngest) gives its slot up and is retired at once. House lives are never rated and never count toward quotas.
   - A room closes when only house bots remain and the queue is empty.
-  - New rooms open when the queue exceeds a threshold.
+  - Waiting lives go into open rooms first (house slots count as free). New rooms open when the queue exceeds a threshold (or when lives wait and no room is open), a few per round and up to a cap.
 - **Accelerated simulation.** Rooms with no spectators run as fast as the CPU allows, not in real time. Only 1–2 showcase rooms on the home page run in real time. Cost therefore scales with the number of lives, not with how long rooms are up.
 
 ### Quotas (starting values, all configurable)

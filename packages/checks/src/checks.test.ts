@@ -153,7 +153,8 @@ describe("bad bots are rejected with a clear reason", () => {
       const text = rejected(report);
       expect(report.run.status).toBe("pass");
       expect(report.qualify.status).toBe("fail");
-      expect(report.qualify.score).toBeLessThan((report.qualify.bar as number) / 10);
+      // A full room (19 others) gives it more snakes to be run into: still far below easy.
+      expect(report.qualify.score).toBeLessThan((report.qualify.bar as number) / 5);
       const wall = report.run.seeds.reduce((n, s) => n + (s.ends.wall ?? 0), 0);
       const deaths = report.run.seeds.reduce((n, s) => n + s.lives - (s.ends.window ?? 0), 0);
       expect(wall).toBeGreaterThan(deaths / 2);
@@ -344,8 +345,10 @@ describe("suite budget", () => {
       const report = await runChecks(input(await houseBundle("hard")), QUICK);
       expect(report.run.status).toBe("pass");
       // The sandbox's cost meter (#60) adds calls and branches, which QuickJS counts as it polls.
-      expect(report.run.cost.interrupts).toBeLessThan(report.budget.maxInterrupts / 4);
-      expect(report.run.cost.work).toBeLessThan(report.budget.maxWork / 5);
+      // In a full room (20 snakes to look at) `hard` uses about a third of the ops cap and a
+      // fifth of the work cap.
+      expect(report.run.cost.interrupts).toBeLessThan(report.budget.maxInterrupts / 2);
+      expect(report.run.cost.work).toBeLessThan(report.budget.maxWork / 4);
       expect(report.budget.maxInterrupts).toBe((3 * 400 * report.opBudget) / 2);
     },
     FULL,

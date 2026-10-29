@@ -13,6 +13,8 @@ export interface BatchSample {
   workUnits: number;
   livesStarted: number;
   livesEnded: number;
+  /** House snakes retired to make way for real lives. */
+  houseRetired: number;
   /** The simulation's wall time, first bot call to saved result (none of the I/O around it). */
   wallMs: number;
   watched: boolean;
@@ -27,6 +29,8 @@ export interface RoomNow {
   snakes: number;
   spectators: number;
   tick: number;
+  /** Snakes of deployed versions (the rest are house bots). */
+  realLives: number;
 }
 
 export class BatchMetrics {
@@ -46,6 +50,7 @@ export class BatchMetrics {
     s.workUnits += b.workUnits;
     s.livesStarted += b.livesStarted;
     s.livesEnded += b.livesEnded;
+    s.houseRetired += b.houseRetired;
     s.wallMs += b.wallMs;
     s.maxWallMs = Math.max(s.maxWallMs, b.wallMs);
     if (b.watched) s.watched++;
@@ -76,6 +81,7 @@ function emptySums() {
     workUnits: 0,
     livesStarted: 0,
     livesEnded: 0,
+    houseRetired: 0,
     wallMs: 0,
     maxWallMs: 0,
     watched: 0,

@@ -11,7 +11,7 @@ import {
   limits,
   outcomes,
   spares,
-  startRoom,
+  startQuietRoom,
   ticket,
   useRoomHarness,
 } from "./testing/room-tests.ts";
@@ -24,7 +24,7 @@ describe("RoomDO backstop", () => {
     // Each kill restarts it with empty memory, but it is the one named every time.
     const burner = await ticket("nina", BOTS.burnAfter(60));
     const other = await ticket("oscar", house.hard as string);
-    await startRoom("burner", [burner, other], { limits });
+    await startQuietRoom("burner", [burner, other], { limits });
     const { kills, s } = await drive("burner", (s) => s.evictions.length > 0, { max: 300 });
     expect(kills).toBe(1 + KILLS_TO_EVICT);
     expect(outcomes(s)).toEqual(["overrun", ...evictionKills]);
@@ -43,7 +43,7 @@ describe("RoomDO backstop", () => {
     const periodic = await ticket("pete", BOTS.burnAfter(60));
     const other = await ticket("rosa", house.hard as string);
     // Batches of 5 ticks, so each kill restarts it at most 5 ticks before its burn.
-    await startRoom("periodic", [periodic, other], {
+    await startQuietRoom("periodic", [periodic, other], {
       limits: { ...limits, batchTicks: 5, killWindowTicks: 100 },
     });
     // More lives of the same version, in case one dies of something else between its burns: the

@@ -82,8 +82,8 @@ export const MAX_BATCH_TICKS = 500;
 /** Real-time mode runs this many ticks per alarm (one second at 10 tps). */
 export const REALTIME_BATCH_TICKS = 10;
 
+/** Snakes in a room; house bots fill every slot deployed bots don't use (SPEC §4). */
 export const DEFAULT_MAX_SNAKES = 20;
-export const DEFAULT_MIN_AUTHORS = 5;
 
 /** Stop simulating while the outbox holds more undelivered items than this. */
 export const DEFAULT_MAX_OUTBOX = 500;

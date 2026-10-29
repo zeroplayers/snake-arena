@@ -772,6 +772,36 @@ describe("MatchmakerDO with real rooms", () => {
     expect([...(await counted()).values()]).toEqual(Array(6).fill(2));
   }, 120_000);
 
+  it("below the threshold, waiting lives take house bots' slots instead of opening rooms", async () => {
+    await setup(
+      { openThreshold: 5, maxSnakes: 3, room: { manual: true, limits: { batchTicks: 5 } } },
+      "RoomDO",
+    );
+    await seedBots([{ author: "ann", bot: "ann" }]);
+    await settle();
+    const [r] = await openRooms();
+    if (!r) throw new Error("no room");
+    // Two more bots wait: not enough to open a room while one is open.
+    await seedBots([
+      { author: "bob", bot: "bob" },
+      { author: "cid", bot: "cid" },
+    ]);
+    await settle();
+    expect(await openRooms()).toEqual([r]);
+    expect((await status()).waiting).toBe(2);
+
+    // The room runs full (Ann and two house bots), yet asks for them: house slots count as free.
+    const s1 = await room<RoomStatus>(r, "runBatch");
+    expect(s1.snakes.map((x) => x.house ?? x.author).sort()).toEqual(["ann", "easy", "medium"]);
+    expect(s1.pending).toHaveLength(2);
+    expect((await status()).waiting).toBe(0);
+    // Both house bots make way at the next batch.
+    const s2 = await room<RoomStatus>(r, "runBatch");
+    expect(s2.snakes.map((x) => x.author).sort()).toEqual(["ann", "bob", "cid"]);
+    await settle();
+    expect(await openRooms()).toEqual([r]);
+  }, 60_000);
+
   it("a lone bot plays all its lives in one room", async () => {
     await setup(
       { livesPerBotPerDay: 4, room: { manual: true, limits: { batchTicks: 20, chunkTicks: 40 } } },

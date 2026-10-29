@@ -50,7 +50,12 @@ export interface Meta {
   state: "running" | "closed";
   mode: RoomMode;
   maxSnakes: number;
-  minAuthors: number;
+  /**
+   * House bots fill the room up to this many snakes (`RoomStartOptions.fillTo`); missing means
+   * `maxSnakes`. Rooms saved before every slot was filled still have a `minAuthors` here, which
+   * nothing reads any more.
+   */
+  fillTo?: number;
   manual: boolean;
   limits: Required<RoomLimits>;
   livesEnded: number;

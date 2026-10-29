@@ -14,7 +14,7 @@ import {
   limits,
   outcomes,
   spares,
-  startRoom,
+  startQuietRoom,
   ticket,
   useRoomHarness,
 } from "./testing/room-tests.ts";
@@ -32,7 +32,7 @@ describe("RoomDO backstop", () => {
       ticket("liam", house.medium as string),
     ]);
     // Short replay chunks, so the evicted life's chunk reaches R2 within the test.
-    await startRoom("backstop", [evil, ...others], { limits: { ...limits, chunkTicks: 100 } });
+    await startQuietRoom("backstop", [evil, ...others], { limits: { ...limits, chunkTicks: 100 } });
     // Its next lives, for when the first is evicted (a third in case the second dies of something
     // else before it burns).
     for (const n of [2, 3]) {
@@ -118,7 +118,7 @@ describe("RoomDO backstop", () => {
       ticket("vic", house.hard as string),
       ticket("wes", house.medium as string),
     ]);
-    await startRoom("neighbours", [fickle, ...others], { limits });
+    await startQuietRoom("neighbours", [fickle, ...others], { limits });
     await h.call("matchmaker", "offer", { ...fickle, lifeId: "life-uma-2" }, "neighbours");
     await spares("neighbours", 3);
 
@@ -146,7 +146,7 @@ describe("RoomDO backstop", () => {
       ticket("yuri", house.medium as string),
     ]);
     // Short batches, so the frame moves on between kills.
-    await startRoom("colluders", [...colluders, ...others], {
+    await startQuietRoom("colluders", [...colluders, ...others], {
       limits: { ...limits, batchTicks: 5 },
     });
     await spares("colluders", 3);

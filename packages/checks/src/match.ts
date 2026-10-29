@@ -18,9 +18,9 @@ import { type Disguise, disguiseFor } from "./disguise.ts";
 import {
   batchTicks,
   DEFAULT_MAX_SNAKES,
-  DEFAULT_MIN_AUTHORS,
   type HouseKind,
   houseFill,
+  houseToRetire,
 } from "./room-rules.ts";
 
 /** What drives the candidate's seat: the uploaded bundle in the sandbox, or a house bot. */
@@ -87,7 +87,8 @@ export interface MatchResult {
 
 /** What a test can watch of the room process (to check it against the arena's rules). */
 export interface RoomTrace {
-  batch?(e: { tick: number; ticks: number; bots: number; starts: number }): void;
+  /** `retired`: house snakes that make way for tickets (they die on the batch's first tick). */
+  batch?(e: { tick: number; ticks: number; bots: number; starts: number; retired: string[] }): void;
   spawn?(e: { tick: number; id: string; author: string }): void;
   death?(e: { tick: number; id: string }): void;
 }
@@ -104,6 +105,7 @@ interface Member {
   ref: SeatRef;
   author: string;
   life: SeatLife;
+  startTick: number;
 }
 
 interface SeatLife {
@@ -125,8 +127,9 @@ export function emptyStats(): TickStats {
 /**
  * Plays one check match: an arena room run by RoomDO's rules (`room-rules.ts`), on the default
  * engine config. The room opens at tick 0 or at an older room's tick. Snakes join only at batch
- * boundaries, tickets first (the candidate and the "users", house bots under user names), then
- * the house fill tops the room up to 5 authors. A batch lasts `batchTicks(bots, starts)` ticks.
+ * boundaries, tickets first (the candidate and the "users", house bots under user names; house
+ * snakes make way for those that don't fit), then the house fill takes every free slot. A batch
+ * lasts `batchTicks(bots, starts)` ticks.
  * The candidate's ticket arrives after a pre-roll, and after each death it rejoins at the next
  * batch, like the users. The match lasts `ticks` ticks from the candidate's first spawn. Names,
  * start tick and pre-roll come from {@link disguiseFor}, so nothing the bot sees says "check"
@@ -246,17 +249,21 @@ export function playMatch(
         overrun(seat.meter.checkClock());
       }
     }
-    members.set(e.lifeId, { ref, author: e.author, life });
+    members.set(e.lifeId, { ref, author: e.author, life, startTick: world.tick });
   };
 
   const windowOver = () => windowStart !== null && world.tick >= windowStart + ticks;
 
-  const playTick = (): void => {
+  /** `retired`: house snakes killed on this tick without running their code (RoomDO's faults). */
+  const playTick = (retired: readonly string[]): void => {
     const actions: Record<string, Action> = {};
+    const faults: Record<string, Fault> = {};
+    for (const id of retired) faults[id] = "error";
     for (const snake of world.snakes) {
+      if (faults[snake.id]) continue;
       actions[snake.id] = (members.get(snake.id) as Member).life.tick(world, snake);
     }
-    const faults = stop.fault && candidateId ? { [candidateId]: stop.fault.fault } : {};
+    if (stop.fault && candidateId) faults[candidateId] = stop.fault.fault;
     step(world, actions, faults);
     for (const d of world.deaths) {
       const m = members.get(d.id);
@@ -278,25 +285,36 @@ export function playMatch(
       pending.push({ kind: "candidate" });
       ticketSent = true;
     }
-    // Plan the batch the way RoomDO does: tickets, then the house fill, then the batch size.
+    // Plan the batch the way RoomDO does: tickets (only they count toward the room's size, so
+    // house snakes make way for those that don't fit), then the house fill, then the batch size.
     const spawns: { lifeId: string; author: string; ref: SeatRef }[] = [];
+    let real = [...members.values()].filter((m) => m.ref.kind !== "house").length;
     for (const ref of pending) {
-      if (members.size + spawns.length < DEFAULT_MAX_SNAKES) spawns.push(ticketEntry(ref));
+      if (real >= DEFAULT_MAX_SNAKES) continue;
+      spawns.push(ticketEntry(ref));
+      real++;
     }
     pending = [];
+    const mass = new Map(world.snakes.map((s) => [s.id, s.mass]));
+    const retired = houseToRetire(
+      [...members.entries()]
+        .filter(([, m]) => m.ref.kind === "house")
+        .map(([lifeId, m]) => ({ lifeId, mass: mass.get(lifeId) ?? 0, startTick: m.startTick })),
+      members.size + spawns.length - DEFAULT_MAX_SNAKES,
+    );
+    const staying = [...members.entries()].filter(([id]) => !retired.includes(id));
     for (const h of houseFill(
-      [...members.values(), ...spawns],
+      [...staying.map(([, m]) => m), ...spawns],
       DEFAULT_MAX_SNAKES,
-      DEFAULT_MIN_AUTHORS,
       world.tick,
     )) {
       spawns.push({ lifeId: h.lifeId, author: h.author, ref: { kind: "house", bot: h.house } });
     }
-    const bots = members.size + spawns.length;
+    const bots = staying.length + spawns.length;
     const batch = batchTicks(bots, spawns.length);
-    trace.batch?.({ tick: world.tick, ticks: batch, bots, starts: spawns.length });
+    trace.batch?.({ tick: world.tick, ticks: batch, bots, starts: spawns.length, retired });
     for (const e of spawns) if (!stopped()) start(e);
-    for (let k = 0; k < batch && !stopped() && !windowOver(); k++) playTick();
+    for (let k = 0; k < batch && !stopped() && !windowOver(); k++) playTick(k === 0 ? retired : []);
   }
 
   const alive = world.snakes.find((s) => s.id === candidateId);

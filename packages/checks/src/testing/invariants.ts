@@ -4,8 +4,9 @@
  *
  * - deployed bots have UUID ids (life ids) and Better Auth authors (user ids: 32 letters and
  *   digits);
- * - house bots are `house-<kind>-<tick>-<i>` by `house:<kind>` or `house:<kind>#<n>`, where
- *   `<i>` is the index in that tick's fill, so `<kind>` is the fill order at `<i>`;
+ * - house bots are `house-<kind>-<tick>-<i>` by `house:<kind>` or `house:<kind>#<n>` (n ≥ 2),
+ *   `<kind>` one of the four (each fill takes the kind the room has fewest of, so `<i>`, the
+ *   index in that tick's fill, no longer says which);
  * - one snake per author; nobody spawned after the current tick;
  * - the tick is a whole number from 0 up (every room starts at 0), and the life no older than
  *   the room.
@@ -28,10 +29,10 @@ function checkArena(state) {
       if (!uuid.test(s.id) || !user.test(s.author)) tell("snake " + s.id + " by " + s.author);
       continue;
     }
-    const kind = m[1], t = Number(m[2]), i = Number(m[3]);
+    const kind = m[1], t = Number(m[2]);
     if (t > state.tick) tell("spawned in the future " + s.id);
-    if (order[i % 4] !== kind) tell("fill order " + s.id);
-    if (!new RegExp("^house:" + kind + "(#[2-9][0-9]*)?$").test(s.author)) {
+    if (!order.includes(kind)) tell("house kind " + s.id);
+    if (!new RegExp("^house:" + kind + "(#([2-9]|[1-9][0-9]+))?$").test(s.author)) {
       tell("house author " + s.id + " by " + s.author);
     }
   }

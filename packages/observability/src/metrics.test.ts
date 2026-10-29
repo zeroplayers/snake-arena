@@ -67,6 +67,8 @@ describe("metricPoint", () => {
       watched: "double13",
       cut: "double14",
       tick: "double15",
+      realLives: "double16",
+      houseRetired: "double17",
     });
     expect(metricColumns("room.crashed")).toEqual({
       roomId: "blob3",

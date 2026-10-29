@@ -109,7 +109,9 @@ export const METRICS = {
    * watch mode) and `cut` (batches watch mode ended early). Now: `snakes`, `spectators`, `tick`
    * (the world's; a room whose `tick` doesn't move is stuck). `periodMs` is the time the sums
    * cover, so `ticks / periodMs * 1000` is the room's ticks per second. `maxWallMs`: the
-   * period's slowest batch.
+   * period's slowest batch. `realLives` (now): snakes of deployed versions; house bots fill the
+   * rest of `snakes`, so a room runs full. `houseRetired` (sum): house snakes retired to make
+   * way for real lives.
    */
   "room.batch": {
     source: "arena",
@@ -129,6 +131,8 @@ export const METRICS = {
       "watched",
       "cut",
       "tick",
+      "realLives",
+      "houseRetired",
     ],
   },
   /**

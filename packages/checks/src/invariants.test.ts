@@ -56,6 +56,17 @@ describe("the arena-invariants detector", () => {
     );
   });
 
+  it("accepts replacements of the kind the room had fewest of, and many copies of a kind", () => {
+    checkArena(
+      view([
+        snake("house-easy-100000-0", "house:easy"),
+        snake("house-chaos-100000-1", "house:chaos#2"),
+        snake("house-medium-90000-0", "house:medium#12"),
+        snake(LIFE, USER),
+      ]),
+    );
+  });
+
   it("accepts a room that has just opened at tick 0", () => {
     checkArena(
       view(
@@ -68,15 +79,8 @@ describe("the arena-invariants detector", () => {
   });
 
   it.each([
-    ["the old check names", view([snake("house-easy-100000-0", "house:easy")]), /fill order/],
-    [
-      "several house bots of one tick all at index 0",
-      view([
-        snake("house-medium-100000-0", "house:medium"),
-        snake("house-hard-100000-0", "house:hard"),
-      ]),
-      /fill order/,
-    ],
+    ["a house kind the arena doesn't have", view([snake("house-noob-1-0", "house:noob")]), /kind/],
+    ["a house copy numbered 1", view([snake("house-easy-1-0", "house:easy#1")]), /house author/],
     ["the old candidate id", view([], 123_456, "you"), /own id/],
     ["a negative tick", view([], -1, ME, 0), /tick -1/],
     ["a life older than its room", view([], 3, ME, 5), /older than the room/],

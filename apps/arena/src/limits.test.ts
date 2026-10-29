@@ -13,7 +13,7 @@ import {
   WORST_BOT_TICK_MS,
   WORST_LIFE_START_MS,
 } from "./limits.ts";
-import { houseFill } from "./room/house.ts";
+import { houseFill, houseLabel, houseToRetire } from "./room/house.ts";
 
 describe("batchTicks", () => {
   it("fits the worst case in half the room's CPU budget", () => {
@@ -61,43 +61,84 @@ describe("DO_CPU_LIMIT_MS", () => {
 });
 
 describe("houseFill", () => {
-  it("adds house bots of mixed strength until 5 distinct authors", () => {
-    const fill = houseFill([{ author: "a" }, { author: "b" }], 20, 5, 7);
-    expect(fill.map((e) => [e.lifeId, e.author, e.house])).toEqual([
+  it("fills every free slot with house bots of mixed strength", () => {
+    const fill = houseFill([{ author: "a" }, { author: "b" }], 20, 7);
+    expect(fill).toHaveLength(18);
+    expect(fill.slice(0, 5).map((e) => [e.lifeId, e.author, e.house])).toEqual([
       ["house-medium-7-0", "house:medium", "medium"],
       ["house-easy-7-1", "house:easy", "easy"],
       ["house-hard-7-2", "house:hard", "hard"],
+      ["house-chaos-7-3", "house:chaos", "chaos"],
+      ["house-medium-7-4", "house:medium#2", "medium"],
     ]);
   });
 
-  it("gives every house bot its own author", () => {
-    const fill = houseFill([], 20, 5, 0);
+  it("gives every house bot its own author, so each instance has a name", () => {
+    const fill = houseFill([], 20, 0);
+    const kinds = ["medium", "easy", "hard", "chaos"];
     expect(fill.map((e) => e.author)).toEqual([
-      "house:medium",
-      "house:easy",
+      ...kinds.map((k) => `house:${k}`),
+      ...[2, 3, 4, 5].flatMap((n) => kinds.map((k) => `house:${k}#${n}`)),
+    ]);
+    expect(new Set(fill.map((e) => e.author)).size).toBe(20);
+  });
+
+  it("never reuses the id or the author of a life present (a second fill at the same tick)", () => {
+    const first = houseFill([{ author: "a" }], 5, 0);
+    const second = houseFill([{ author: "b" }, ...first], 6, 0);
+    // One of each kind: medium again. `house-medium-0-0` is taken by the first fill, and so is
+    // the author `house:medium`.
+    expect(second.map((e) => [e.lifeId, e.author])).toEqual([
+      ["house-medium-0-1", "house:medium#2"],
+    ]);
+    expect(new Set([...first, ...second].map((e) => e.lifeId)).size).toBe(5);
+  });
+
+  it("replaces dead house snakes with the kinds the room has fewest of", () => {
+    // A full room lost a chaos and both hards: the mix comes back, not more mediums.
+    const present = [
+      ...["u1", "u2", "u3"],
+      ...["house:medium", "house:medium#2", "house:easy", "house:easy#2", "house:chaos#2"],
+    ].map((author) => ({ author }));
+    expect(houseFill(present, 11, 50).map((e) => e.author)).toEqual([
       "house:hard",
+      "house:hard#2",
       "house:chaos",
-      "house:medium#2",
     ]);
   });
 
-  it("never reuses the id of a life present (a second fill at the same tick)", () => {
-    const first = houseFill([{ author: "a" }], 20, 3, 0);
-    const second = houseFill([{ author: "b" }, ...first], 20, 4, 0);
-    // `house-medium-0-0` is taken by the first fill.
-    expect(second.map((e) => e.lifeId)).toEqual(["house-medium-0-1"]);
-    expect(new Set([...first, ...second].map((e) => e.lifeId)).size).toBe(3);
+  it("adds nothing when the room is full", () => {
+    const full = Array.from({ length: 20 }, (_, n) => ({ author: `u${n}` }));
+    expect(houseFill(full, 20, 0)).toEqual([]);
+    expect(houseFill([{ author: "a" }, { author: "b" }], 3, 0)).toHaveLength(1);
+  });
+});
+
+describe("houseToRetire", () => {
+  const snake = (lifeId: string, mass: number, startTick: number) => ({ lifeId, mass, startTick });
+
+  it("retires the smallest house snakes, then the youngest, then by id", () => {
+    const house = [
+      snake("big", 90, 0),
+      snake("small-old", 12, 10),
+      snake("small-young", 12, 400),
+      snake("tiny-b", 5, 0),
+      snake("tiny-a", 5, 0),
+    ];
+    expect(houseToRetire(house, 4)).toEqual(["tiny-a", "tiny-b", "small-young", "small-old"]);
+    expect(houseToRetire(house, 1)).toEqual(["tiny-a"]);
   });
 
-  it("adds nothing when authors are enough or the room is full", () => {
-    expect(
-      houseFill(
-        [1, 2, 3, 4, 5].map((n) => ({ author: `u${n}` })),
-        20,
-        5,
-        0,
-      ),
-    ).toEqual([]);
-    expect(houseFill([{ author: "a" }, { author: "b" }], 3, 5, 0)).toHaveLength(1);
+  it("retires none when nothing has to make way", () => {
+    expect(houseToRetire([snake("h", 10, 0)], 0)).toEqual([]);
+    expect(houseToRetire([snake("h", 10, 0)], -3)).toEqual([]);
+  });
+});
+
+describe("houseLabel", () => {
+  it("numbers the second and later copies of a kind", () => {
+    expect(houseLabel("house:medium", "medium")).toBe("medium");
+    expect(houseLabel("house:medium#2", "medium")).toBe("medium #2");
+    expect(houseLabel("house:chaos#12", "chaos")).toBe("chaos #12");
   });
 });

@@ -39,6 +39,15 @@ export async function startRoom(name: string, tickets: LifeTicket[], options: ob
   for (const t of tickets) expect(await h.room(name, "join", t)).toEqual({ ok: true });
 }
 
+/**
+ * A room that fills only up to 5 snakes with house bots, not every slot: the backstop's tests
+ * stage a burner among a few snakes, which a full room's crowd would often kill before it burns
+ * (and whose watched batches of honest calls would take longer than `drive`'s `hangMs`).
+ */
+export async function startQuietRoom(name: string, tickets: LifeTicket[], options: object = {}) {
+  await startRoom(name, tickets, { fillTo: 5, ...options });
+}
+
 export const events = () => h.call<MatchmakerEvent[]>("matchmaker", "events");
 export const status = (name: string) => h.room<RoomStatus>(name, "status");
 

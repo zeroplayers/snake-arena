@@ -36,13 +36,14 @@ beforeAll(() => {
   Object.assign(globalThis, { WebSocketRequestResponsePair: class {} });
 });
 
-/** A room of two deployed bots and a house bot, its sockets, and its `Spectators`. */
+/** A room of two deployed bots and two house bots of one kind, its sockets, its `Spectators`. */
 function setup(lookup = async (ids: string[]) => labelsFor(ids)) {
   const world = createWorld({ seed: 7 });
   const lives: Record<string, SpectatedLife> = {
-    "life-a": { versionId: "v-a", house: null },
-    "life-b": { versionId: "v-b", house: null },
-    "life-h": { versionId: null, house: "hard" },
+    "life-a": { versionId: "v-a", house: null, author: "user-a" },
+    "life-b": { versionId: "v-b", house: null, author: "user-b" },
+    "life-h": { versionId: null, house: "hard", author: "house:hard" },
+    "life-h2": { versionId: null, house: "hard", author: "house:hard#2" },
   };
   for (const id of Object.keys(lives)) spawnSnake(world, { id, author: `u-${id}` });
   const sockets: FakeSocket[] = [];
@@ -125,7 +126,7 @@ describe("Spectators", () => {
     expect(ws.view.tick).toBe(s.world.tick);
   });
 
-  it("labels lives with public names, looked up once per version", async () => {
+  it("labels lives with public names, looked up once per version; house copies numbered", async () => {
     const s = setup();
     const ws = s.join();
     await s.batch(5);
@@ -136,10 +137,11 @@ describe("Spectators", () => {
       { author: "ada", bot: "ouroboros", version: 3, house: false },
       { author: "bob", bot: "noodle", version: 1, house: false },
       { author: "house", bot: "hard", version: 0, house: true },
+      { author: "house", bot: "hard #2", version: 0, house: true },
     ]);
 
     // A new version is looked up alone.
-    s.lives["life-c"] = { versionId: "v-c", house: null };
+    s.lives["life-c"] = { versionId: "v-c", house: null, author: "user-c" };
     spawnSnake(s.world, { id: "life-c", author: "u-c" });
     await s.batch(5);
     expect(s.lookups).toEqual([["v-a", "v-b"], ["v-c"]]);

@@ -38,7 +38,7 @@ async function startRoom(name: string, tickets: LifeTicket[], limits: object = {
     roomId: name,
     seed: 7,
     manual: true,
-    minAuthors: 1,
+    fillTo: 1,
     limits: { chunkTicks: 50, batchTicks: 40, ...limits },
   });
   for (const t of tickets) expect(await h.room(name, "join", t)).toEqual({ ok: true });

@@ -11,7 +11,7 @@ import {
 import type { ReactNode } from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CLI_PUBLISHED, REPO, SITE_URL } from "../../site";
+import { CLI_PUBLISHED, PRODUCT_HUNT, REPO, SITE_URL } from "../../site";
 import { DocArticle } from "../docs/DocArticle";
 import { claudePrompt, claudePromptWorks } from "./claudePrompt";
 import { Landing } from "./Landing";
@@ -64,6 +64,7 @@ describe("landing page", () => {
     expect(html).toContain("Your bot is one function");
     for (const { cmd } of QUICKSTART_COMMANDS) expect(html).toContain(cmd);
     expect(html).toContain("Sign in with GitHub");
+    expect(hrefs(html)).toContain(PRODUCT_HUNT.url);
   });
 
   it("offers the bots page instead of sign-in when signed in", async () => {

@@ -30,3 +30,10 @@ export const SITE_URL = "https://zerosnake.dev";
 
 /** The CLI's npm page (`packages/cli`, published as `zerosnake`). */
 export const NPM_URL = "https://www.npmjs.com/package/zerosnake";
+
+/** The launch's Product Hunt page and its "Find us on Product Hunt" badge (dark, with the upvote count). */
+export const PRODUCT_HUNT = {
+  url: "https://www.producthunt.com/products/zerosnake-arena?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-zerosnake-arena",
+  badge:
+    "https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1297772&theme=dark",
+} as const;

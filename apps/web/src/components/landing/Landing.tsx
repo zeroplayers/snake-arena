@@ -4,6 +4,7 @@ import { GithubLink } from "../GithubLink";
 import { ArenaHero } from "./ArenaHero";
 import { ClaudePromptBlock, CopyButton, CopyPromptButton } from "./ClaudeStart";
 import { claudePromptWorks } from "./claudePrompt";
+import { ProductHuntBadge } from "./ProductHuntBadge";
 import { NOT_YET, QUICKSTART, quickstartScript } from "./quickstart";
 
 const HOW = [
@@ -171,6 +172,7 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
               )}
             </li>
           </ol>
+          <ProductHuntBadge />
         </div>
         <ArenaHero />
         <div className="landing-body">

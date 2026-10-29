@@ -109,7 +109,7 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
                 <Link
                   to="/docs/$slug"
                   params={{ slug: "getting-started" }}
-                  hash="before-the-packages-are-published"
+                  hash="working-from-a-checkout"
                   className="button ghost"
                 >
                   Build it by hand
@@ -140,7 +140,7 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
                   <Link
                     to="/docs/$slug"
                     params={{ slug: "getting-started" }}
-                    hash="before-the-packages-are-published"
+                    hash="working-from-a-checkout"
                   >
                     build the CLI from a checkout
                   </Link>{" "}
@@ -307,7 +307,7 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
                 <Link
                   to="/docs/$slug"
                   params={{ slug: "getting-started" }}
-                  hash="before-the-packages-are-published"
+                  hash="working-from-a-checkout"
                 >
                   Running the CLI from a checkout
                 </Link>

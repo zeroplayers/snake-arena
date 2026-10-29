@@ -168,8 +168,9 @@ approval and the checks consumer (#22) done on the database.
 become `^version` for packages on npm (`PUBLISHED` in `src/init.ts`). Only `zerosnake` itself is
 on npm, so that set is empty: the SDK is copied into the project (`vendor/zerosnake-sdk`, a
 `file:` dependency, so `npm install` works and editors see the types), and the other
-`@zerosnake/*` packages, which only the template's own tests use, are left out with a note. `sim` and `test`
-don't need an install: without one, the CLI bundles the bot against its own copy of the SDK.
+`@zerosnake/*` packages, which only the template's own tests use, are left out with a note. `sim`
+and `test` don't need an install: without one, the CLI bundles the bot against its own copy of the
+SDK.
 
 ## Packaging
 

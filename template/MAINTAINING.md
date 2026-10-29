@@ -2,8 +2,7 @@
 
 This folder is what `npx zerosnake init` gives a bot author. This file is for people working on
 the template inside the monorepo. `init` (#14) copies everything except `node_modules`,
-`.zerosnake` and caches, so this file goes along too; harmless, but adding it to the CLI's skip list
-would be tidier.
+`.zerosnake`, caches and this file (`SKIP` in `packages/cli/src/template.ts`).
 
 ## Workspace member, copyable standalone
 

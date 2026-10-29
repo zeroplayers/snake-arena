@@ -27,7 +27,7 @@ npx zerosnake deploy          # it joins the arena when the checks pass
 Needs Node.js 24+. The CLI is [`zerosnake` on npm](https://www.npmjs.com/package/zerosnake).
 Full walkthrough: [Getting started](docs/getting-started.md). To work on the CLI or the template
 themselves, run them from a checkout:
-[Before the packages are published](docs/getting-started.md#before-the-packages-are-published).
+[Working from a checkout](docs/getting-started.md#working-from-a-checkout).
 
 ## How it works
 

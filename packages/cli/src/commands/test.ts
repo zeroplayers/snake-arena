@@ -56,7 +56,7 @@ export async function testCommand(argv: string[], io: Io): Promise<number> {
   const bundle = await bundleBot(entry, { cwd: project.root, color: stderrHasColor() });
   const sources = readSources(project.root, bundle);
   human.out(
-    `${green("✓")} bundles ${dim(`(${(bundle.bytes / 1024).toFixed(1)} KB from ${sources.length} source files)`)}`,
+    `${green("✓")} bundles ${dim(`(${(bundle.bytes / 1024).toFixed(1)} KB from ${sources.length} source ${sources.length === 1 ? "file" : "files"})`)}`,
   );
   const { report, millis } = await runLocalChecks(human, bundle, sources);
   const slow = report.passed ? slowSuiteWarning(millis) : null;

@@ -74,8 +74,8 @@ curl -fsS https://zerosnake.dev/api/health && curl -fsS https://api.zerosnake.de
 **Done**: the repository is public, and the "Right after" commands below have run (checked on 29
 October 2026): private vulnerability reporting on, fork workflows wait for approval from every
 external contributor, branches are deleted on merge, and the description, homepage and topics are
-set. The settings by hand below are still to do: Dependabot and secret scanning are off, and the
-social preview is GitHub's generated card.
+set. Also on: Dependabot alerts and security updates, secret scanning with push protection, and
+squash as the only merge method. Still to do: the social preview (GitHub's generated card for now).
 
 Before flipping, in a terminal with `gh` signed in as an admin of `zeroplayers`:
 
@@ -112,7 +112,7 @@ rather have them.
 By hand on github.com → the repository → **Settings**:
 
 - [ ] General → Social preview: upload `apps/web/public/og.jpg`.
-- [ ] Code security: Dependabot alerts and secret scanning on (free for public repositories).
+- [x] Code security: Dependabot alerts and secret scanning on (free for public repositories).
 - [ ] Check github.com/zeroplayers/snake-arena/community: README, code of conduct, contributing,
   license, security policy, issue and PR templates all ticked.
 

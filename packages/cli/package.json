@@ -1,6 +1,6 @@
 {
   "name": "zerosnake",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "ZeroSnake Arena CLI: create a snake bot, play it locally, deploy it to the arena",
   "keywords": [
     "zerosnake",

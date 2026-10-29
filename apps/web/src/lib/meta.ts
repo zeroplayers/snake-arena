@@ -1,4 +1,6 @@
-import { SITE_URL } from "../site";
+import type { ComponentProps } from "react";
+import { LEGAL } from "../legal";
+import { CLI_PUBLISHED, NPM_URL, REPO, SITE_URL } from "../site";
 
 const SITE_NAME = "ZeroSnake Arena";
 
@@ -57,4 +59,38 @@ export function pageMeta(title: string, description?: string): Meta[] {
         ]
       : []),
   ];
+}
+
+/**
+ * The landing page's structured data (schema.org JSON-LD): the site and the game, free, made by
+ * the operator, with the repository and the npm package as its other homes once they are public.
+ * TanStack renders a `script:ld+json` meta entry as an escaped `<script type="application/ld+json">`,
+ * but the route `head` type only lists `<meta>` attributes, hence the cast.
+ */
+export function structuredData(): ComponentProps<"meta"> {
+  const sameAs = [...(REPO.public ? [REPO.url] : []), ...(CLI_PUBLISHED ? [NPM_URL] : [])];
+  const ld = {
+    "script:ld+json": {
+      "@context": "https://schema.org",
+      "@graph": [
+        { "@type": "WebSite", name: SITE_NAME, url: `${SITE_URL}/`, description: DESCRIPTION },
+        {
+          "@type": "VideoGame",
+          name: SITE_NAME,
+          url: `${SITE_URL}/`,
+          description: DESCRIPTION,
+          image: `${SITE_URL}/og.jpg`,
+          genre: "Programming game",
+          gamePlatform: "Web browser",
+          applicationCategory: "GameApplication",
+          operatingSystem: "Any",
+          isAccessibleForFree: true,
+          offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+          publisher: { "@type": "Organization", name: LEGAL.operator, email: LEGAL.email },
+          ...(sameAs.length > 0 && { sameAs }),
+        },
+      ],
+    },
+  };
+  return ld as ComponentProps<"meta">;
 }

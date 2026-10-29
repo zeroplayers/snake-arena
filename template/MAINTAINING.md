@@ -23,26 +23,28 @@ it imports from outside the folder, so a copy works once the dependencies resolv
 `zerosnake init` (#14) copies the folder, names the package after the new directory and rewrites
 every `workspace:*` range to `^<version>` of that package.
 
-**Today that is not enough:** `@zerosnake/sdk`, `@zerosnake/engine`, `@zerosnake/sandbox` and
-`@zerosnake/house-bots` are private `0.0.0` packages, so `npm install` fails in any copy (on
-`workspace:*` in a plain copy, on `^0.0.0` after `init`). Authors have to work inside a monorepo
-checkout; README.md and CLAUDE.md say so. `zerosnake sim` / `test` from a checkout's CLI work in an
-`init`ed folder without an install (the CLI resolves the SDK itself), but `npm test` and
-`npm run bench` there need the packages.
+**Today only the CLI is on npm** (`zerosnake`, since 0.1.0). `@zerosnake/sdk`,
+`@zerosnake/engine`, `@zerosnake/sandbox` and `@zerosnake/house-bots` are private `0.0.0`
+packages, so `init` copies the SDK into `vendor/zerosnake-sdk` (a `file:` dependency) and leaves
+the other three out with a note (`PUBLISHED` in `packages/cli/src/init.ts` is empty). `npm install`
+works in an `init` project and `npx zerosnake sim` / `test` need nothing more, but `npm test` and
+`npm run bench` need the packages: README.md ("Inside the monorepo") and CLAUDE.md (Setup) say so.
+The CLI's build ships this folder with `.gitignore` renamed to `gitignore`, which `init` renames
+back.
 
-When the packages are published:
+When the other packages are published:
 
-- drop the "not on npm yet" notes from README.md (Quick start) and CLAUDE.md (Setup);
-- add `"zerosnake": "workspace:*"` to `devDependencies` so `npx zerosnake` resolves locally;
-- if the template ships inside the published CLI, rename `.gitignore` to `gitignore` (npm drops
-  `.gitignore` from packages; `init` renames `gitignore` back, and otherwise writes a default one
-  without `.zerosnake/`).
+- add each to `PUBLISHED` in `packages/cli/src/init.ts`, and drop the vendored SDK once
+  `@zerosnake/sdk` is in it;
+- drop the "not on npm yet" notes from README.md and CLAUDE.md;
+- consider `"zerosnake": "^<version>"` in `devDependencies`, so a project pins its CLI instead of
+  `npx` fetching the latest.
 
 ## Why the tests need engine, sandbox and house bots
 
 `test/match.ts` plays real matches: the bot bundled by esbuild, run in `@zerosnake/sandbox` with the
 arena's budget, in `@zerosnake/engine` worlds, against `@zerosnake/house-bots`. That gives authors
-(and their Claude) a deterministic local loop (`npm test`, `npm run bench`) before the CLI exists.
+(and their Claude) a deterministic local loop (`npm test`, `npm run bench`) inside the monorepo.
 In an `init` project those packages are left out, so `npm test`, `npm run bench` and
 `npm run typecheck` fail there; `CLAUDE.md`, README.md and the skills therefore lead with the CLI
 (`npx tsc -p .`, `zerosnake sim --headless`, `zerosnake test`) and mark the bench as monorepo-only.

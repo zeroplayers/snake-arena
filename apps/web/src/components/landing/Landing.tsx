@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { CLI_PUBLISHED, REPO } from "../../site";
+import { CLI_PUBLISHED, NPM_URL, REPO } from "../../site";
 import { GithubLink } from "../GithubLink";
 import { ArenaHero } from "./ArenaHero";
 import { ClaudePromptBlock, CopyButton, CopyPromptButton } from "./ClaudeStart";
@@ -90,7 +90,8 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
       <section className="landing-hero">
         <div className="landing-head">
           <p className="eyebrow">
-            Programming game · JS/TS · {REPO.public ? "open source, MIT" : "open source soon"}
+            Programming game · JS/TS ·{" "}
+            <span className="nowrap">{REPO.public ? "open source, MIT" : "open source soon"}</span>
           </p>
           <h1 className="title landing-title">
             Your snake bot vs. <span className="accent">everyone else's.</span>
@@ -276,10 +277,16 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
           </div>
         ))}
         <p className="muted small">
-          Free. Needs Node.js 24+. Everything up to <code>test</code> runs on your machine with no
-          account; GitHub sign-in is only for <code>login</code> and <code>deploy</code>. The
-          starter bot already beats <code>easy</code>, the bar for entering the arena: your job is
-          to beat the rest.{" "}
+          Free. Needs Node.js 24+
+          {CLI_PUBLISHED && (
+            <>
+              {" "}
+              (the CLI is <a href={NPM_URL}>zerosnake on npm</a>)
+            </>
+          )}
+          . Everything up to <code>test</code> runs on your machine with no account; GitHub sign-in
+          is only for <code>login</code> and <code>deploy</code>. The starter bot already beats{" "}
+          <code>easy</code>, the bar for entering the arena: your job is to beat the rest.{" "}
           <Link to="/docs/$slug" params={{ slug: "getting-started" }}>
             Getting started
           </Link>{" "}
@@ -330,16 +337,24 @@ export function Landing({ signedIn, onSignIn }: { signedIn: boolean; onSignIn: (
             </Link>
           </li>
           <li>
-            <div className="panel link-card">
-              <strong>
-                <GithubLink />
-              </strong>
-              <span className="muted">
-                {REPO.public
-                  ? "Engine, sandbox, CLI, house bots and this site. MIT licensed."
-                  : "Engine, sandbox, CLI, house bots and this site. Open source at launch."}
-              </span>
-            </div>
+            {REPO.public ? (
+              <a href={REPO.url} className="panel link-card" rel="noreferrer">
+                <strong>GitHub</strong>
+                <span className="muted">
+                  Engine, sandbox, CLI, house bots and this site. MIT licensed: issues and pull
+                  requests welcome.
+                </span>
+              </a>
+            ) : (
+              <div className="panel link-card">
+                <strong>
+                  <GithubLink />
+                </strong>
+                <span className="muted">
+                  Engine, sandbox, CLI, house bots and this site. Open source at launch.
+                </span>
+              </div>
+            )}
           </li>
           <li>
             {signedIn ? (

@@ -32,7 +32,7 @@ Read the verdict in [open-source-audit.md](open-source-audit.md) and decide:
   PR first.
 - [ ] The spike Worker `zerosnake-spike-quickjs`: delete it if it is still deployed
   (`pnpm exec wrangler delete --name zerosnake-spike-quickjs` from `spikes/quickjs-do`).
-- [ ] Claim the `@zerosnake` scope on npm now, before the repository is public: `init` tells
+- [x] Claim the `@zerosnake` scope on npm now, before the repository is public: `init` tells
   people that `@zerosnake/*` packages are "not on npm yet", so someone could register them.
   npmjs.com (signed in, 2FA on) → your avatar → **Add Organization** → `zerosnake`, free plan
   for public packages. `npm` itself can't create orgs.
@@ -47,7 +47,7 @@ the CLI's `DEFAULT_URL` is `https://zerosnake.dev`. Its owner steps, before the 
 - [ ] **GitHub App** (sign-in): Homepage URL `https://zerosnake.dev`, callback URL
   `https://zerosnake.dev/api/auth/callback/github`. Remove the old
   `https://arena.surninsynergy.dev/api/auth/callback/github` callback.
-- [ ] **Cloudflare API token for CI** (`CLOUDFLARE_API_TOKEN` repo secret): add zone
+- [x] **Cloudflare API token for CI** (`CLOUDFLARE_API_TOKEN` repo secret): add zone
   `zerosnake.dev` with Workers Routes: Edit and DNS: Edit (the zone must be in the Surnin Synergy
   account). Keep zone `surninsynergy.dev` until the first deploy has detached the old domains,
   then remove it from the token.
@@ -58,7 +58,7 @@ the CLI's `DEFAULT_URL` is `https://zerosnake.dev`. Its owner steps, before the 
 - [ ] **www Redirect Rule** on the `zerosnake.dev` zone: `www.zerosnake.dev/*` →
   `https://zerosnake.dev/${path}`, 301, query kept (README, "www"; the Worker only redirects
   pages, static assets answer before it).
-- [ ] Let the deploy run (Actions → Deploy staging, or the next push to `main`).
+- [x] Let the deploy run (Actions → Deploy staging, or the next push to `main`).
 
 **Hard gate before step 4.** A published `zerosnake@0.1.0` talks to `https://zerosnake.dev`
 forever; if that host doesn't answer, the version can't be fixed. All of these must pass:
@@ -70,6 +70,12 @@ curl -fsS https://zerosnake.dev/api/health && curl -fsS https://api.zerosnake.de
 - [ ] "Sign in with GitHub" works on `https://zerosnake.dev`.
 
 ## 3. Make the repository public
+
+**Done**: the repository is public. Checked on 29 October 2026, the "Right after" commands and the
+settings below are still to do: private vulnerability reporting is off (so the "Report a security
+vulnerability" link in the issue chooser and SECURITY.md leads nowhere yet), forks need approval
+only from first-time contributors, branches aren't deleted on merge, the repository has no homepage
+or topics, and Dependabot and secret scanning are off.
 
 Before flipping, in a terminal with `gh` signed in as an admin of `zeroplayers`:
 
@@ -96,7 +102,7 @@ gh api -X PUT repos/zeroplayers/snake-arena/actions/permissions/fork-pr-contribu
 gh repo edit zeroplayers/snake-arena --delete-branch-on-merge \
   --description "Your snake bot vs. everyone else's: a slither.io-style arena where every snake is code" \
   --homepage "https://zerosnake.dev" \
-  --add-topic slither-io,snake,game-ai,programming-game,ai-arena,quickjs,cloudflare-workers,claude-code
+  --add-topic slither-io,snake-game,game-ai,programming-game,ai-arena,bots,javascript,typescript,quickjs,cloudflare-workers,claude-code
 ```
 
 Discussions stay off (go-live.md had `--enable-discussions`): one more place to moderate in launch
@@ -111,6 +117,10 @@ By hand on github.com → the repository → **Settings**:
   license, security policy, issue and PR templates all ticked.
 
 ## 4. Publish the CLI to npm
+
+**Done**: `zerosnake@0.1.0` is on npm (`latest`), and `npx zerosnake@0.1.0 init` and `test` work
+from an empty npm cache on macOS. Trusted publishing and the GitHub side below are still to do: the
+repository has no `npm` environment and no tag ruleset yet, so `release-cli.yml` can't publish.
 
 You need an npmjs.com account with two-factor authentication on ("Authorization and writes").
 
@@ -179,7 +189,7 @@ only one that can mint an npm token.
 `landing.test.tsx` passes with every combination of the flags, so a rollback is the same two
 values set back to `false`. Let the deploy run, then on the live site:
 
-- [ ] No "Coming at launch" or "Not on npm yet"; the GitHub links work; "Copy first steps"
+- [x] No "Coming at launch" or "Not on npm yet"; the GitHub links work; "Copy first steps"
   copies one line.
 
 ## 6. Check from a clean machine

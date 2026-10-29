@@ -1,5 +1,9 @@
 # zerosnake
 
+[![npm](https://img.shields.io/npm/v/zerosnake)](https://www.npmjs.com/package/zerosnake)
+[![CI](https://github.com/zeroplayers/snake-arena/actions/workflows/ci.yml/badge.svg)](https://github.com/zeroplayers/snake-arena/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/zeroplayers/snake-arena/blob/main/LICENSE)
+
 The command line for [ZeroSnake Arena](https://zerosnake.dev): a slither.io-style arena where
 every snake is a program. Write a JavaScript or TypeScript bot (with Claude, another coding agent
 or by hand), play it against the house bots on your machine, then deploy it to rooms that run
@@ -15,11 +19,12 @@ cd my-snake
 npx zerosnake sim             # your snake vs the house bots, in your browser
 npx zerosnake test            # the same checks the server runs, same seeds, same verdict
 npx zerosnake login           # once, with GitHub
-npx zerosnake deploy --create # it joins the arena when the checks pass
+npx zerosnake deploy          # it joins the arena when the checks pass
 ```
 
 Then open `claude` (or your agent) in `my-snake` and ask it to make the snake smarter: the project
 ships a `CLAUDE.md`, an `AGENTS.md` and skills for debugging deaths and comparing versions.
+Your first `deploy` creates your bot; deploying another one later takes `deploy --create`.
 
 - Docs: [rules](https://zerosnake.dev/docs/rules), [bot API](https://zerosnake.dev/docs/bot-api),
   [limits](https://zerosnake.dev/docs/limits) and
@@ -40,7 +45,7 @@ cd my-snake
 npx zerosnake sim              # local match in the sandbox, opens the viewer
 npx zerosnake test             # the server's deploy checks, same seeds, same verdict
 npx zerosnake login            # device flow in the browser
-npx zerosnake deploy --create  # upload; live once the server's checks pass
+npx zerosnake deploy           # upload; live once the server's checks pass
 npx zerosnake status           # bots, active versions, ratings, deploys left today
 npx zerosnake logs             # a version's check report and recent lives
 ```
@@ -134,7 +139,8 @@ else `https://zerosnake.dev`; plain `http` is allowed only for localhost.
   1 and says the checks may not run on this server yet (#22; the API has no hint for that). The
   local upload-size check measures the exact body sent, `meta` included.
   The bot is `--bot <slug>`, else `"zerosnake": { "bot": "<slug>" }` in package.json, else the
-  package name as a slug; `--create` creates it (`POST /api/bots`). `--entry <file>` picks the
+  package name as a slug. An author's first deploy creates it (`POST /api/bots`); after that a
+  new bot takes `--create`, so a typo can't start one. `--entry <file>` picks the
   entry file (`sim` and `test` call that `--bot`).
 - **`status`**: `GET /api/me` (bots, active and latest version, quota) plus the public profile
   `GET /api/users/:username` for each active version's rating (mean ± CI over N lives, ranked from
@@ -159,10 +165,10 @@ approval and the checks consumer (#22) done on the database.
 ## `init` and dependencies
 
 `init` copies `template/` (shipped in `dist/template`). Monorepo dependencies (`workspace:*`)
-become `^version` for packages on npm (`PUBLISHED` in `src/init.ts`, empty until the launch,
-#31). Until then the SDK is copied into the project (`vendor/zerosnake-sdk`, a `file:`
-dependency, so `npm install` works and editors see the types), and the other `@zerosnake/*`
-packages, which only the template's own tests use, are left out with a note. `sim` and `test`
+become `^version` for packages on npm (`PUBLISHED` in `src/init.ts`). Only `zerosnake` itself is
+on npm, so that set is empty: the SDK is copied into the project (`vendor/zerosnake-sdk`, a
+`file:` dependency, so `npm install` works and editors see the types), and the other
+`@zerosnake/*` packages, which only the template's own tests use, are left out with a note. `sim` and `test`
 don't need an install: without one, the CLI bundles the bot against its own copy of the SDK.
 
 ## Packaging
@@ -179,7 +185,7 @@ packs it, installs it outside the monorepo and runs `init`, `sim --headless` and
 
 Releases are packed with `pnpm pack` (it runs `prepack` and rewrites the `workspace:*`
 devDependencies; `npm pack` wouldn't) and that tarball is published with `npm publish <tgz>`:
-by hand for the first release, then by pushing a `cli-v<version>` tag
+by hand for the first release (0.1.0), then by pushing a `cli-v<version>` tag
 ([release-cli.yml](https://github.com/zeroplayers/snake-arena/blob/main/.github/workflows/release-cli.yml),
 npm trusted publishing). The owner's steps are in
 [docs/launch/checklist.md](https://github.com/zeroplayers/snake-arena/blob/main/docs/launch/checklist.md).

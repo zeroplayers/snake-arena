@@ -226,12 +226,14 @@ The starter bot already beats the easiest house bot. Who's first on the leaderbo
 - [ ] Final domain deployed and verified: `https://zerosnake.dev` and
   `https://api.zerosnake.dev/health` answer, GitHub sign-in works, `www.zerosnake.dev` redirects
   pages and assets (README, "www"). `SITE_URL`, `DEFAULT_URL`, `robots.txt`, `sitemap.xml` and the
-  README already point there (#90).
+  README already point there (#90). Both hosts answer and www redirects pages; assets on www still
+  answer 200 (the Redirect Rule isn't set yet).
 - [ ] `zerosnake` and the `@zerosnake` org claimed on npm; `packages/cli` made publishable
   (review.md, "Needs the owner" 1) and published; `npx zerosnake init` tested from an empty
-  cache on macOS, Linux and Windows/WSL.
+  cache on macOS, Linux and Windows/WSL. Claimed, published (0.1.0) and tested on macOS; Linux
+  and Windows/WSL left.
 - [ ] Decide what `init` does about the template's `npm test` (review.md, "Needs the owner" 4).
-- [ ] Flip `REPO.public` and `CLI_PUBLISHED`, make the repo public, deploy. Check: no "Coming at
+- [x] Flip `REPO.public` and `CLI_PUBLISHED`, make the repo public, deploy. Check: no "Coming at
   launch", no "Not on npm yet", GitHub links work, "Copy first steps" copies one line.
 - [ ] Paste the "Copy prompt for Claude" prompt into Claude Code in an empty folder with the
   published CLI and follow it to a deployed bot. Fix the prompt (`claudePrompt.ts`) if any step

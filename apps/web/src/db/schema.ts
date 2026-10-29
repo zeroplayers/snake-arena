@@ -251,7 +251,7 @@ export const versions = sqliteTable(
     bundleKey: text("bundle_key").notNull(),
     sourceKey: text("source_key").notNull(),
     report: text("report", { mode: "json" }).$type<CheckReport>(),
-    /** What the CLI sent along (`cliVersion`, `sdkVersion`, `message`). */
+    /** What the CLI sent along (`cliVersion`, `sdkVersion`, `rules`, `message`). */
     meta: text("meta", { mode: "json" }).$type<DeployMeta>(),
     /** `Idempotency-Key` of the deploy request, so a retried upload doesn't make a second version. */
     idempotencyKey: text("idempotency_key"),

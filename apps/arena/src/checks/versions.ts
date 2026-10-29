@@ -4,6 +4,7 @@
  * redelivered or duplicate job can't change a version that is already done, and results are
  * read from `RETURNING` (D1's `meta.changes` also counts the rows triggers touch).
  */
+import type { DeployMeta } from "@zerosnake/web/shared";
 import type { VersionReport } from "./report.ts";
 
 export interface VersionRow {
@@ -15,18 +16,28 @@ export interface VersionRow {
   sourceKey: string;
   /** The bot's `archived_at`, Unix ms. */
   botArchivedAt: number | null;
+  /** What the CLI sent along with the deploy, if anything. */
+  meta: DeployMeta | null;
 }
 
 export async function loadVersion(db: D1Database, id: string): Promise<VersionRow | null> {
-  return db
+  const row = await db
     .prepare(
       `SELECT v.id, v.bot_id AS botId, v.n, v.status, v.bundle_key AS bundleKey,
-         v.source_key AS sourceKey, b.archived_at AS botArchivedAt
+         v.source_key AS sourceKey, b.archived_at AS botArchivedAt, v.meta
        FROM versions AS v JOIN bots AS b ON b.id = v.bot_id
        WHERE v.id = ?1`,
     )
     .bind(id)
-    .first<VersionRow>();
+    .first<Omit<VersionRow, "meta"> & { meta: string | null }>();
+  if (!row) return null;
+  let meta: DeployMeta | null = null;
+  try {
+    meta = row.meta ? (JSON.parse(row.meta) as DeployMeta) : null;
+  } catch {
+    // Written by the deploy API as JSON; anything else counts as nothing sent.
+  }
+  return { ...row, meta };
 }
 
 /**

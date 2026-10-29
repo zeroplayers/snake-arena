@@ -190,6 +190,7 @@ const deployBody = z.object({
     .object({
       cliVersion: z.string().max(32).optional(),
       sdkVersion: z.string().max(32).optional(),
+      rules: z.string().max(32).optional(),
       message: z.string().max(200).optional(),
     })
     .optional(),
@@ -287,6 +288,7 @@ function toMeta(meta: z.infer<typeof deployBody>["meta"]): DeployMeta | null {
   const out: DeployMeta = {};
   if (meta.cliVersion !== undefined) out.cliVersion = meta.cliVersion;
   if (meta.sdkVersion !== undefined) out.sdkVersion = meta.sdkVersion;
+  if (meta.rules !== undefined) out.rules = meta.rules;
   if (meta.message !== undefined) out.message = meta.message;
   return Object.keys(out).length ? out : null;
 }

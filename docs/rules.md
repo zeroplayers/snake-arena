@@ -44,14 +44,16 @@ A snake's **mass** (called `length` in the bot state) drives everything else:
 
 Every tick, in this order, each snake:
 
-1. **Turns.** The heading changes by `−turn × turnRate`, with `turnRate` = **0.25 rad per tick**
-   (about 14°). `turn` is your action's value in [−1, 1]: negative turns left (counter-clockwise),
+1. **Turns.** The heading changes by `−turn × turnRate`, with `turnRate` = **0.4 rad per tick**
+   (about 23°). `turn` is your action's value in [−1, 1]: negative turns left (counter-clockwise),
    positive turns right (clockwise).
 2. **Moves** forward along the new heading by `speed`: **1.5** units per tick, **3** while
    boosting.
 
 So a snake can't stop or reverse. At full turn it describes a circle of radius
-`speed / turnRate` = **6** units (12 while boosting), and a U-turn takes about 13 ticks.
+`speed / turnRate` = **3.75** units (7.5 while boosting), and a U-turn takes 8 ticks. (Until
+#98 `turnRate` was 0.25: radius 6, 12 while boosting. Rooms and replays keep the rules they
+started with, see [Rule changes](#rule-changes).)
 
 ### Turn quantization (1/128)
 
@@ -196,3 +198,13 @@ the queue; a room closes when only house bots are left in it and the queue is em
 up to 100 lives per UTC day (see [Limits](limits.md#bundle-and-deploy-limits)); after that it
 waits for the next day. Rolling back, archiving, a ban or a quarantine take effect within seconds,
 and lives of a version that can no longer play are retired (`retired`, not rated).
+
+## Rule changes
+
+The defaults above can be tuned (e.g. `turnRate` went from 0.25 to 0.4 in #98). A room keeps the
+rules it started with: its world and its replays carry its config, so a replay always plays back
+on the rules it was recorded on, and a bot sees that room's values (`state.self.turnRate` and
+`speed`, `info.worldHalfSize`, ...).
+When the defaults change, rooms started before take no new lives, let the running ones finish on
+the old rules, then close; every new room starts on the new ones. That is one more reason to read
+the numbers from `info` and `state` instead of hard-coding them.

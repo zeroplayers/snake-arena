@@ -33,7 +33,7 @@ const view = (snakes: SnakeView[], tick = 123_456, id = ME, lifeTick = 5): BotSt
     length: 10,
     speed: 1.5,
     radius: 1,
-    turnRate: 0.25,
+    turnRate: 0.4,
     boosting: false,
     segments: [],
   },

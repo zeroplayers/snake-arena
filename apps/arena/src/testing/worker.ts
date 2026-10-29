@@ -87,6 +87,19 @@ export class RoomDO extends BaseRoomDO {
   }
 
   /**
+   * Rewrites the saved world's config with `rules` (e.g. the old `turnRate`), as if this engine,
+   * with other defaults, had just been deployed under a running room. Call between batches, after
+   * a `restart`.
+   */
+  async setWorldRules(rules: Record<string, number>): Promise<void> {
+    const store = new RoomStore(this.ctx.storage);
+    const world = store.getJson<{ config: Record<string, number> }>("world");
+    if (!world) throw new Error("room has no world");
+    world.config = { ...world.config, ...rules };
+    store.putJson("world", world);
+  }
+
+  /**
    * Makes instrumenting each bundle take `ms` longer (wall time), as on a slow machine, for this
    * room from now on.
    */

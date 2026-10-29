@@ -112,8 +112,8 @@ describe("interpolateSnake", () => {
 
   it("keeps a long coiled snake's tail moving steadily between ticks", () => {
     // Laid out like the engine does: segments `size` apart along the head's path, here a
-    // tight circle (radius 6, the engine's sharpest turn at normal speed), the body coiled ~7×.
-    const turnRadius = 6;
+    // tight circle (radius 3.75, the engine's sharpest turn at normal speed), the body coiled ~11×.
+    const turnRadius = 3.75;
     const speed = 1.5;
     const size = 2;
     const coiled = (tick: number): RenderSnake => {

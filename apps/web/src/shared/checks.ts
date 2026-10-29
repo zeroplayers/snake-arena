@@ -117,6 +117,8 @@ const CHECK_LABELS: Record<string, string> = {
   qualification: "Qualification",
   "arena-backstop": "Arena",
   moderation: "Moderation",
+  /** The deploying CLI's local checks played other rules (`DeployMeta.rules`, #98). */
+  rules: "Local rules",
 };
 
 /** A report as plain sentences for people: one per failed check, `Label: message`. */

@@ -247,6 +247,59 @@ describe("RoomDO", () => {
     }
   }, 60_000);
 
+  it("lets a room started on older rules play its lives out on them, then close", async () => {
+    const tickets = await Promise.all(
+      ["rule1", "rule2"].map((a) => ticket(a, house.hard as string)),
+    );
+    await startRoom("old-rules", tickets, { limits: { chunkTicks: 100 } });
+    await spares("old-rules", 1);
+    // The room was started by an engine with other defaults (before #98: turnRate 0.25), then
+    // this one was deployed under it. A short life cap stands in for "its lives end eventually".
+    await h.restart();
+    await h.room("old-rules", "setWorldRules", { turnRate: 0.25, lifeCap: 120 });
+
+    // It takes no new lives, from a join or from the matchmaker's queue (the spare stays there).
+    expect(await h.room("old-rules", "join", await ticket("late", house.hard as string))).toEqual({
+      ok: false,
+      reason: "closed",
+    });
+    // The lives that joined before the deploy run, on the rules the room started with.
+    let s = await h.room<RoomStatus>("old-rules", "runBatch");
+    expect(s.state).toBe("running");
+    expect(
+      s.snakes
+        .filter((x) => x.versionId !== null)
+        .map((x) => x.lifeId)
+        .sort(),
+    ).toEqual(tickets.map((t) => t.lifeId).sort());
+    for (let i = 0; i < 50 && s.state === "running"; i++) {
+      s = await h.room<RoomStatus>("old-rules", "runBatch");
+    }
+    expect(s.state).toBe("closed");
+    const seen = await events();
+    const asked = seen
+      .filter((e) => e.kind === "nextLife")
+      .map((e) => e.body as { roomId: string });
+    expect(asked.some((b) => b.roomId === "old-rules")).toBe(false);
+    expect(seen.some((e) => e.kind === "roomClosed" && e.body === "old-rules")).toBe(true);
+    // Their lives ended and were written like any other: nothing dropped.
+    const dropped = seen.filter((e) => e.kind === "lifeDropped").map((e) => e.body as LifeDrop);
+    expect(dropped.filter((d) => d.roomId === "old-rules")).toEqual([]);
+    for (const t of tickets) expect(await lifeRow(t.lifeId)).not.toBeNull();
+    // The whole replay is on the old rules, and plays back (hash checked) on them.
+    const r2 = await h.r2();
+    const keys = (await r2.list({ prefix: "old-rules/" })).objects.map((o) => o.key).sort();
+    const chunks = await Promise.all(
+      keys.map(
+        async (k) => new Uint8Array(await ((await r2.get(k)) as R2ObjectBody).arrayBuffer()),
+      ),
+    );
+    const player = new ReplayPlayer(chunks);
+    expect(player.world.config.turnRate).toBe(0.25);
+    player.seek(player.endTick);
+    expect(player.world.tick).toBe(s.tick);
+  }, 60_000);
+
   it("closes a room saved by the round-arena engine, dropping its lives unrated", async () => {
     const tickets = await Promise.all(
       ["old1", "old2"].map((a) => ticket(a, house.medium as string)),

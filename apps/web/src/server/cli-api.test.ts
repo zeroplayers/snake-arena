@@ -166,7 +166,7 @@ const deployBody = (overrides: Partial<DeployRequest> = {}): DeployRequest => ({
     { path: "src/bot.ts", content: "export default defineBot({ tick: () => ({ turn: 0 }) });\n" },
     { path: "package.json", content: '{ "name": "my-snake" }\n' },
   ],
-  meta: { cliVersion: "0.1.0", sdkVersion: "0.1.0", message: "first try" },
+  meta: { cliVersion: "0.1.1", sdkVersion: "0.1.0", rules: "0123abcd", message: "first try" },
   ...overrides,
 });
 

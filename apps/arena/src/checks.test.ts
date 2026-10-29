@@ -1,3 +1,5 @@
+import { DEFAULT_CONFIG, rulesId } from "@zerosnake/engine";
+import { checkReportLines } from "@zerosnake/web/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   bundle,
@@ -142,6 +144,35 @@ describe("checks consumer", () => {
     expect(v?.report?.checks[3]?.message).toMatch(/^scores below easy/);
     expect(v?.report?.text).toMatch(/^Checks failed/);
   }, 60_000);
+
+  it("says when the author's CLI tested on other rules than the arena's", async () => {
+    // zerosnake@0.1.0 sends no `rules`: it plays turnRate 0.25 (#98).
+    const old = await h.deploy("old-cli", BOTS.suicidal, { meta: { cliVersion: "0.1.0" } });
+    await h.deliver(old.job);
+    const v = await h.version(old.job.versionId);
+    expect(v?.status).toBe("rejected");
+    // Its own failed check, after the suite's: what every CLI prints for a check it doesn't know.
+    expect(v?.report?.checks.map((c) => [c.name, c.ok])).toEqual([
+      ["limits", true],
+      ["loads", true],
+      ["seeds", true],
+      ["qualification", false],
+      ["rules", false],
+    ]);
+    expect(v?.report?.checks[3]?.message).not.toMatch(/other rules/);
+    expect(checkReportLines(v?.report)).toContainEqual(
+      expect.stringMatching(
+        /^Local rules: zerosnake 0\.1\.0 tested this version on other rules than the arena's \(a turn rate of 0\.25; the arena's is 0\.4\).*npx zerosnake@latest/,
+      ),
+    );
+    // A CLI on the arena's rules gets the plain verdict.
+    const current = await h.deploy("new-cli", BOTS.suicidal, {
+      meta: { cliVersion: "0.1.1", rules: rulesId(DEFAULT_CONFIG) },
+    });
+    await h.deliver(current.job);
+    const w = await h.version(current.job.versionId);
+    expect(w?.report?.checks.map((c) => c.name)).not.toContain("rules");
+  }, 120_000);
 
   it("rejects a bot that is too slow on every tick", async () => {
     const { job } = await h.deploy("slow", BOTS.nearBudget);

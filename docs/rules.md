@@ -138,12 +138,14 @@ head touches during its move is what kills it.
 `timeout` and `error` are decided by the sandbox before the tick is simulated: the snake dies
 where it stands without moving.
 
-When a snake dies for any reason, **all its mass** is dropped as `remains` pellets spread along its
-body: `ceil(mass / 10)` pellets of equal value, but never more pellets than the body has segments,
-each moved by up to half a segment gap in x and y (and kept within 87.2 of the centre on both
-axes, so remains of a snake that died at the wall can still be eaten). So pellets are worth at most 10 for small snakes
-and more for big ones (above mass ~380 the segment cap takes over: mass 1000 drops 76 pellets of
-about 13).
+When a snake dies for any reason, **all its mass** is dropped as `remains` pellets spread evenly
+along its body from head to tail: `ceil(mass / 10)` pellets of equal value, but at least one per
+two body segments and never more than one per segment, each moved by up to half a segment gap in
+x and y (and kept within 87.2 of the centre on both axes, so remains of a snake that died at the
+wall can still be eaten). So a newborn (mass 10, 5 segments) drops 3 pellets of about 3.3, pellets
+are worth less than 10 below mass ~40, 10 at most up to mass ~380, and more for big ones above it,
+where the segment cap takes over (mass 1000 drops 76 pellets of about 13). (Until #101 small
+snakes dropped as few as one pellet, on the head; rooms and replays from before keep that.)
 
 ## Life cap
 

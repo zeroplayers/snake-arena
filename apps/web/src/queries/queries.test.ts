@@ -116,11 +116,12 @@ describe("getBotPage", () => {
     expect(lives).toHaveLength(RECENT_LIVES);
     const ended = lives.map((l) => l.endedAt as string);
     expect(ended).toEqual([...ended].sort().reverse());
-    // The recorded match is the newest, so it comes first and has replays.
-    expect(lives[0]?.id).toMatch(/^seed-replay-greedy-/);
-    expect(lives[0]?.hasReplay).toBe(true);
 
     const all = (await getBotPage(db, "ada", "coward"))?.selected?.recentLives ?? [];
+    // The recorded match is the newest, so its lives come first and have replays. (Coward, an
+    // easy bot, dies a dozen times in it; whether greedy dies at all depends on the engine.)
+    expect(all[0]?.id).toMatch(/^seed-replay-coward-/);
+    expect(all[0]?.hasReplay).toBe(true);
     const killers = all.flatMap((l) => (l.killer ? [l.killer.kind] : []));
     expect(killers).toContain("house");
     expect(killers).toContain("bot");

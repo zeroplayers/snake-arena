@@ -18,6 +18,8 @@ export interface RendererOptions {
   readonly segmentSpacing?: number;
   /** Upper bound on devicePixelRatio. Default 2. */
   readonly maxPixelRatio?: number;
+  /** Keep the drawn image for screenshots and video capture. Default false. */
+  readonly preserveDrawingBuffer?: boolean;
   readonly camera?: CameraMode;
 }
 
@@ -65,7 +67,10 @@ export class ArenaRenderer {
     this.cameraMode = options.camera ?? { mode: "overview" };
     this.buffer = new FrameBuffer(options.tps ?? 10);
 
-    this.webgl = new WebGLRenderer({ antialias: true });
+    this.webgl = new WebGLRenderer({
+      antialias: true,
+      preserveDrawingBuffer: options.preserveDrawingBuffer ?? false,
+    });
     this.webgl.setPixelRatio(Math.min(window.devicePixelRatio, options.maxPixelRatio ?? 2));
     this.domElement = this.webgl.domElement;
     this.domElement.style.display = "block";
@@ -110,11 +115,19 @@ export class ArenaRenderer {
     this.lastTime = undefined;
   }
 
-  /** Draws the world `alpha` of the way from `prev` to `next` (two consecutive ticks). */
-  draw(prev: RenderFrame, next: RenderFrame, alpha: number): void {
+  /**
+   * Draws the world `alpha` of the way from `prev` to `next` (two consecutive ticks).
+   *
+   * Animations (food pulse, wall colour, camera easing) run on the wall clock, or on `time`
+   * (seconds) when given: then the same arguments always draw the same picture, whatever was
+   * drawn before. That's what offline rendering, e.g. a video frame by frame, needs.
+   */
+  draw(prev: RenderFrame, next: RenderFrame, alpha: number, time?: number): void {
     const now = performance.now();
     const dt =
-      this.lastDrawTime === undefined ? 0 : Math.min(0.1, (now - this.lastDrawTime) / 1000);
+      time !== undefined || this.lastDrawTime === undefined
+        ? 0
+        : Math.min(0.1, (now - this.lastDrawTime) / 1000);
     this.lastDrawTime = now;
     this.tick = lerp(prev.tick, next.tick, alpha);
 
@@ -123,13 +136,13 @@ export class ArenaRenderer {
       this.highlight?.snakeId ??
       (this.cameraMode.mode === "follow" ? this.cameraMode.snakeId : undefined);
     this.background.setArenaHalfSize(arenaHalfSize);
-    this.background.update(dt);
+    this.background.update(dt, time);
     this.snakes.update(prev.snakes, next.snakes, alpha, onTop);
     this.highlighter.update(
       this.highlight,
       this.highlight && this.snakes.view(this.highlight.snakeId),
     );
-    this.food.update(prev.food, next.food, alpha, this.snakes.headPositions(), dt);
+    this.food.update(prev.food, next.food, alpha, this.snakes.headPositions(), dt, time);
     this.updateCamera(dt, arenaHalfSize);
     this.webgl.render(this.scene, this.camera);
   }
@@ -145,6 +158,19 @@ export class ArenaRenderer {
   /** Draws a disc around a snake's head (e.g. its vision radius); `undefined` removes it. */
   setHighlight(highlight: Highlight | undefined): void {
     this.highlight = highlight;
+  }
+
+  /** Resolves once the skin textures of everything drawn so far have loaded. */
+  ready(): Promise<void> {
+    return this.textures.loaded();
+  }
+
+  /** Position of a world point in CSS pixels from the canvas's top-left, as of the last draw. */
+  worldToScreen(p: Vec2): Vec2 {
+    return {
+      x: ((p.x - this.camera.position.x) / this.camera.right + 1) * 0.5 * this.width,
+      y: (1 - (p.y - this.camera.position.y) / this.camera.top) * 0.5 * this.height,
+    };
   }
 
   /** World position under a point in client (CSS pixel) coordinates, as of the last draw. */
@@ -192,6 +218,14 @@ export class ArenaRenderer {
     // shorter: in a square view it fills the frame.
     let height = (this.background.extent(arenaHalfSize) * 2) / Math.min(1, aspect);
 
+    if (this.cameraMode.mode === "fixed") {
+      this.camera.position.x = this.cameraMode.x;
+      this.camera.position.y = this.cameraMode.y;
+      this.viewHeight = (this.cameraMode.viewRadius * 2) / Math.min(1, aspect);
+      this.applyView(aspect);
+      return;
+    }
+
     if (this.cameraMode.mode === "follow") {
       const view = this.snakes.view(this.cameraMode.snakeId);
       if (view) {
@@ -222,6 +256,10 @@ export class ArenaRenderer {
       this.viewHeight = Math.exp(lerp(Math.log(this.viewHeight), Math.log(height), zoom));
     }
 
+    this.applyView(aspect);
+  }
+
+  private applyView(aspect: number): void {
     const halfH = this.viewHeight / 2;
     this.camera.top = halfH;
     this.camera.bottom = -halfH;

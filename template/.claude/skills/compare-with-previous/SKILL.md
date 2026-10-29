@@ -40,13 +40,15 @@ difference is small. Don't compare by putting both in one match (`--vs ./.zerosn
 they then fight each other and one match is mostly luck.
 
 **Monorepo checkout:** `npm run bench -- --seeds 40 .zerosnake/prev/src/bot.ts src/bot.ts` does
-all of this in one table (mean ± error, deaths by cause, mean ticks, max ops).
+all of this in one table (pts/min and mean score ± error, deaths by cause, mean ticks, max ops).
 
 ## 3. Read the result honestly
 
-- **Mean score ± error** per life (the arena rates a version by its mean life score over the last
-  200 lives). Call it better or worse only if the means differ by more than about twice the larger
-  `±`; otherwise say "within noise" and suggest more seeds.
+- **Points per minute ± error** (the arena rates a version by its total score over its total time
+  alive, over its last 200 lives; the bench's `pts/min` is the same, a life cut off by the end of a
+  match counting with its score and time so far). Call it better or worse only if they differ by
+  more than about twice the larger `±`; otherwise say "within noise" and suggest more seeds. The
+  mean score per life is what the deploy checks' qualification compares with `easy`.
 - **Deaths by cause:** did the change remove the cause it targeted? Did a new one appear?
 - **Lives:** fewer lives on the same seeds means longer lives, usually more score; more deaths is a
   red flag even if the score held.

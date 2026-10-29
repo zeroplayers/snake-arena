@@ -414,7 +414,9 @@ function BotPanel({ bot, page, action }: { bot: ManagedBot; page: ManagePage; ac
               <tr>
                 <th>Version</th>
                 <th>Status</th>
-                <th className="num">Rating</th>
+                <th className="num" title="Rating: points per minute alive">
+                  Pts/min
+                </th>
                 <th className="num hide-narrow">Lives</th>
                 <th className="hide-narrow">Deployed</th>
                 <th className="hide-narrow" />

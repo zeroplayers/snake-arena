@@ -1,5 +1,6 @@
 /**
- * How much does room composition skew raw life scores, and does `normalizeScore` help?
+ * How much does room composition skew ratings (points per minute alive), and does
+ * `normalizeScore` help? Also how ratings behave at the ranking threshold and over a window.
  *
  *   pnpm --filter @zerosnake/rating sim
  *

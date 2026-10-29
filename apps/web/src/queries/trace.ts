@@ -120,6 +120,8 @@ export function lifeSummary(life: LifeRow): LifeSummary {
     lengthMax: life.lengthMax,
     kills: life.kills,
     deathCause: life.deathCause,
+    ending: life.ending,
+    ticks: life.ticks,
     killer: killerName(life.killer),
     hasTrace: life.hasTrace,
     hasReplay: life.hasReplay,

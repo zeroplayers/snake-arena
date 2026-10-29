@@ -7,9 +7,10 @@
  * on `lives` is bounded by an index and a `LIMIT`, so a page view costs the same after months of
  * play.
  */
-import { and, count, desc, eq, isNotNull, type SQL } from "drizzle-orm";
+import { and, desc, eq, isNotNull, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import type { Db } from "../db";
+import { TICKS_PER_MINUTE } from "../db/queries";
 import {
   bots,
   type CheckReport,
@@ -21,6 +22,7 @@ import {
   versions,
 } from "../db/schema";
 import type { VersionQuarantine } from "../shared/arena";
+import { type LifeEnding, lifeEnding } from "../shared/lives";
 
 /** Finished lives listed for the selected version. */
 export const RECENT_LIVES = 20;
@@ -56,11 +58,14 @@ export interface VersionRow {
   n: number;
   status: VersionStatus;
   createdAt: string;
+  /** Points per minute alive over the last 200 counted lives. */
   rating: number | null;
   /** Half-width of the 95% confidence interval around `rating`. */
   ratingCi: number | null;
-  /** Lives behind `rating` (`ratings.n_lives`). */
+  /** Counted lives behind `rating` (`ratings.n_lives`). */
   ratedLives: number | null;
+  /** Minutes alive over those lives (`ratings.alive_ticks`); ranked from an hour. */
+  ratedMinutes: number | null;
   /** Every life the version played. */
   lives: number;
   /** First failed check of a rejected version, as the CLI shows it. */
@@ -74,8 +79,11 @@ export interface SelectedVersion {
   n: number;
   /** Finished lives, latest first. */
   recentLives: LifeRow[];
-  /** The latest `CAUSES_WINDOW` finished lives by how they ended, most common first. */
-  causes: { cause: DeathCauseColumn; count: number }[];
+  /**
+   * The latest `CAUSES_WINDOW` finished lives by how they ended (`retired` split into reaching
+   * the life cap and being stopped, `src/shared/lives.ts`), most common first.
+   */
+  causes: { ending: LifeEnding; count: number }[];
 }
 
 export interface LifeRow {
@@ -86,6 +94,8 @@ export interface LifeRow {
   /** Ticks alive. */
   ticks: number | null;
   deathCause: DeathCauseColumn | null;
+  /** How it ended: `deathCause` with `retired` split (`src/shared/lives.ts`). */
+  ending: LifeEnding | null;
   killer: Killer | null;
   startedAt: string;
   endedAt: string | null;
@@ -192,6 +202,7 @@ async function versionRows(db: Db, where: SQL | undefined, limit: number, offset
       rating: ratings.mean,
       ratingCi: ratings.ci,
       ratedLives: ratings.nLives,
+      aliveTicks: ratings.aliveTicks,
     })
     .from(versions)
     .leftJoin(ratings, eq(ratings.versionId, versions.id))
@@ -200,8 +211,9 @@ async function versionRows(db: Db, where: SQL | undefined, limit: number, offset
     .limit(limit)
     .offset(offset);
   return rows.map(
-    ({ report, createdAt, quarantinedAt, quarantineReason, ...v }): VersionRow => ({
+    ({ report, createdAt, quarantinedAt, quarantineReason, aliveTicks, ...v }): VersionRow => ({
       ...v,
+      ratedMinutes: aliveTicks === null ? null : aliveTicks / TICKS_PER_MINUTE,
       createdAt: createdAt.toISOString(),
       rejection: v.status === "rejected" ? rejection(report) : null,
       quarantine: quarantinedAt
@@ -259,6 +271,7 @@ export async function recentLives(db: Db, versionId: string, limit = RECENT_LIVE
       kills: r.kills,
       ticks: r.endTick === null ? null : r.endTick - r.startTick,
       deathCause: r.deathCause,
+      ending: lifeEnding(r.deathCause, r.endTick === null ? null : r.endTick - r.startTick),
       killer: killer(r),
       startedAt: r.startedAt.toISOString(),
       endedAt: r.endedAt?.toISOString() ?? null,
@@ -292,18 +305,18 @@ export function killer(r: {
 
 /** How the latest `window` finished lives of a version ended (`lives_version_ended_idx`). */
 export async function deathCauses(db: Db, versionId: string, window = CAUSES_WINDOW) {
-  const recent = db
-    .select({ cause: lives.deathCause })
+  // How a life ended depends on its length too (`retired`), so the counting is done here, over
+  // at most `window` rows.
+  const rows = await db
+    .select({ cause: lives.deathCause, startTick: lives.startTick, endTick: lives.endTick })
     .from(lives)
     .where(and(eq(lives.versionId, versionId), isNotNull(lives.endedAt)))
     .orderBy(desc(lives.endedAt))
-    .limit(window)
-    .as("recent");
-  const n = count();
-  const rows = await db
-    .select({ cause: recent.cause, count: n })
-    .from(recent)
-    .groupBy(recent.cause)
-    .orderBy(desc(n));
-  return rows.flatMap((r) => (r.cause ? [{ cause: r.cause, count: r.count }] : []));
+    .limit(window);
+  const counts = new Map<LifeEnding, number>();
+  for (const r of rows) {
+    const ending = lifeEnding(r.cause, r.endTick === null ? null : r.endTick - r.startTick);
+    if (ending) counts.set(ending, (counts.get(ending) ?? 0) + 1);
+  }
+  return [...counts].map(([ending, n]) => ({ ending, count: n })).sort((a, b) => b.count - a.count);
 }

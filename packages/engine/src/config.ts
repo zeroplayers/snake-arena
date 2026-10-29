@@ -91,7 +91,10 @@ export interface EngineConfig {
   remainsPerSegment: number;
 
   // --- Life ----------------------------------------------------------------------------------
-  /** A snake retires after this many ticks alive. */
+  /**
+   * A snake retires after this many ticks alive: a safety cap, not a match length (a life lasts
+   * until the snake dies). 864 000 ticks is 24 hours of game time; 6000 (10 minutes) before.
+   */
   lifeCap: number;
   /** Score per unit of mass per tick (area under the mass curve). */
   massScoreFactor: number;
@@ -180,7 +183,8 @@ export const DEFAULT_CONFIG: Readonly<EngineConfig> = Object.freeze({
   remainsJitter: 0.5,
   remainsPerSegment: 0.5,
 
-  lifeCap: 6000,
+  // 24 hours of game time: a life lasts until the snake dies (6000, 10 minutes, before).
+  lifeCap: 864_000,
   massScoreFactor: 0.001,
   killBonus: 50,
 

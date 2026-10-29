@@ -16,7 +16,7 @@ this session: rules, API, coordinate convention and limits are there.
    copy it aside: `mkdir -p .zerosnake/prev && cp -r src .zerosnake/prev/`.
 2. Measure it on a fixed set of seeds and keep the numbers (step 2 of skill
    `compare-with-previous`: `npx zerosnake sim --headless --seed N` for N = 1…20; in the monorepo,
-   `npm run bench`): mean score ± error, deaths by cause, max ops. This is what the new strategy has
+   `npm run bench`): pts/min and mean score ± error, deaths by cause, max ops. This is what the new strategy has
    to beat (unless the author explicitly wants a style over a score).
 
 ## 2. Design (say it in a few lines before coding)
@@ -67,7 +67,7 @@ and `npm run bench -- --deaths 5 --context 10` do the same with more detail.
   into a fail on the next edit (the seeds come from the bundle's hash), so make it clear, not lucky.
   If `test` warns that the checks were slow, cut the work per tick.
 - `max … ops per tick` well under 10 (aim for ≤ 5).
-- Mean score above the baseline by more than twice the `±`. If it is worse, say so with the numbers
+- Points per minute (the rating) above the baseline by more than twice the `±`. If it is worse, say so with the numbers
   and iterate (skill `debug-death` on the most common death cause); don't claim success.
 - For a style request, also check the style shows up: e.g. an aggressive bot should have kills
   (the `kills` column of `sim --headless`); compare kills and deaths with the baseline.

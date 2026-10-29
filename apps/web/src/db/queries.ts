@@ -1,10 +1,23 @@
-import { and, asc, desc, eq, gte, isNull, sql } from "drizzle-orm";
+import { DEFAULT_RATING_CONFIG, minRankedTicks } from "@zerosnake/rating";
+import { and, asc, desc, eq, gte, isNotNull, isNull, sql } from "drizzle-orm";
 import type { BotSummary, LeaderboardEntry, LeaderboardQuery, Profile } from "../lib/api";
 import type { Db } from ".";
 import { bots, ratings, users, versions } from "./schema";
 
-/** A version enters the leaderboard after this many lives. */
-export const RANKED_MIN_LIVES = 30;
+/**
+ * A version enters the leaderboard once its counted lives add up to this many ticks alive: an
+ * hour of game time (`minMinutes` of `@zerosnake/rating`). Stored ratings have two lives at least.
+ */
+export const RANKED_MIN_TICKS = minRankedTicks(DEFAULT_RATING_CONFIG);
+/** `RANKED_MIN_TICKS` in minutes, for the pages. */
+export const RANKED_MIN_MINUTES = DEFAULT_RATING_CONFIG.minMinutes;
+/** Ticks per minute of game time. */
+export const TICKS_PER_MINUTE = DEFAULT_RATING_CONFIG.ticksPerMinute;
+
+/** Minutes alive behind a rating, from `ratings.alive_ticks`. */
+const ratedMinutes = sql<
+  number | null
+>`${ratings.aliveTicks} / ${sql.raw(`${TICKS_PER_MINUTE}.0`)}`;
 
 export async function getProfile(db: Db, username: string): Promise<Profile | null> {
   const [user] = await db
@@ -29,6 +42,7 @@ export async function getProfile(db: Db, username: string): Promise<Profile | nu
       rating: ratings.mean,
       ratingCi: ratings.ci,
       ratedLives: ratings.nLives,
+      ratedMinutes,
       // Per-version counters (kept by triggers), not a count over `lives`.
       lives: sql<number>`(
         SELECT coalesce(sum(v.lives_count), 0) FROM ${versions} AS v WHERE v.bot_id = ${bots.id}
@@ -50,9 +64,10 @@ export async function getProfile(db: Db, username: string): Promise<Profile | nu
 }
 
 /**
- * Ranked by the lower bound of the rating, `mean - ci`, then the narrower interval, more lives
- * and the version id: the order of `leaderboard()` in `@zerosnake/rating`. Ranking by the mean
- * alone rewards redeploying until one version gets a lucky 30 lives.
+ * Ranked by the lower bound of the rating (points per minute alive), `mean - ci`, then the
+ * narrower interval, more time alive and the version id: the order of `leaderboard()` in
+ * `@zerosnake/rating`. Ranking by the point estimate alone rewards redeploying until one version
+ * gets a lucky first hour.
  *
  * `CROSS JOIN` pins `ratings` as SQLite's outer loop, so rows come out of `ratings_rank_idx`
  * already in order and `LIMIT` stops early. With a plain join the planner prefers scanning every
@@ -70,6 +85,7 @@ export function leaderboardQuery(db: Db, { limit = 50, offset = 0 }: Leaderboard
       ratingCi: ratings.ci,
       lowerBound: ratings.lowerBound,
       ratedLives: ratings.nLives,
+      ratedMinutes: sql<number>`${ratings.aliveTicks} / ${sql.raw(`${TICKS_PER_MINUTE}.0`)}`,
       lives: versions.livesCount,
     })
     .from(ratings)
@@ -90,13 +106,15 @@ export function leaderboardQuery(db: Db, { limit = 50, offset = 0 }: Leaderboard
         // its rank would stay frozen: a lucky leader could get itself quarantined to keep it.
         // Checked on the version row the join already looks up by key, so the plan is unchanged.
         isNull(versions.quarantinedAt),
-        gte(ratings.nLives, RANKED_MIN_LIVES),
+        gte(ratings.aliveTicks, RANKED_MIN_TICKS),
+        // No interval: too little evidence yet (an hour-long life and a death at spawn).
+        isNotNull(ratings.ci),
       ),
     )
     .orderBy(
       desc(ratings.lowerBound),
       asc(ratings.ci),
-      desc(ratings.nLives),
+      desc(ratings.aliveTicks),
       asc(ratings.versionId),
     )
     .limit(limit)
@@ -110,7 +128,9 @@ export async function getLeaderboard(db: Db, query: LeaderboardQuery = {}) {
     (row, i): LeaderboardEntry => ({
       ...row,
       author: row.author ?? "",
-      lowerBound: row.lowerBound ?? row.rating - row.ratingCi,
+      // Ranked rows always have an interval (`ci IS NOT NULL` above).
+      ratingCi: row.ratingCi ?? 0,
+      lowerBound: row.lowerBound ?? row.rating - (row.ratingCi ?? 0),
       rank: offset + i + 1,
     }),
   );

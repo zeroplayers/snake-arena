@@ -24,7 +24,7 @@ export type QueuedBot = {
  * - `issued`: handed to a room, not reported back yet (the bot has no other life meanwhile);
  * - `ended`: `lifeEnded` (counts toward the quota);
  * - `dropped`: `lifeDropped` or a refused `join`: never ran, doesn't count;
- * - `lost`: no news long after its room stopped holding it (counts: it may have run).
+ * - `lost`: no news long after its room last held it (counts: it may have run).
  */
 export type LifeState = "issued" | "ended" | "dropped" | "lost";
 
@@ -36,6 +36,11 @@ export type LedgerLife = {
   roomId: string;
   day: number;
   issuedAt: number;
+  /**
+   * Last time a check of its room (`status()`) found the room holding it; 0 before the first.
+   * A life is lost only once its room has stopped holding it for a while, however long it ran.
+   */
+  heldAt: number;
   state: LifeState;
 };
 
@@ -76,7 +81,7 @@ CREATE TABLE IF NOT EXISTS lives (life_id TEXT PRIMARY KEY, bot_id TEXT NOT NULL
   version_id TEXT NOT NULL, author TEXT NOT NULL, room_id TEXT NOT NULL, day INTEGER NOT NULL,
   issued_at INTEGER NOT NULL, state TEXT NOT NULL, cause TEXT, ended_at INTEGER,
   leave INTEGER NOT NULL DEFAULT 0, leave_at INTEGER NOT NULL DEFAULT 0,
-  leave_tries INTEGER NOT NULL DEFAULT 0);
+  leave_tries INTEGER NOT NULL DEFAULT 0, held_at INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS lives_issued_room_idx ON lives (room_id) WHERE state = 'issued';
 CREATE INDEX IF NOT EXISTS lives_issued_version_idx ON lives (version_id) WHERE state = 'issued';
 CREATE INDEX IF NOT EXISTS lives_day_idx ON lives (day);
@@ -112,6 +117,7 @@ const DEFAULT_META: Meta = {
 export class MatchmakerStore {
   constructor(private readonly storage: DurableObjectStorage) {
     storage.sql.exec(SCHEMA);
+    addColumn(storage.sql, "lives", "held_at INTEGER NOT NULL DEFAULT 0");
   }
 
   private get sql(): SqlStorage {
@@ -365,7 +371,8 @@ export class MatchmakerStore {
     const row = this.sql
       .exec<LedgerLife>(
         `SELECT life_id AS lifeId, bot_id AS botId, version_id AS versionId, author,
-           room_id AS roomId, day, issued_at AS issuedAt, state FROM lives WHERE life_id = ?`,
+           room_id AS roomId, day, issued_at AS issuedAt, held_at AS heldAt, state
+         FROM lives WHERE life_id = ?`,
         lifeId,
       )
       .next();
@@ -407,7 +414,7 @@ export class MatchmakerStore {
     return life;
   }
 
-  /** Nobody reported the life and its room doesn't hold it: free the bot, keep the count. */
+  /** Nobody reported the life and its room stopped holding it: free the bot, keep the count. */
   loseLife(lifeId: string, now: number): void {
     const life = this.life(lifeId);
     if (life?.state !== "issued") return;
@@ -462,11 +469,20 @@ export class MatchmakerStore {
     return this.sql
       .exec<LedgerLife>(
         `SELECT life_id AS lifeId, bot_id AS botId, version_id AS versionId, author,
-           room_id AS roomId, day, issued_at AS issuedAt, state
+           room_id AS roomId, day, issued_at AS issuedAt, held_at AS heldAt, state
          FROM lives WHERE room_id = ? AND state = 'issued'`,
         roomId,
       )
       .toArray();
+  }
+
+  /** A check of the room found it holding `lifeId` at `now` (`LedgerLife.heldAt`). */
+  markHeld(lifeId: string, now: number): void {
+    this.sql.exec(
+      "UPDATE lives SET held_at = ? WHERE life_id = ? AND state = 'issued'",
+      now,
+      lifeId,
+    );
   }
 
   countIssued(): number {
@@ -482,6 +498,19 @@ export class MatchmakerStore {
       "UPDATE lives SET leave = ? WHERE version_id = ? AND state = 'issued' AND leave = ?",
       LEAVE_WANTED,
       versionId,
+      LEAVE_NONE,
+    );
+  }
+
+  /**
+   * One life is to be retired (`leave`): it has been held far longer than any life can last, so
+   * its room is assumed stuck on it.
+   */
+  retireLife(lifeId: string): void {
+    this.sql.exec(
+      "UPDATE lives SET leave = ? WHERE life_id = ? AND state = 'issued' AND leave = ?",
+      LEAVE_WANTED,
+      lifeId,
       LEAVE_NONE,
     );
   }
@@ -664,5 +693,17 @@ export class MatchmakerStore {
       limit,
     ).rowsWritten;
     return n;
+  }
+}
+
+/**
+ * Adds a column that `SCHEMA` has to a table created before it had it (`CREATE TABLE IF NOT
+ * EXISTS` leaves an existing table as it is). A no-op once the column is there.
+ */
+function addColumn(sql: SqlStorage, table: string, column: string): void {
+  try {
+    sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column}`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column")) throw e;
   }
 }

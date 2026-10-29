@@ -7,7 +7,7 @@
 import { env } from "cloudflare:workers";
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { getLeaderboard, RANKED_MIN_LIVES } from "../db/queries";
+import { getLeaderboard, RANKED_MIN_MINUTES } from "../db/queries";
 import { getBotPage } from "../queries/bot";
 import { getReplayLife } from "../queries/replay";
 import { readVersionSources } from "../queries/sources";
@@ -27,7 +27,7 @@ export const getLeaderboardPage = createServerFn({ method: "GET" })
       entries: rows.slice(0, LEADERBOARD_PAGE_SIZE),
       page: data.page,
       hasNext: rows.length > LEADERBOARD_PAGE_SIZE,
-      minLives: RANKED_MIN_LIVES,
+      minMinutes: RANKED_MIN_MINUTES,
     };
   });
 
@@ -45,7 +45,7 @@ export const getBotPageData = createServerFn({ method: "GET" })
       ...(data.version !== undefined && { version: data.version }),
       ...(data.page !== undefined && { page: data.page }),
     });
-    return page && { ...page, minLives: RANKED_MIN_LIVES };
+    return page && { ...page, minMinutes: RANKED_MIN_MINUTES };
   });
 
 export const getVersionSources = createServerFn({ method: "GET" })

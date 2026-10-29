@@ -41,8 +41,8 @@ INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key, report, cre
   ('seed-wip-1', 'seed-wip', 1, 'validating', 'seed/wip/1.js', 'seed/wip/1.tar.gz', NULL,
     1767571200000, 1767571200000);
 
--- Lives: a fixed pseudo-random spread around each version's base score. Hunter has only 12 lives,
--- so it stays below the 30-life leaderboard threshold.
+-- Lives: a fixed pseudo-random spread around each version's base score, 30–90 s each. Hunter has
+-- only 12 lives, so it stays below the leaderboard threshold (an hour alive).
 INSERT INTO lives (id, version_id, room, start_tick, end_tick, score, length_max, kills,
                    death_cause, killer, replay_key, trace_key, started_at, ended_at)
 WITH RECURSIVE
@@ -78,21 +78,32 @@ SELECT
   t0 + i * 600000 + 300000
 FROM seq;
 
--- Ratings over the last 200 lives, roughly: mean and 95% CI half-width. `life_seq` stays NULL,
--- so the rating job (`src/server/ratings.ts`) rebuilds them exactly on its first run.
--- `activated_at` names the version's current stint; a rating for any other one is ignored.
-INSERT INTO ratings (version_id, activated_at, mean, ci, n_lives, updated_at)
-SELECT
-  version_id,
-  (SELECT activated_at FROM versions WHERE id = version_id),
-  avg(score),
-  1.96 * sqrt((avg(score * score) - avg(score) * avg(score)) / count(*)),
-  count(*),
-  max(ended_at)
-FROM (
-  SELECT version_id, score, ended_at,
-         row_number() OVER (PARTITION BY version_id ORDER BY ended_at DESC) AS recent
-  FROM lives WHERE version_id LIKE 'seed-%'
+-- Ratings over the last 200 lives, roughly: points per minute alive (total score over total
+-- ticks alive) and a 95% CI half-width (delta method). `life_seq` stays NULL, so the rating job
+-- (`src/server/ratings.ts`) rebuilds them exactly on its first run. `activated_at` names the
+-- version's current stint; a rating for any other one is ignored. Hunter's 12 lives are alive
+-- under an hour in all, so it stays below the leaderboard threshold.
+INSERT INTO ratings (version_id, activated_at, mean, ci, n_lives, alive_ticks, updated_at)
+WITH recent AS (
+  SELECT version_id, score, end_tick - start_tick AS ticks, ended_at FROM (
+    SELECT version_id, score, start_tick, end_tick, ended_at,
+           row_number() OVER (PARTITION BY version_id ORDER BY ended_at DESC) AS k
+    FROM lives WHERE version_id LIKE 'seed-%'
+  ) WHERE k <= 200
+),
+totals AS (
+  SELECT version_id, count(*) AS n, sum(ticks) AS t, 1.0 * sum(score) / sum(ticks) AS rate,
+         max(ended_at) AS at
+  FROM recent GROUP BY version_id
 )
-WHERE recent <= 200
-GROUP BY version_id;
+SELECT
+  t.version_id,
+  (SELECT activated_at FROM versions WHERE id = t.version_id),
+  600 * t.rate,
+  1.96 * 600 * sqrt(sum((r.score - t.rate * r.ticks) * (r.score - t.rate * r.ticks)) / (t.n - 1))
+    * sqrt(t.n) / t.t,
+  t.n,
+  t.t,
+  t.at
+FROM totals AS t JOIN recent AS r ON r.version_id = t.version_id
+GROUP BY t.version_id;

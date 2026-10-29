@@ -13,16 +13,27 @@
  *
  * **Counted lives** (SPEC §4, `src/shared/arena.ts`): lives of the version's current stint, i.e.
  * started at or after `versions.activated_at` (all of them while it's `null`), and not ended by
- * the platform (`death_cause = 'retired'`: arena paused, room closed). A rating needs two counted
- * lives (there's no interval with one); it is written with the `activated_at` it counted from, so
- * the stint triggers ignore a write that raced a rollback.
+ * the platform (`retired` short of a life cap: version rolled back, archived or banned, arena
+ * paused; `src/shared/lives.ts`). A life that reached the cap counts. Each adds its score and its
+ * length (`end_tick − start_tick`): the rating is points per minute alive. A rating needs two
+ * counted lives (there's no interval with one); it is written with the `activated_at` it counted
+ * from, so the stint triggers ignore a write that raced a rollback.
  *
  * **Idempotent.** `ratings.life_seq` says which lives a rating already covers; a life with a
  * smaller `seq` is never added again, so a cursor moved back, a replayed batch or a rebuild that
  * got ahead of the cursor count every life once.
  *
+ * **Format.** `rating_progress.format` says what the ratings are: 1 means per life (before long
+ * lives), 2 points per minute. A run that finds 1 first deletes every rating and moves the cursor
+ * back to 0 (`resetFormat`), so they are all rebuilt from `lives`, however the old job left them
+ * (it runs until this code is deployed, after migration 0014). Then triggers keep a run of the old
+ * code that is still in flight out: its commit aborts as a whole, upserts and deletes included
+ * (its cursor move doesn't set `job_rev`), version-1 windows are ignored, and a version-1 row
+ * that got in anyway is rebuilt (marked, below).
+ *
  * **Rebuilds.** A row whose state can't be continued (none yet, `life_seq` null, another stint,
- * a window scored differently) is rebuilt from `lives`: the last 200 counted lives and their count.
+ * a window scored differently or in the old per-life format) is rebuilt from `lives`: the last 200
+ * counted lives, and the count and total length of all of them.
  * Setting `life_seq = NULL` asks for a rebuild; each run does up to `rebuildsPerRun` of those. To
  * rebuild by hand (wrangler `d1 execute DB --remote --env staging --command "..."`):
  *
@@ -49,10 +60,13 @@ import {
   DEFAULT_RATING_CONFIG,
   fromRatingsRow,
   MAX_LIFE_SCORE,
+  MAX_LIFE_TICKS,
+  type RatedLife,
   type RatingConfig,
   type RatingState,
   toRatingsRow,
 } from "@zerosnake/rating";
+import { COUNTED_ENDING_SQL, reachedLifeCap, type StoredDeathCause } from "../shared/lives";
 
 export interface RatingJobEnv {
   DB: D1Database;
@@ -63,7 +77,10 @@ export interface RatingJobOptions {
   batchLives?: number;
   /** Lives read per run; the rest wait for the next run. */
   maxLives?: number;
-  /** Ratings marked for a rebuild (`life_seq IS NULL`) rebuilt per run. */
+  /**
+   * Ratings marked for a rebuild (`life_seq IS NULL`, or a version-1 window: the old per-life
+   * format) rebuilt per run.
+   */
   rebuildsPerRun?: number;
   config?: RatingConfig;
 }
@@ -92,9 +109,6 @@ export const RATING_JOB_DEFAULTS = {
   rebuildsPerRun: 50,
 } as const;
 
-/** `death_cause` of lives the platform ended (not the bot's doing); they don't count. */
-export const UNCOUNTED_DEATH_CAUSE = "retired";
-
 /** Keeps each JSON parameter well under D1's statement and value size limits. */
 const MAX_JSON_PARAM = 90_000;
 
@@ -105,15 +119,22 @@ interface Progress {
   ratedSeq: number;
   assignedSeq: number;
   rev: number;
+  /** `rating_progress.format`: 1 per-life ratings (to reset), 2 points per minute. */
+  format: number;
 }
+
+/** `rating_progress.format` of points-per-minute ratings. */
+export const RATINGS_FORMAT = 2;
 
 interface LifeRow {
   id: string;
   seq: number;
   version_id: string;
   score: number;
+  start_tick: number;
+  end_tick: number;
   started_at: number;
-  death_cause: string | null;
+  death_cause: StoredDeathCause | null;
 }
 
 /** A version and its current rating row, if any. */
@@ -123,6 +144,7 @@ interface Current {
   row: {
     activatedAt: number | null;
     nLives: number;
+    aliveTicks: number;
     recentScores: string | null;
     lifeSeq: number | null;
   } | null;
@@ -133,8 +155,10 @@ interface RatingWrite {
   id: string;
   activatedAt: number | null;
   mean: number;
-  ci: number;
+  /** `null` without an interval (fewer than two lives' worth, `MIN_EFFECTIVE_LIVES`). */
+  ci: number | null;
   nLives: number;
+  aliveTicks: number;
   recentScores: string;
   lifeSeq: number;
 }
@@ -153,7 +177,7 @@ export async function updateRatings(
 ): Promise<RatingJobResult> {
   const { batchLives, maxLives, rebuildsPerRun } = { ...RATING_JOB_DEFAULTS, ...options };
   const config = options.config ?? DEFAULT_RATING_CONFIG;
-  let progress = await readProgress(db);
+  let progress = await resetFormat(db, await readProgress(db), now);
   let lives = 0;
   let ratings = 0;
   let conflicts = 0;
@@ -163,8 +187,8 @@ export async function updateRatings(
     const limit = Math.min(batchLives, maxLives - lives);
     const { results: batch } = await db
       .prepare(
-        `SELECT id, seq, version_id, score, started_at, death_cause FROM lives
-         WHERE seq > ?1 ORDER BY seq LIMIT ?2`,
+        `SELECT id, seq, version_id, score, start_tick, end_tick, started_at, death_cause
+         FROM lives WHERE seq > ?1 ORDER BY seq LIMIT ?2`,
       )
       .bind(progress.ratedSeq, limit)
       .all<LifeRow>();
@@ -196,7 +220,10 @@ export async function updateRatings(
   let rebuildsLeft = false;
   if (conflicts < MAX_CONFLICTS && rebuildsPerRun > 0) {
     const { results: marked } = await db
-      .prepare("SELECT version_id FROM ratings WHERE life_seq IS NULL LIMIT ?1")
+      .prepare(
+        `SELECT version_id FROM ratings
+         WHERE life_seq IS NULL OR json_extract(recent_scores, '$.v') = 1 LIMIT ?1`,
+      )
       .bind(rebuildsPerRun)
       .all<{ version_id: string }>();
     if (marked.length > 0) {
@@ -259,20 +286,32 @@ export async function runRatingJob(env: RatingJobEnv, now: Date, options?: Ratin
   }
 }
 
-/** Whether `@zerosnake/rating` can take `score` (it throws a `RangeError` otherwise). */
-function ratableScore(score: unknown): score is number {
-  return typeof score === "number" && Math.abs(score) <= MAX_LIFE_SCORE;
+/** Whether `@zerosnake/rating` can take the life (it throws a `RangeError` otherwise). */
+function ratable(life: Pick<LifeRow, "score" | "start_tick" | "end_tick">): boolean {
+  const ticks = life.end_tick - life.start_tick;
+  return (
+    typeof life.score === "number" &&
+    Math.abs(life.score) <= MAX_LIFE_SCORE &&
+    Number.isInteger(ticks) &&
+    ticks >= 0 &&
+    ticks <= MAX_LIFE_TICKS
+  );
+}
+
+/** The life as the rating takes it: its score and length. */
+function ratedLife(life: Pick<LifeRow, "score" | "start_tick" | "end_tick">): RatedLife {
+  return { score: life.score, ticks: life.end_tick - life.start_tick };
 }
 
 /** Whether a life counts toward its version's rating in the stint that began at `activatedAt`. */
 export function countsToward(
-  life: Pick<LifeRow, "started_at" | "death_cause">,
+  life: Pick<LifeRow, "started_at" | "death_cause" | "start_tick" | "end_tick">,
   activatedAt: number | null,
 ): boolean {
-  return (
-    life.death_cause !== UNCOUNTED_DEATH_CAUSE &&
-    (activatedAt === null || life.started_at >= activatedAt)
-  );
+  const ended =
+    life.death_cause !== "retired" ||
+    reachedLifeCap(life.death_cause, life.end_tick - life.start_tick);
+  return ended && (activatedAt === null || life.started_at >= activatedAt);
 }
 
 // ─── Steps ──────────────────────────────────────────────────────────────────────────────────────
@@ -286,13 +325,14 @@ async function applyLives(
 ): Promise<Changes> {
   const byVersion = new Map<string, LifeRow[]>();
   for (const life of batch) {
-    if (!ratableScore(life.score)) {
+    if (!ratable(life)) {
       // Rebuilds leave it out too (see `rebuild`), so skipping it here is all it takes.
       log("warn", "ratings.life_skipped", {
         lifeId: life.id,
         versionId: life.version_id,
         seq: life.seq,
         score: String(life.score),
+        ticks: String(life.end_tick - life.start_tick),
       });
       continue;
     }
@@ -315,7 +355,7 @@ async function applyLives(
     let next: RatingState = state;
     for (const life of versionLives) {
       if (life.seq > after && countsToward(life, c.activatedAt)) {
-        next = addLife(next, life.score, config);
+        next = addLife(next, ratedLife(life), config);
       }
     }
     // Nothing counted: leave the row (and its `life_seq`) as it is.
@@ -331,7 +371,10 @@ function continuable(c: Current, config: RatingConfig): RatingState | null {
   if (!row || row.lifeSeq === null || row.recentScores === null) return null;
   if (row.activatedAt !== c.activatedAt) return null;
   try {
-    return fromRatingsRow({ nLives: row.nLives, recentScores: row.recentScores }, config);
+    return fromRatingsRow(
+      { nLives: row.nLives, aliveTicks: row.aliveTicks, recentScores: row.recentScores },
+      config,
+    );
   } catch {
     return null; // a corrupt window: rebuild it
   }
@@ -346,37 +389,42 @@ async function rebuild(
 ): Promise<Changes> {
   const changes: Changes = { writes: [], deletes: [] };
   if (targets.length === 0) return changes;
-  const scores = new Map<string, { scores: number[]; n: number }>();
+  const found = new Map<string, { lives: RatedLife[]; n: number; ticks: number }>();
   for (const chunk of jsonChunks(targets.map((t) => ({ id: t.versionId, from: t.activatedAt })))) {
-    // The last `window` counted lives of each version, oldest first, and how many it has.
-    // Scores `ratableScore` rejects are left out (text sorts above every number in SQLite).
+    // The last `window` counted lives of each version, oldest first, with how many it has and
+    // how long they lasted in all (each at least a tick, as `@zerosnake/rating` counts them).
+    // Lives `ratable` rejects are left out (text sorts above every number in SQLite).
     const { results } = await db
       .prepare(
-        `SELECT version_id, score, n FROM (
-           SELECT l.version_id, l.score, l.seq,
+        `SELECT version_id, score, ticks, n, total FROM (
+           SELECT l.version_id, l.score, l.seq, l.end_tick - l.start_tick AS ticks,
              row_number() OVER (PARTITION BY l.version_id ORDER BY l.seq DESC) AS k,
-             count(*) OVER (PARTITION BY l.version_id) AS n
+             count(*) OVER (PARTITION BY l.version_id) AS n,
+             sum(max(1, l.end_tick - l.start_tick)) OVER (PARTITION BY l.version_id) AS total
            FROM json_each(?1) AS t
            JOIN lives AS l ON l.version_id = t.value ->> '$.id'
            WHERE l.seq <= ?2
              AND l.started_at >= coalesce(t.value ->> '$.from', 0)
-             AND l.death_cause IS NOT ?4
-             AND l.score BETWEEN -?5 AND ?5
+             AND ${COUNTED_ENDING_SQL}
+             AND l.score BETWEEN -?4 AND ?4
+             AND l.end_tick - l.start_tick BETWEEN 0 AND ?5
          )
          WHERE k <= ?3 ORDER BY version_id, seq`,
       )
-      .bind(chunk, through, config.window, UNCOUNTED_DEATH_CAUSE, MAX_LIFE_SCORE)
-      .all<{ version_id: string; score: number; n: number }>();
+      .bind(chunk, through, config.window, MAX_LIFE_SCORE, MAX_LIFE_TICKS)
+      .all<{ version_id: string; score: number; ticks: number; n: number; total: number }>();
     for (const r of results) {
-      const s = scores.get(r.version_id);
-      if (s) s.scores.push(r.score);
-      else scores.set(r.version_id, { scores: [r.score], n: r.n });
+      const life = { score: r.score, ticks: r.ticks };
+      const s = found.get(r.version_id);
+      if (s) s.lives.push(life);
+      else found.set(r.version_id, { lives: [life], n: r.n, ticks: r.total });
     }
   }
   for (const t of targets) {
-    const s = scores.get(t.versionId);
+    const s = found.get(t.versionId);
     if (s && s.n >= 2) {
-      changes.writes.push(toWrite(t, createRatingState(s.scores, s.n, config), through, config));
+      const state = createRatingState(s.lives, s.n, s.ticks, config);
+      changes.writes.push(toWrite(t, state, through, config));
     } else if (t.row) {
       changes.deletes.push(t.versionId);
     }
@@ -391,13 +439,13 @@ function toWrite(
   config: RatingConfig,
 ): RatingWrite {
   const row = toRatingsRow(state, config);
-  if (row.ci === null) throw new RangeError(`rating of ${c.versionId} has no interval`);
   return {
     id: c.versionId,
     activatedAt: c.activatedAt,
     mean: row.mean,
     ci: row.ci,
     nLives: row.nLives,
+    aliveTicks: row.aliveTicks,
     recentScores: row.recentScores,
     lifeSeq: through,
   };
@@ -425,15 +473,17 @@ async function commit(
       db
         .prepare(
           `INSERT INTO ratings
-             (version_id, activated_at, mean, ci, n_lives, recent_scores, life_seq, updated_at)
+             (version_id, activated_at, mean, ci, n_lives, alive_ticks, recent_scores, life_seq,
+              updated_at)
            SELECT v.id, w.value ->> '$.activatedAt', w.value ->> '$.mean', w.value ->> '$.ci',
-             w.value ->> '$.nLives', w.value ->> '$.recentScores', w.value ->> '$.lifeSeq', ?3
+             w.value ->> '$.nLives', w.value ->> '$.aliveTicks', w.value ->> '$.recentScores',
+             w.value ->> '$.lifeSeq', ?3
            FROM json_each(?1) AS w JOIN versions AS v ON v.id = w.value ->> '$.id'
            WHERE ${guard}
            ON CONFLICT (version_id) DO UPDATE SET activated_at = excluded.activated_at,
              mean = excluded.mean, ci = excluded.ci, n_lives = excluded.n_lives,
-             recent_scores = excluded.recent_scores, life_seq = excluded.life_seq,
-             updated_at = excluded.updated_at`,
+             alive_ticks = excluded.alive_ticks, recent_scores = excluded.recent_scores,
+             life_seq = excluded.life_seq, updated_at = excluded.updated_at`,
         )
         .bind(chunk, rev, t),
     );
@@ -450,7 +500,8 @@ async function commit(
   statements.push(
     db
       .prepare(
-        `UPDATE rating_progress SET rated_seq = max(rated_seq, ?1), rev = rev + 1, updated_at = ?3
+        `UPDATE rating_progress SET rated_seq = max(rated_seq, ?1), rev = rev + 1,
+           job_rev = rev + 1, updated_at = ?3
          WHERE id = 1 AND rev = ?2
          RETURNING rated_seq, rev`,
       )
@@ -465,10 +516,42 @@ async function commit(
 
 async function readProgress(db: D1Database): Promise<Progress> {
   const row = await db
-    .prepare("SELECT rated_seq, assigned_seq, rev FROM rating_progress WHERE id = 1")
-    .first<{ rated_seq: number; assigned_seq: number; rev: number }>();
+    .prepare("SELECT rated_seq, assigned_seq, rev, format FROM rating_progress WHERE id = 1")
+    .first<{ rated_seq: number; assigned_seq: number; rev: number; format: number }>();
   if (!row) throw new Error("rating_progress has no row: run the D1 migrations");
-  return { ratedSeq: row.rated_seq, assignedSeq: row.assigned_seq, rev: row.rev };
+  return {
+    ratedSeq: row.rated_seq,
+    assignedSeq: row.assigned_seq,
+    rev: row.rev,
+    format: row.format,
+  };
+}
+
+/**
+ * Ratings in an older format (`rating_progress.format` below `RATINGS_FORMAT`: means per life)
+ * are all deleted and the cursor goes back to 0, in one transaction guarded by `rev`, so the job
+ * replays every life into new ratings. Whatever the old job wrote or skipped before this code was
+ * deployed is gone with it; the triggers of migration 0014 keep it out afterwards. Returns the
+ * progress to carry on from.
+ */
+async function resetFormat(db: D1Database, progress: Progress, now: Date): Promise<Progress> {
+  if (progress.format >= RATINGS_FORMAT) return progress;
+  const guard = "(SELECT rev FROM rating_progress WHERE id = 1) = ?1";
+  await db.batch([
+    db.prepare(`DELETE FROM ratings WHERE ${guard}`).bind(progress.rev),
+    db
+      .prepare(
+        `UPDATE rating_progress SET format = ?2, rated_seq = 0, rev = rev + 1, job_rev = rev + 1,
+           updated_at = ?3
+         WHERE id = 1 AND rev = ?1`,
+      )
+      .bind(progress.rev, RATINGS_FORMAT, now.getTime()),
+  ]);
+  const after = await readProgress(db);
+  if (after.format >= RATINGS_FORMAT) {
+    log("info", "ratings.format_reset", { format: after.format, rev: after.rev });
+  }
+  return after;
 }
 
 /** `versionIds` that still exist, with their rating rows. */
@@ -481,7 +564,7 @@ async function readCurrent(
     const { results } = await db
       .prepare(
         `SELECT v.id, v.activated_at, r.version_id AS rated, r.activated_at AS r_activated_at,
-           r.n_lives, r.recent_scores, r.life_seq
+           r.n_lives, r.alive_ticks, r.recent_scores, r.life_seq
          FROM json_each(?1) AS j JOIN versions AS v ON v.id = j.value
          LEFT JOIN ratings AS r ON r.version_id = v.id`,
       )
@@ -492,6 +575,7 @@ async function readCurrent(
         rated: string | null;
         r_activated_at: number | null;
         n_lives: number | null;
+        alive_ticks: number | null;
         recent_scores: string | null;
         life_seq: number | null;
       }>();
@@ -505,6 +589,7 @@ async function readCurrent(
             : {
                 activatedAt: r.r_activated_at,
                 nLives: r.n_lives ?? 0,
+                aliveTicks: r.alive_ticks ?? 0,
                 recentScores: r.recent_scores,
                 lifeSeq: r.life_seq,
               },

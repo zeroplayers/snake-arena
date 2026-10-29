@@ -182,3 +182,23 @@ export async function arenaPaused(db: D1Database): Promise<boolean> {
     .first<{ paused: number }>();
   return Boolean(row?.paused);
 }
+
+/**
+ * The matchmaker's heartbeat (`arena_heartbeat`, apps/web `schema.ts`): when, and how many lives
+ * it has in flight. Lives are written to `lives` only when they end, and last until the snake
+ * dies, so the site's liveness check needs this to tell "strong bots alive for hours" from "no
+ * lives at all".
+ */
+export async function recordHeartbeat(
+  db: D1Database,
+  beat: { at: number; livesInFlight: number; rooms: number },
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO arena_heartbeat (id, at, lives_in_flight, rooms) VALUES (1, ?1, ?2, ?3)
+       ON CONFLICT (id) DO UPDATE SET at = excluded.at, lives_in_flight = excluded.lives_in_flight,
+         rooms = excluded.rooms`,
+    )
+    .bind(beat.at, beat.livesInFlight, beat.rooms)
+    .run();
+}

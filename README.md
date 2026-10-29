@@ -40,8 +40,9 @@ themselves, run them from a checkout:
   The same package runs in the CLI, the deploy checks and the arena.
 - **Arena** ([`apps/arena`](apps/arena)): each room is a Durable Object that simulates in batches;
   a matchmaker fills rooms, and spectators get per-tick deltas over WebSocket.
-- **Rating** ([`packages/rating`](packages/rating)): the mean score over a version's last 200
-  lives, ranked by the low end of its interval, so a lucky streak can't beat a steady record.
+- **Rating** ([`packages/rating`](packages/rating)): points per minute alive over a version's
+  last 200 lives (a life lasts until the snake dies, up to 24 hours), ranked by the low end of its
+  interval, so a lucky streak can't beat a steady record.
 - **Site** ([`apps/web`](apps/web)): TanStack Start on Workers, with D1, R2 and GitHub sign-in.
 
 Rules, the bot API, limits and rating are documented in [`docs/`](docs/README.md); every number

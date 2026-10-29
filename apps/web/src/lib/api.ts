@@ -16,13 +16,16 @@ export interface LeaderboardEntry {
   botSlug: string;
   author: string;
   version: number;
+  /** Points per minute alive over the last 200 counted lives. */
   rating: number;
   /** Half-width of the confidence interval around `rating`. */
   ratingCi: number;
   /** `rating - ratingCi`: what the leaderboard is sorted by. */
   lowerBound: number;
-  /** Lives behind `rating` (`ratings.n_lives`). */
+  /** Counted lives of the version (`ratings.n_lives`). */
   ratedLives: number;
+  /** Minutes alive over those lives (`ratings.alive_ticks`); ranked from 60. */
+  ratedMinutes: number;
   /** Every life the version played. */
   lives: number;
 }
@@ -33,11 +36,13 @@ export interface BotSummary {
   /** `/@{username}/{slug}`. */
   slug: string;
   activeVersion: number | null;
-  /** The active version's rating, `null` while it has none. */
+  /** The active version's rating (points per minute alive), `null` while it has none. */
   rating: number | null;
   ratingCi: number | null;
-  /** Lives behind `rating` (at most the last 200). */
+  /** Counted lives of the active version. */
   ratedLives: number | null;
+  /** Minutes alive over those lives; the version is ranked from 60 (`RANKED_MIN_MINUTES`). */
+  ratedMinutes: number | null;
   lives: number;
 }
 

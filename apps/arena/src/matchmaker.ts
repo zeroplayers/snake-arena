@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { log, writeMetric } from "@zerosnake/observability";
 import type { ActiveVersionChange, ArenaControl, MatchmakerSiteRpc } from "@zerosnake/web/shared";
-import { arenaPaused, recordQuarantine } from "./db.ts";
+import { arenaPaused, recordHeartbeat, recordQuarantine } from "./db.ts";
 import {
   DAY_MS,
   DEFAULT_MATCHMAKER_CONFIG,
@@ -90,10 +90,13 @@ export interface MatchmakerStatus {
  *     rooms as they ask (`nextLife`): a room asks while it holds fewer than `maxSnakes` real
  *     lives, and a house bot gives its slot up for each life it gets;
  *  5. compares rooms' lives with the ledger (`status()`), so a life nobody reported for
- *     `lostAfterMs` frees its bot;
+ *     `lostAfterMs` after its room stopped holding it frees its bot. Lives last until the snake
+ *     dies (up to 24 hours of game time), so a strong bot keeps its one life, and its slot, for
+ *     hours: by design. A held life is never lost, however long ago it was issued;
  *  6. forgets ledger rows older than yesterday, and evictions older than `EVICTION_WINDOW_MS`;
  *  7. writes the `arena.gauge` metric (rooms, lives in flight and waiting, playable and
- *     exhausted bots) every `gaugeMs`.
+ *     exhausted bots) every `gaugeMs`, and the heartbeat row in D1 (`arena_heartbeat`: lives in
+ *     flight), which the site's liveness check reads: lives reach `lives` only when they end.
  *
  * Metrics (`@zerosnake/observability`, the `METRICS` binding; none without it): `arena.gauge`,
  * `room.stalled` (step 5 found a running room whose tick didn't move since its last check) and
@@ -112,6 +115,8 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
   private gaugeAt = Number.NEGATIVE_INFINITY;
   /** Each running room's tick at its last check, and since when it is that (in memory only). */
   private readonly progress = new Map<string, { tick: number; since: number }>();
+  /** Running rooms whose tick didn't move at their last check (in memory only). */
+  private readonly stalled = new Set<string>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -270,6 +275,7 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
   async roomClosed(roomId: string): Promise<void> {
     this.store.setRoom(roomId, "closed", this.now());
     this.progress.delete(roomId);
+    this.stalled.delete(roomId);
   }
 
   // --- Site → matchmaker (hints: the alarm loop finds the same in D1) ------------------------
@@ -301,18 +307,30 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
     await this.checkRooms(c);
     const now = this.now();
     this.store.prune(utcDay(now), now, now - EVICTION_WINDOW_MS, PRUNE_ROWS);
-    this.gauge(c, now);
+    await this.gauge(c, now);
     return { more };
   }
 
-  /** The `arena.gauge` metric, at most every `gaugeMs`. */
-  private gauge(c: MatchmakerConfig, now: number): void {
+  /** The `arena.gauge` metric and the D1 heartbeat, at most every `gaugeMs`. */
+  private async gauge(c: MatchmakerConfig, now: number): Promise<void> {
     if (now - this.gaugeAt < c.gaugeMs) return;
     this.gaugeAt = now;
     const day = utcDay(now);
+    const rooms = this.store.rooms().length;
+    const liveSnakes = this.store.countIssued();
+    // The heartbeat counts only lives in rooms that are moving: a stuck room's lives aren't
+    // progress, and the liveness check should alert on them.
+    let livesInFlight = liveSnakes;
+    for (const roomId of this.stalled) livesInFlight -= this.store.issuedIn(roomId).length;
+    try {
+      await recordHeartbeat(this.env.DB, { at: now, livesInFlight, rooms });
+    } catch (e) {
+      // Only the liveness check reads it; it alerts if this keeps failing with lives in flight.
+      log("warn", "matchmaker.heartbeat_failed", { error: e });
+    }
     writeMetric(this.env.METRICS, "arena.gauge", {
-      rooms: this.store.rooms().length,
-      liveSnakes: this.store.countIssued(),
+      rooms,
+      liveSnakes,
       queuedLives: this.store.countWaiting(day, c.livesPerBotPerDay),
       readyVersions: this.store.countPlayable(),
       exhausted: this.store.countExhausted(day, c.livesPerBotPerDay),
@@ -497,8 +515,11 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
   }
 
   /**
-   * Compares rooms' lives with the ledger, a few rooms per alarm: a life issued over
-   * `lostAfterMs` ago that its room doesn't hold and nobody reported is lost. Also notices rooms
+   * Compares rooms' lives with the ledger, a few rooms per alarm: a life the room holds is noted
+   * (`heldAt`) while the room's tick moves; one it doesn't hold, or holds in a room that stopped
+   * moving, last held (or issued, if never seen held) over `lostAfterMs` ago and not reported, is
+   * lost (also a room held back by its outbox that long: see `lostAfterMs`). A life the room
+   * reports older than `overdueLifeTicks` (game time) is retired. Also notices rooms
    * that stopped, and running rooms whose tick didn't move since their last check (`room.stalled`:
    * a running room always ticks, real lives or house bots, unless its outbox is full).
    */
@@ -513,8 +534,9 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
         continue;
       }
       const held = new Set([...s.snakes.map((x) => x.lifeId), ...s.pending]);
+      const lifeTicks = new Map(s.snakes.map((x) => [x.lifeId, x.lifeTick]));
       const now = this.now();
-      this.checkProgress(r.roomId, s, now);
+      const moving = this.checkProgress(r.roomId, s, now);
       this.store.transaction(() => {
         this.store.roomChecked(r.roomId, now);
         const running = s.state === "running";
@@ -522,7 +544,18 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
           this.store.setRoom(r.roomId, running ? "open" : "closed", now);
         }
         for (const life of this.store.issuedIn(r.roomId)) {
-          if (held.has(life.lifeId) || now - life.issuedAt < c.lostAfterMs) continue;
+          if (held.has(life.lifeId)) {
+            if ((lifeTicks.get(life.lifeId) ?? 0) > c.overdueLifeTicks) {
+              // Past the life cap in game time: its room is broken on it. Freed once it leaves.
+              log("warn", "matchmaker.life_overdue", { roomId: r.roomId, lifeId: life.lifeId });
+              this.store.retireLife(life.lifeId);
+            }
+            if (moving) {
+              this.store.markHeld(life.lifeId, now);
+              continue;
+            }
+          }
+          if (now - Math.max(life.issuedAt, life.heldAt) < c.lostAfterMs) continue;
           console.warn("matchmaker: life lost", r.roomId, life.lifeId);
           this.store.loseLife(life.lifeId, now);
         }
@@ -530,17 +563,23 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
     }
   }
 
-  /** Notes a room's tick; reports it stalled when it hasn't moved for a room check or more. */
-  private checkProgress(roomId: string, s: RoomStatus, now: number): void {
+  /**
+   * Notes a room's tick; reports it stalled when it hasn't moved for a room check or more.
+   * Returns whether it moved since the last check (also at the first check this object makes).
+   */
+  private checkProgress(roomId: string, s: RoomStatus, now: number): boolean {
     if (s.state !== "running") {
       this.progress.delete(roomId);
-      return;
+      this.stalled.delete(roomId);
+      return false;
     }
     const seen = this.progress.get(roomId);
     if (!seen || seen.tick !== s.tick) {
       this.progress.set(roomId, { tick: s.tick, since: now });
-      return;
+      this.stalled.delete(roomId);
+      return true;
     }
+    this.stalled.add(roomId);
     const fields = {
       roomId,
       reason: s.paused ? "outbox_full" : "no_progress",
@@ -550,6 +589,7 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
     };
     writeMetric(this.env.METRICS, "room.stalled", fields);
     log("error", "room.stalled", { ...fields, failing: s.outbox.failing });
+    return false;
   }
 
   // --- Helpers -----------------------------------------------------------------------------

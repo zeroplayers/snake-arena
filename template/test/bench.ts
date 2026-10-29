@@ -10,9 +10,11 @@
  * Every bot plays the same seeds against the same lineup (`BENCH_LINEUP` in match.ts), so
  * differences come from the bots, and `playMatch(bundle, { seed, ticks, opponents: BENCH_LINEUP })`
  * replays any bench match exactly.
- * Scores are per life (the arena rates a version by its mean life score); lives still going when
- * a match ends count with their score so far. `±` is the standard error of the mean: treat two
- * versions as different only when their means are further apart than about twice that.
+ * `pts/min` is the arena's rating: total score over total minutes alive (a life lasts until the
+ * snake dies, up to 24 hours, so a match always cuts the best lives short; they count with their
+ * score and time so far, which a rate handles fairly). `mean score` is per life, what the deploy
+ * checks compare with `easy`. `±` is the standard error: treat two versions as different only when
+ * they are further apart than about twice that.
  */
 import { parseArgs } from "node:util";
 import { nearestDanger } from "@zerosnake/sdk";
@@ -34,7 +36,9 @@ const deathsToShow = Number(values.deaths);
 const contextTicks = Number(values.context);
 
 console.log(`${seeds} seeds x ${ticks} ticks vs ${LINEUP.join(", ")}`);
-const rows: string[][] = [["bot", "lives", "mean score", "mean ticks", "deaths", "max ops"]];
+const rows: string[][] = [
+  ["bot", "lives", "pts/min", "mean score", "mean ticks", "deaths", "max ops"],
+];
 const house: Life[] = [];
 for (const entry of entries) {
   const bundle = await bundleBot(entry);
@@ -114,9 +118,21 @@ function summary(name: string, lives: Life[], ops: string): string[] {
   const scores = lives.map((l) => l.score);
   const causes = new Map<string, number>();
   for (const l of lives) causes.set(l.cause, (causes.get(l.cause) ?? 0) + 1);
+  // Score per minute alive (600 ticks), and its standard error by the delta method.
+  const ticks = lives.reduce((a, l) => a + Math.max(1, l.lifeTicks), 0);
+  const rate = ticks ? (600 * scores.reduce((a, s) => a + s, 0)) / ticks : 0;
+  const residuals = lives.map((l) => l.score - (rate / 600) * Math.max(1, l.lifeTicks));
+  const rateErr =
+    lives.length < 2
+      ? 0
+      : (600 *
+          Math.sqrt(residuals.reduce((a, e) => a + e * e, 0) / (lives.length - 1)) *
+          Math.sqrt(lives.length)) /
+        ticks;
   return [
     name,
     String(lives.length),
+    `${rate.toFixed(1)} ± ${rateErr.toFixed(1)}`,
     `${mean(scores).toFixed(1)} ± ${stderr(scores).toFixed(1)}`,
     mean(lives.map((l) => l.lifeTicks)).toFixed(0),
     [...causes].map(([c, n]) => `${c} ${n}`).join(", "),

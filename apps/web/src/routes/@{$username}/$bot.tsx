@@ -1,14 +1,15 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import {
-  DEATH_CAUSES,
+  endingLabel,
   formatDate,
   formatDateTime,
   formatRating,
   formatTicks,
+  LIFE_ENDINGS,
 } from "../../components/format";
 import { Empty, PageError, PagePending } from "../../components/PageState";
-import { RatingChart } from "../../components/RatingChart";
+import { isRanked, RatingChart } from "../../components/RatingChart";
 import { SourceFiles } from "../../components/SourceFiles";
 import { canonical, pageMeta } from "../../lib/meta";
 import type { Killer, LifeRow, VersionRow } from "../../queries/bot";
@@ -72,7 +73,7 @@ const STATUS: Record<VersionRow["status"], string> = {
 
 function BotPage() {
   const page = Route.useLoaderData();
-  const { author, bot, versions, selected, minLives, active, hasOlder } = page;
+  const { author, bot, versions, selected, minMinutes, active, hasOlder } = page;
   const versionsPage = page.page;
   const paged = hasOlder || versionsPage > 1;
   const pageSearch = versionsPage > 1 ? { page: versionsPage } : {};
@@ -93,7 +94,9 @@ function BotPage() {
           ) : active ? (
             <>
               Active: <span className="accent">v{active.n}</span>, rated{" "}
-              {formatRating(active.rating, active.ratingCi)}
+              {active.rating === null
+                ? formatRating(null)
+                : `${formatRating(active.rating, active.ratingCi)} points per minute alive`}
               {active.quarantine && (
                 <>
                   {" "}
@@ -119,7 +122,7 @@ function BotPage() {
             </span>
           )}
         </h2>
-        <RatingChart versions={versions} minLives={minLives} />
+        <RatingChart versions={versions} minMinutes={minMinutes} />
       </section>
 
       <section className="panel">
@@ -141,7 +144,9 @@ function BotPage() {
                 <tr>
                   <th>Version</th>
                   <th>Status</th>
-                  <th className="num">Rating</th>
+                  <th className="num" title="Points per minute alive">
+                    Pts/min
+                  </th>
                   <th className="num">Lives</th>
                   <th className="hide-narrow">Deployed</th>
                 </tr>
@@ -170,7 +175,7 @@ function BotPage() {
                     </td>
                     <td className="num">
                       {formatRating(v.rating, v.ratingCi)}
-                      {v.ratedLives !== null && v.ratedLives < minLives && (
+                      {v.rating !== null && !isRanked(v, minMinutes) && (
                         <div className="muted small">unranked</div>
                       )}
                     </td>
@@ -219,8 +224,8 @@ function BotPage() {
             {selected.causes.length > 0 && (
               <ul className="chips" aria-label="Death causes">
                 {selected.causes.map((c) => (
-                  <li key={c.cause} className="chip">
-                    {DEATH_CAUSES[c.cause]} <span className="muted">{c.count}</span>
+                  <li key={c.ending} className="chip">
+                    {LIFE_ENDINGS[c.ending]} <span className="muted">{c.count}</span>
                   </li>
                 ))}
               </ul>
@@ -249,7 +254,7 @@ function LivesTable({ lives }: { lives: LifeRow[] }) {
         <thead>
           <tr>
             <th className="num">Score</th>
-            <th>Death</th>
+            <th>Ending</th>
             <th className="num hide-narrow">Length</th>
             <th className="num hide-narrow">Kills</th>
             <th className="num hide-narrow">Time</th>
@@ -262,7 +267,7 @@ function LivesTable({ lives }: { lives: LifeRow[] }) {
             <tr key={life.id}>
               <td className="num">{life.score}</td>
               <td>
-                {life.deathCause ? DEATH_CAUSES[life.deathCause] : "—"}
+                {life.ending ? endingLabel(life.ending, life.ticks) : "—"}
                 {life.killer && (
                   <div className="muted small">
                     by <KillerName killer={life.killer} />

@@ -15,7 +15,8 @@ import {
 } from "@zerosnake/web/shared";
 import { afterAll, describe, expect, it } from "vitest";
 import { main } from "./cli.ts";
-import { DEFAULT_CONTEXT } from "./commands/logs.ts";
+import { DEFAULT_CONTEXT, lifeEnding } from "./commands/logs.ts";
+import { describeRating } from "./commands/status.ts";
 import { Credentials } from "./remote/config.ts";
 import { apiError, FakeArena, htmlNotFound, SERVER } from "./testing/fake-arena.ts";
 import {
@@ -591,6 +592,29 @@ describe("zerosnake deploy", () => {
 });
 
 describe("zerosnake status", () => {
+  it("states the ranking rule of long lives: an hour alive and an interval", () => {
+    const bot = { slug: "s", activeVersion: 1, lives: 2 };
+    expect(
+      describeRating({ ...bot, rating: 60, ratingCi: null, ratedLives: 2, ratedMinutes: 61 }),
+    ).toBe(
+      "60.0 pts/min over 2 lives, 1 h 01 min alive · unranked: too few lives for an interval yet",
+    );
+    expect(
+      describeRating({ ...bot, rating: 60, ratingCi: 5, ratedLives: 9, ratedMinutes: 59.9 }),
+    ).toContain("unranked until 60 minutes alive");
+  });
+
+  it("tells a life that reached the cap from one the arena stopped", () => {
+    const end = (ticks: number) =>
+      lifeEnding({ deathCause: "retired", killer: null, ticks }).replace(
+        new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"),
+        "",
+      );
+    expect(end(864_000)).toBe("finished: reached the 24-hour life cap");
+    expect(end(6000)).toBe("finished: reached the 10-minute life cap");
+    expect(end(1234)).toBe("stopped by the arena");
+  });
+
   it("shows bots, versions, ratings and deploys left", async () => {
     const { arena, run } = setUp();
     arena.addBot("greedy");
@@ -603,8 +627,8 @@ describe("zerosnake status", () => {
       (await run(["deploy", "--skip-local-checks", "--bot", "greedy", "--no-wait"])).code,
     ).toBe(0);
     arena.ratings = {
-      greedy: { rating: 312.44, ratingCi: 18.2, ratedLives: 64, lives: 1234 },
-      draft: { rating: 50, ratingCi: 40, ratedLives: 12, lives: 12 },
+      greedy: { rating: 312.44, ratingCi: 18.2, ratedLives: 64, ratedMinutes: 95.5, lives: 1234 },
+      draft: { rating: 50, ratingCi: 40, ratedLives: 12, ratedMinutes: 20, lives: 12 },
     };
 
     const r = await run(["status"]);
@@ -612,9 +636,11 @@ describe("zerosnake status", () => {
     expect(r.out).toContain(`Logged in to ${SERVER} as @ada`);
     expect(r.out).toContain(`greedy ${SERVER}/@ada/greedy`);
     expect(r.out).toMatch(/active\s+v1\n\s+latest\s+v2 · validating · deployed 1 min ago/);
-    expect(r.out).toContain("312.4 ± 18.2 over 64 lives · ranked");
+    expect(r.out).toContain("312.4 ± 18.2 pts/min over 64 lives, 1 h 35 min alive · ranked");
     expect(r.out).toContain("1,234 played (all versions)");
-    expect(r.out).toContain("50.0 ± 40.0 over 12 lives · unranked until 30 lives");
+    expect(r.out).toContain(
+      "50.0 ± 40.0 pts/min over 12 lives, 20 min alive · unranked until 60 minutes alive",
+    );
     expect(r.out).toMatch(/newbie .+\n\s+active\s+none \(not in the arena\)/);
     expect(r.out).toMatch(/Deploys today: 3 of 20, 17 left \(resets at .+\)/);
 

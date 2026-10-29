@@ -32,7 +32,7 @@ describe("bundleBot", () => {
       worldHalfSize: 100,
       visionRadius: 40,
       tickRate: 10,
-      maxLifeTicks: 6000,
+      maxLifeTicks: 864_000,
       opBudget: DEFAULT_OP_BUDGET,
       logLimitBytes: LOG_LIMIT_BYTES,
       seed: 1,

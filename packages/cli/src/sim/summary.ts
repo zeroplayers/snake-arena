@@ -17,7 +17,7 @@ export function describeDeath(life: SimLife): string {
     case "wall":
       return "hit the wall";
     case "retired":
-      return "retired at the life cap";
+      return "finished: reached the life cap";
     case "timeout":
     case "error":
       return d.sandbox ? describeVerdict(d.sandbox) : d.cause;

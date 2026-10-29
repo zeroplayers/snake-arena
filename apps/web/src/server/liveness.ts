@@ -7,6 +7,12 @@
  * - the newest `lives` row (start or end), by `rowid` so it reads a few rows, not the table;
  * - the latest activation of a `ready` version (a first deploy has had no time to play yet);
  * - the last change of the kill switch (a resume has had no time either);
+ * - the matchmaker's latest heartbeat (`arena_heartbeat`, about every minute) while it reports
+ *   lives in flight: a life is written to `lives` only when it ends, and lives last until the
+ *   snake dies (up to 24 hours of game time), so an arena of a few strong bots can go hours
+ *   without a new row while playing fine. It counts only lives in rooms whose tick moves, so a
+ *   matchmaker that stops beating, rooms stuck on their lives, or no lives out while bots wait
+ *   still alert;
  * - 00:00 UTC today (quotas reset then, and the matchmaker has had no time to use them),
  *
  * and reports `stalled` when that's over `NO_LIVES_ALERT_MINUTES` (default 15) while the
@@ -42,6 +48,8 @@ export interface Liveness {
   thresholdMinutes: number;
   /** Unix ms of the newest life's start or end, if any. */
   lastLifeAt: number | null;
+  /** Lives the matchmaker had in flight at its latest heartbeat (0 without one). */
+  livesInFlight: number;
 }
 
 export const DEFAULT_NO_LIVES_ALERT_MINUTES = 15;
@@ -68,7 +76,9 @@ export async function checkLiveness(env: LivenessEnv, now: Date): Promise<Livene
       ) < ?3) AS playable,
       (SELECT max(activated_at) FROM versions WHERE status = 'ready') AS activated_at,
       (SELECT max(max(started_at, coalesce(ended_at, 0)))
-        FROM (SELECT started_at, ended_at FROM lives ORDER BY rowid DESC LIMIT ?1)) AS last_life`,
+        FROM (SELECT started_at, ended_at FROM lives ORDER BY rowid DESC LIMIT ?1)) AS last_life,
+      (SELECT at FROM arena_heartbeat WHERE id = 1) AS beat_at,
+      (SELECT lives_in_flight FROM arena_heartbeat WHERE id = 1) AS in_flight`,
   )
     .bind(RECENT_LIVES, dayStart, ARENA_LIMITS.livesPerBotPerDay)
     .first<{
@@ -78,11 +88,16 @@ export async function checkLiveness(env: LivenessEnv, now: Date): Promise<Livene
       playable: number;
       activated_at: number | null;
       last_life: number | null;
+      beat_at: number | null;
+      in_flight: number | null;
     }>();
   const readyVersions = row?.ready ?? 0;
   const playableVersions = row?.playable ?? 0;
   const lastLifeAt = row?.last_life ?? null;
-  const latest = Math.max(lastLifeAt ?? 0, row?.activated_at ?? 0, row?.control_at ?? 0);
+  const livesInFlight = row?.in_flight ?? 0;
+  // Lives in flight are activity: they will be written when they end.
+  const beatAt = livesInFlight > 0 ? (row?.beat_at ?? 0) : 0;
+  const latest = Math.max(lastLifeAt ?? 0, row?.activated_at ?? 0, row?.control_at ?? 0, beatAt);
   const minutesSinceActivity =
     latest > 0 ? Math.max(0, Math.floor((now.getTime() - latest) / 60_000)) : null;
   // The quota reset is a fresh start, but not a sign of activity to report.
@@ -104,6 +119,7 @@ export async function checkLiveness(env: LivenessEnv, now: Date): Promise<Livene
     playableVersions,
     thresholdMinutes,
     lastLifeAt,
+    livesInFlight,
   };
 }
 

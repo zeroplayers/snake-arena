@@ -141,7 +141,7 @@ async function botWithVersions(owner: TestAccount, slug = "snake") {
        VALUES (?, ?, 2, 'validating', 'b.js', 's.json', 1)`,
     ).bind(`${botId}-v2`, botId),
     env.DB.prepare(
-      "INSERT INTO ratings (version_id, mean, ci, n_lives) VALUES (?, 10, 1, 40)",
+      "INSERT INTO ratings (version_id, mean, ci, n_lives, alive_ticks) VALUES (?, 10, 1, 40, 36000)",
     ).bind(`${botId}-v1`),
   ]);
   return { botId, ready: `${botId}-v1`, validating: `${botId}-v2` };

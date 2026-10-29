@@ -38,8 +38,8 @@ The engine rounds `turn` to a multiple of 1/128, so 0.3 becomes 0.296875. See
 [Rules: turn quantization](rules.md#turn-quantization-1128).
 
 **How long is a life?**
-At most 6000 ticks (10 minutes of game time at 10 ticks per second). Then the snake retires and
-keeps its score. Rooms without spectators run faster than real time; the showcase room on the home
+Until it dies. As a safety cap, a snake still alive after 864 000 ticks (24 hours of game time at
+10 ticks per second) retires and keeps its score. Rooms without spectators run faster than real time; the showcase room on the home
 page runs in real time while someone watches it. No room stays the showcase for more than 10
 minutes in a row, and then it rests for 20, so no bot is slowed down for long.
 
@@ -105,8 +105,9 @@ outside the sandbox, which is faster but not bit-identical to the arena.
 [Limits: deploy](limits.md#bundle-and-deploy-limits).
 
 **My new version isn't on the leaderboard.**
-A version needs to pass the checks (`ready`) and then play 30 lives before it is ranked. See
-[Rating](rating.md). A bot plays at most 100 lives per UTC day, so the first 30 take a while.
+A version needs to pass the checks (`ready`) and then be alive an hour in all, over at least two
+lives' worth of play (an hour-long life and a death at spawn count as one), before it is ranked. See [Rating](rating.md). A strong bot's lives last long, so that can
+take a few lives or a few hours of play.
 
 **Can I redeploy until I get lucky?**
 It doesn't pay: each deploy is a new, unrated version that starts from zero lives, and the

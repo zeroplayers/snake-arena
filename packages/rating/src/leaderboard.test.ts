@@ -3,23 +3,25 @@ import { describe, expect, it } from "vitest";
 import { compareRated, leaderboard, lowerBound, type RatedVersion } from "./leaderboard.ts";
 import { addLife, EMPTY_RATING_STATE, rate } from "./rating.ts";
 
+/** A row; `minutes` alive in all. */
 function row(
   versionId: string,
   mean: number,
   ci: number | null,
-  nLives: number,
+  minutes: number,
   o: Partial<RatedVersion> = {},
 ): RatedVersion {
-  return { versionId, botId: versionId, status: "ready", mean, ci, nLives, ...o };
+  const aliveTicks = minutes * 600;
+  return { versionId, botId: versionId, status: "ready", mean, ci, nLives: 10, aliveTicks, ...o };
 }
 
 const ids = (rows: { versionId: string }[]) => rows.map((r) => r.versionId);
 
 describe("leaderboard", () => {
-  it("leaves out versions under the threshold", () => {
-    const rows = [row("a", 10, 1, 29), row("b", 5, 1, 30)];
+  it("leaves out versions alive less than an hour in all", () => {
+    const rows = [row("a", 10, 1, 59), row("b", 5, 1, 60)];
     expect(ids(leaderboard(rows))).toEqual(["b"]);
-    expect(ids(leaderboard(rows, { minLives: 1 }))).toEqual(["a", "b"]);
+    expect(ids(leaderboard(rows, { minMinutes: 1, ticksPerMinute: 600 }))).toEqual(["a", "b"]);
   });
 
   it("ranks only ready versions", () => {
@@ -44,14 +46,14 @@ describe("leaderboard", () => {
     ]);
   });
 
-  it("orders by lower bound, then narrower interval, then more lives, then id", () => {
+  it("orders by lower bound, then narrower interval, then more time alive, then id", () => {
     const rows = [
-      row("f", 100, 60, 40), // high mean, but lower bound 40
-      row("e", 50, 5, 40),
-      row("d", 90, 6, 40),
-      row("c", 88, 4, 40),
-      row("b", 88, 4, 200),
-      row("a", 88, 4, 200),
+      row("f", 100, 60, 100), // high mean, but lower bound 40
+      row("e", 50, 5, 100),
+      row("d", 90, 6, 100),
+      row("c", 88, 4, 100),
+      row("b", 88, 4, 300),
+      row("a", 88, 4, 300),
     ];
     expect(leaderboard(rows).map((r) => [r.versionId, r.rank, r.lowerBound])).toEqual([
       ["a", 1, 84],
@@ -64,15 +66,17 @@ describe("leaderboard", () => {
   });
 
   it("puts versions without an interval last", () => {
-    const rows = [row("a", 1e6, null, 30), row("b", 1e6, Infinity, 31), row("c", 1, 1e9, 30)];
-    expect(ids(leaderboard(rows))).toEqual(["c", "b", "a"]);
+    const rows = [row("a", 1e6, null, 60), row("b", 1e6, Infinity, 61), row("c", 1, 1e9, 60)];
+    // Without an interval a version isn't ranked at all (too few lives' worth of evidence).
+    expect(ids(leaderboard(rows))).toEqual(["c"]);
+    expect(compareRated(rows[2] as RatedVersion, rows[1] as RatedVersion)).toBeLessThan(0);
     expect(lowerBound({ mean: 5, ci: null })).toBe(-Infinity);
   });
 
   it("keeps the rows' other fields", () => {
-    const [top] = leaderboard([{ ...row("v1", 3, 1, 30), botName: "noodle", author: "alice" }]);
+    const [top] = leaderboard([{ ...row("v1", 3, 1, 60), botName: "noodle", author: "alice" }]);
     expect(top).toEqual({
-      ...row("v1", 3, 1, 30),
+      ...row("v1", 3, 1, 60),
       botName: "noodle",
       author: "alice",
       rank: 1,
@@ -86,7 +90,8 @@ describe("leaderboard", () => {
     status: fc.constantFrom("ready", "ready", "archived"),
     mean: fc.integer({ min: 0, max: 5 }),
     ci: fc.option(fc.integer({ min: 0, max: 3 })),
-    nLives: fc.integer({ min: 25, max: 35 }),
+    nLives: fc.integer({ min: 2, max: 35 }),
+    aliveTicks: fc.integer({ min: 35_000, max: 37_000 }),
   });
 
   it("is sorted, ranked consistently, one per bot and independent of input order", () => {
@@ -100,7 +105,9 @@ describe("leaderboard", () => {
             (a, b) => ((hash(a.versionId) ^ seed) % 7) - ((hash(b.versionId) ^ seed) % 7),
           );
           expect(leaderboard(shuffled)).toEqual(board);
-          const eligible = rows.filter((r) => r.status === "ready" && r.nLives >= 30);
+          const eligible = rows.filter(
+            (r) => r.status === "ready" && r.aliveTicks >= 36_000 && r.ci !== null,
+          );
           expect(board.map((r) => r.botId).sort()).toEqual(
             [...new Set(eligible.map((r) => r.botId))].sort(),
           );
@@ -120,16 +127,19 @@ describe("leaderboard", () => {
 });
 
 describe("redeploy lottery", () => {
-  // Life scores like the simulation's: lognormal with sd ≈ 3.5 × mean.
-  const SIGMA = Math.sqrt(Math.log(1 + 3.5 ** 2));
+  // Lives like a decent bot's: exponential lengths (mean 3 minutes, so an hour is ~20 lives),
+  // and per-life rates that vary a lot (lognormal, sd ≈ mean) on top of the version's true rate.
+  const SIGMA = Math.sqrt(Math.log(2));
   const next = rng(26);
-  const life = (mean: number) => {
+  const life = (rate: number) => {
+    const ticks = Math.max(1, Math.round(-1800 * Math.log(1 - next())));
     const z = Math.sqrt(-2 * Math.log(1 - next())) * Math.cos(2 * Math.PI * next());
-    return mean * Math.exp(SIGMA * z - SIGMA ** 2 / 2);
+    return { score: (rate * ticks * Math.exp(SIGMA * z - SIGMA ** 2 / 2)) / 600, ticks };
   };
-  const version = (id: string, mean: number, lives: number): RatedVersion => {
+  /** A version that played until it was alive `minutes` in all (the ranking threshold: 60). */
+  const version = (id: string, rate1: number, minutes: number): RatedVersion => {
     let s = EMPTY_RATING_STATE;
-    for (let i = 0; i < lives; i++) s = addLife(s, life(mean));
+    while (s.ticks < minutes * 600) s = addLife(s, life(rate1));
     const r = rate(s);
     return {
       versionId: id,
@@ -137,23 +147,24 @@ describe("redeploy lottery", () => {
       status: "ready",
       mean: r?.mean ?? 0,
       ci: r?.ci ?? null,
-      nLives: lives,
+      nLives: s.lives,
+      aliveTicks: s.ticks,
     };
   };
 
   /**
-   * The author redeploys the same code (true mean 1) K times, plays each version 30 lives and
-   * keeps the one the leaderboard likes best; the rival is truly 1.5× better, with 200 lives.
-   * Returns how often the lucky copy outranks the rival.
+   * The author redeploys the same code (true rate 1) K times, plays each version just past the
+   * threshold (an hour alive) and keeps the one the leaderboard likes best; the rival is truly
+   * 1.5× better and well measured (ten hours). Returns how often the lucky copy outranks it.
    */
   function lotteryWins(k: number, trials: number, byMean: boolean): number {
     let wins = 0;
     for (let t = 0; t < trials; t++) {
-      const copies = Array.from({ length: k }, (_, i) => version(`copy${i}`, 1, 30));
+      const copies = Array.from({ length: k }, (_, i) => version(`copy${i}`, 1, 60));
       const best = byMean
         ? copies.reduce((a, b) => (b.mean > a.mean ? b : a))
         : (leaderboard(copies)[0] ?? copies[0]);
-      const rival = version("rival", 1.5, 200);
+      const rival = version("rival", 1.5, 600);
       const top = byMean
         ? best && best.mean > rival.mean
           ? best
@@ -165,9 +176,9 @@ describe("redeploy lottery", () => {
   }
 
   it("doesn't let the best of 10 lucky copies outrank a truly better bot", () => {
-    expect(lotteryWins(10, 400, false)).toBeLessThan(0.1);
+    expect(lotteryWins(10, 400, false)).toBeLessThan(0.05);
     // What ranking by the point mean would allow:
-    expect(lotteryWins(10, 400, true)).toBeGreaterThan(0.5);
+    expect(lotteryWins(10, 400, true)).toBeGreaterThan(0.3);
   });
 });
 

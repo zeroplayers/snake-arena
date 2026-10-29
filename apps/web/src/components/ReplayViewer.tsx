@@ -15,8 +15,9 @@ type State =
   | { kind: "ready"; participants: Participant[]; desync: boolean };
 
 /**
- * `@zerosnake/viewer` over a life's replay chunk. Client-only: the chunk, the viewer and
- * three.js are loaded after hydration, so none of it is in the server render or the main bundle.
+ * `@zerosnake/viewer` over a life's replay window (its last 10 minutes at most,
+ * `src/shared/replay.ts`). Client-only: the chunks, the viewer and three.js are loaded after
+ * hydration, so none of it is in the server render or the main bundle.
  *
  * With the life's `trace` (its owner's), the viewer's log panel shows what the bot logged. `seek`
  * is set to a function that shows a room tick, once the viewer is up.
@@ -70,7 +71,7 @@ export function ReplayViewer({
       const byId = new Map(data.participants.map((p) => [p.id, p]));
       // One colour per bot version, in order of appearance, shared by its lives.
       const colors = new Map<string, string>();
-      const source = new ReplaySource([decodeBase64(data.chunk)], {
+      const source = new ReplaySource(data.chunks.map(decodeBase64), {
         title,
         label: (snake) => {
           const p = byId.get(snake.id);

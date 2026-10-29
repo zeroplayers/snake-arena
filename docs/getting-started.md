@@ -106,7 +106,8 @@ npx zerosnake deploy
 ## 6. Follow your bot
 
 Once ready, the version is queued for lives in the arena's rooms, at most one snake per author per
-room. After 30 lives it appears on the leaderboard (see [Rating](rating.md)). Your profile at
+room. A life lasts until your snake dies (up to 24 hours of game time). Once its lives add up to
+an hour alive it appears on the leaderboard (see [Rating](rating.md)). Your profile at
 `/@<username>` lists your bots and their ratings, and each bot's page `/@<username>/<slug>` has its
 versions, their sources and replays of recent lives. From the terminal, `npx zerosnake status`
 shows your bots' active versions, ratings and lives, and `npx zerosnake logs` a version's check

@@ -22,8 +22,12 @@ const OPTIONS = {
   help: { type: "boolean", short: "h" },
 } as const;
 
-/** A version is ranked once its rating covers this many lives (`RANKED_MIN_LIVES`, apps/web). */
-export const RANKED_MIN_LIVES = 30;
+/**
+ * A version is ranked once its counted lives add up to this many minutes alive
+ * (`RANKED_MIN_MINUTES`, apps/web) and its rating has an interval (two lives' worth of evidence
+ * at least: an hour-long life and a death at spawn are one).
+ */
+export const RANKED_MIN_MINUTES = 60;
 
 /**
  * A bot on the public profile, `GET /api/users/:username` (`BotSummary` in
@@ -33,11 +37,16 @@ export const RANKED_MIN_LIVES = 30;
 export interface PublicBot {
   slug: string;
   activeVersion: number | null;
-  /** Mean score of the active version over its last 200 lives; `null` until rated. */
+  /**
+   * The active version's points per minute alive over its last 200 lives; `null` until rated.
+   * (Servers before long lives: its mean score per life.)
+   */
   rating: number | null;
   /** Half-width of the 95% confidence interval. */
   ratingCi: number | null;
   ratedLives: number | null;
+  /** Minutes alive over those lives. Missing from servers before long lives. */
+  ratedMinutes?: number | null;
   /** Every life of every version. */
   lives: number;
 }
@@ -137,9 +146,26 @@ function describeBot(
 export function describeRating(bot: PublicBot | undefined): string {
   if (!bot || bot.rating === null || bot.ratedLives === null) return dim("not rated yet");
   const value = `${bot.rating.toFixed(1)} ± ${(bot.ratingCi ?? 0).toFixed(1)}`;
-  return bot.ratedLives >= RANKED_MIN_LIVES
-    ? `${bold(value)} over ${bot.ratedLives} lives · ${green("ranked")}`
-    : `${value} over ${bot.ratedLives} lives · unranked until ${RANKED_MIN_LIVES} lives`;
+  const lives = `${bot.ratedLives} ${bot.ratedLives === 1 ? "life" : "lives"}`;
+  if (bot.ratedMinutes === undefined || bot.ratedMinutes === null) {
+    // A server from before long lives: a mean score per life, ranked from 30 lives.
+    return bot.ratedLives >= 30
+      ? `${bold(value)} over ${lives} · ${green("ranked")}`
+      : `${value} over ${lives} · unranked until 30 lives`;
+  }
+  const over = `over ${lives}, ${formatMinutes(bot.ratedMinutes)} alive`;
+  if (bot.ratingCi === null) {
+    return `${bot.rating.toFixed(1)} pts/min ${over} · unranked: too few lives for an interval yet`;
+  }
+  return bot.ratedMinutes >= RANKED_MIN_MINUTES
+    ? `${bold(value)} pts/min ${over} · ${green("ranked")}`
+    : `${value} pts/min ${over} · unranked until ${RANKED_MIN_MINUTES} minutes alive`;
+}
+
+/** `45 min`, `3 h 05 min`. */
+function formatMinutes(minutes: number): string {
+  const m = Math.floor(minutes);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
 }
 
 /** `5 min ago`, `3 h ago`, `2 days ago`. */

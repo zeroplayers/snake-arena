@@ -1,13 +1,14 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { DEATH_CAUSES, formatDateTime, formatTicks } from "../components/format";
+import { endingHeading, formatDateTime, formatTicks } from "../components/format";
 import { Empty, PageError, PagePending } from "../components/PageState";
 import { ReplayViewer } from "../components/ReplayViewer";
 import { TracePanel } from "../components/TracePanel";
 import { canonical, pageMeta } from "../lib/meta";
 import { getReplayPage } from "../server/pages";
 import { getReplayTrace, type ReplayTrace } from "../server/traces";
-import { REPLAY_EXPIRED_MESSAGE } from "../shared/replay";
+import { lifeEnding } from "../shared/lives";
+import { REPLAY_EXPIRED_MESSAGE, REPLAY_WINDOW_TICKS } from "../shared/replay";
 
 /** `/replay/{lifeId}`: the room replay around one life, with that snake selected. */
 export const Route = createFileRoute("/replay/$id")({
@@ -39,6 +40,8 @@ export const Route = createFileRoute("/replay/$id")({
 function ReplayPage() {
   const life = Route.useLoaderData();
   const ticks = life.endTick === null ? null : life.endTick - life.startTick;
+  const ending = lifeEnding(life.deathCause, ticks);
+  const heading = ending && endingHeading(ending, ticks);
   const trace = useTrace(life.id, life.endedAt !== null);
   const seek = useRef<((tick: number) => void) | null>(null);
   return (
@@ -58,9 +61,11 @@ function ReplayPage() {
         / replay
       </p>
       <h1 className="title">
-        {life.deathCause ? (
+        {heading ? (
           <>
-            Died: <span className="red">{DEATH_CAUSES[life.deathCause]}</span>
+            {heading.verb}
+            {heading.verb === "Stopped" ? " " : ": "}
+            <span className={heading.death ? "red" : "accent"}>{heading.text}</span>
           </>
         ) : (
           "Still alive"
@@ -89,12 +94,20 @@ function ReplayPage() {
       {life.replayExpired ? (
         <Empty>{REPLAY_EXPIRED_MESSAGE}</Empty>
       ) : life.replayRecorded ? (
-        <ReplayViewer
-          lifeId={life.id}
-          title={`${life.botName} v${life.version} · @${life.author}`}
-          trace={trace}
-          seek={seek}
-        />
+        <>
+          {ticks !== null && ticks > REPLAY_WINDOW_TICKS && (
+            <p className="muted small">
+              The replay shows the last {formatTicks(REPLAY_WINDOW_TICKS)} of this{" "}
+              {formatTicks(ticks)} life, up to its end.
+            </p>
+          )}
+          <ReplayViewer
+            lifeId={life.id}
+            title={`${life.botName} v${life.version} · @${life.author}`}
+            trace={trace}
+            seek={seek}
+          />
+        </>
       ) : (
         <Empty>No recording was kept for this life.</Empty>
       )}

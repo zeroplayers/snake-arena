@@ -143,7 +143,8 @@ export interface ManagedVersion {
   createdAt: string;
   activatedAt: string | null;
   lives: number;
-  rating: { mean: number; ci: number; nLives: number } | null;
+  /** `ci` is `null` without an interval (under two effective lives). */
+  rating: { mean: number; ci: number | null; nLives: number } | null;
   /** The deploy's message (`zerosnake deploy -m`), if any. */
   message: string | null;
   /** Failed checks as sentences (`checkReportLines`); empty unless rejected. */

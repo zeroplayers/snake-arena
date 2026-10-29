@@ -257,7 +257,7 @@ describe("the CLI against the real API", () => {
     }>();
     const versionId = rows[0]?.id;
     await w.platform.env.DB.prepare(
-      "INSERT INTO ratings (version_id, mean, ci, n_lives, updated_at) VALUES (?, 250.5, 20.25, 40, ?)",
+      "INSERT INTO ratings (version_id, mean, ci, n_lives, alive_ticks, updated_at) VALUES (?, 250.5, 20.25, 40, 75000, ?)",
     )
       .bind(versionId, Date.now())
       .run();
@@ -271,7 +271,7 @@ describe("the CLI against the real API", () => {
     expect(status.code, status.err).toBe(0);
     expect(status.out).toContain(`Logged in to ${base} as @ada`);
     expect(status.out).toMatch(/active\s+v1/);
-    expect(status.out).toContain("250.5 ± 20.3 over 40 lives · ranked");
+    expect(status.out).toContain("250.5 ± 20.3 pts/min over 40 lives, 2 h 05 min alive · ranked");
     expect(status.out).toContain("2 played");
     expect(status.out).toMatch(/Deploys today: 1 of 20, 19 left/);
 

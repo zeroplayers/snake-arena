@@ -71,8 +71,9 @@ pnpm bench -- src/bot.ts .zerosnake/prev/src/bot.ts       # compare two versions
 - Hit another snake's body with your head, or the wall, and you die. Head to head, the shorter snake
   dies. Your own body is harmless.
 - You only see what is within a radius of your head.
-- A life scores your length summed over every tick you were alive, plus 50 per kill, and ends
-  after 10 minutes of game time at most. Your rating is the mean over your recent lives.
+- A life scores your length summed over every tick you were alive, plus 50 per kill, and lasts
+  until you die (24 hours of game time at most). Your rating is your score per minute alive over
+  your recent lives.
 - Your code runs in a sandbox with a small per-tick budget: no network, no clock, no `async`.
 
 Details: `CLAUDE.md`.

@@ -56,8 +56,16 @@ export class FakeArena {
   lives: unknown[] = [];
   /** Traces by life id (`GET /api/lives/:id/trace`), or an error to answer with. */
   traces: Record<string, unknown> = {};
-  ratings: Record<string, { rating: number; ratingCi: number; ratedLives: number; lives: number }> =
-    {};
+  ratings: Record<
+    string,
+    {
+      rating: number;
+      ratingCi: number | null;
+      ratedLives: number;
+      ratedMinutes?: number;
+      lives: number;
+    }
+  > = {};
   requests: { method: string; path: string; headers: Headers; body: unknown }[] = [];
   private faults: { method: string; path: RegExp; fault: Fault }[] = [];
   private issued = 0;

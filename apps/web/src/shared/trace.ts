@@ -17,6 +17,8 @@
  * are public, logs aren't.
  */
 
+import type { LifeEnding } from "./lives";
+
 export const TRACE_FORMAT = 1;
 /** Ticks before the end kept exactly. */
 export const TRACE_FULL_TICKS = 100;
@@ -45,8 +47,11 @@ export const TRACE_ERROR_BYTES = 300;
  * Upper bound of a trace's JSON. Every part is bounded in JSON bytes, whatever the bot logs: a
  * worst-case trace (every tick filling its log budget with characters JSON escapes, or with
  * thousands of empty lines, and failing) is about 445 KB; apps/arena's `room/trace.test.ts` builds
- * them. Enforced anyway (oldest downsampled logs go first). A full 6000-tick life logging a short
- * line every other tick is about 90 KB (10 KB gzipped, as stored).
+ * them. Enforced anyway (oldest downsampled logs go first). A 6000-tick life logging a short line
+ * every other tick is about 90 KB (10 KB gzipped, as stored), and a 24-hour one (the life cap) no
+ * bigger: its older ticks are downsampled to at most `TRACE_SAMPLED_MAX`, the stride doubling as
+ * it goes (to every 8192nd tick over a day), and the last `TRACE_FULL_TICKS` before the end stay
+ * exact.
  */
 export const TRACE_MAX_BYTES = 512 * 1024;
 export const TRACE_RETENTION_DAYS = 7;
@@ -217,6 +222,14 @@ export interface LifeSummary {
   lengthMax: number;
   kills: number;
   deathCause: "collision" | "wall" | "timeout" | "error" | "retired" | null;
+  /**
+   * How it ended: `deathCause` with `retired` split into `capped` (reached the life cap) and
+   * `stopped` (its version stopped playing), `src/shared/lives.ts`. Missing from servers before
+   * long lives.
+   */
+  ending?: LifeEnding | null;
+  /** Ticks alive; `null` while alive. Missing from servers before long lives. */
+  ticks?: number | null;
   /** Who it ran into, for people: `@user/bot v3` or `house bot hard`. */
   killer: string | null;
   /** Whether a trace was recorded (it may have expired since: 7 days). */

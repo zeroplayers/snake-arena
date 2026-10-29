@@ -6,7 +6,7 @@ import { createAuth } from "../server/auth";
 import { updateRatings } from "../server/ratings";
 import { createTestD1, type TestD1 } from "../test/d1";
 import { createDb, type Db } from ".";
-import { getLeaderboard, getProfile, leaderboardQuery, RANKED_MIN_LIVES } from "./queries";
+import { getLeaderboard, getProfile, leaderboardQuery, RANKED_MIN_MINUTES } from "./queries";
 import { authSchema } from "./schema";
 
 let d1: TestD1;
@@ -203,7 +203,7 @@ describe("leaderboard", () => {
       [2, "linus", "Spiral", 2],
       [3, "ada", "Coward", 1],
     ]);
-    expect(board.every((e) => e.lives >= RANKED_MIN_LIVES)).toBe(true);
+    expect(board.every((e) => e.ratedMinutes >= RANKED_MIN_MINUTES)).toBe(true);
     expect(board[0]?.ratingCi).toBeGreaterThan(0);
   });
 
@@ -283,9 +283,11 @@ describe("profile", () => {
         name: "Greedy",
         slug: "greedy",
         activeVersion: 2,
-        rating: 79.5,
-        ratingCi: expect.closeTo(1.6, 2),
+        // Points per minute alive: the seed's lives last 30 to 90 seconds.
+        rating: expect.closeTo(80.24, 2),
+        ratingCi: expect.closeTo(3.66, 2),
         ratedLives: 200,
+        ratedMinutes: expect.closeTo(198.17, 2),
         lives: 320,
       },
       {
@@ -293,9 +295,10 @@ describe("profile", () => {
         name: "Coward",
         slug: "coward",
         activeVersion: 1,
-        rating: 37,
-        ratingCi: expect.closeTo(0.69, 2),
+        rating: expect.closeTo(37.47, 2),
+        ratingCi: expect.closeTo(1.83, 2),
         ratedLives: 150,
+        ratedMinutes: expect.closeTo(148.13, 2),
         lives: 150,
       },
     ]);

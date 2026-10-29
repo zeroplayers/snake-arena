@@ -2,6 +2,7 @@
  * The matchmaker's tunables (SPEC §4). Defaults suit production; `MatchmakerDO.configure` (tests,
  * tools) overrides them in the object's storage.
  */
+import { DEFAULT_CONFIG } from "@zerosnake/engine";
 import { ARENA_CONTROL_POLL_MS, ARENA_LIMITS } from "@zerosnake/web/shared";
 import { DEFAULT_MAX_SNAKES } from "../limits.ts";
 import type { RoomStartOptions } from "../protocol.ts";
@@ -33,11 +34,29 @@ export interface MatchmakerConfig {
   /** How often to compare a room's lives with the ledger (`status()`), per room. */
   roomCheckMs: number;
   /**
-   * A life issued this long ago that its room doesn't hold and nobody reported is lost: the bot
-   * gets its next life (the lost one still counts toward its quota: it may have run). Well past
-   * a life's longest run (`lifeCap`, 10 min in real time) plus its replay chunk's wait.
+   * A life its room stopped holding this long ago (by the room checks, `status()`; or issued this
+   * long ago and never seen held) that nobody reported is lost: the bot gets its next life (the
+   * lost one still counts toward its quota: it may have run). Counted from when the room last
+   * held it, not from when it was issued: a life lasts until the snake dies (up to 24 hours of
+   * game time, more in wall time), so time since issue says nothing. A room counts as holding a
+   * life only while its tick moves: one stuck on it (outbox full, alarm crash loop) stops
+   * refreshing it, so its bots are freed `lostAfterMs` later. That includes a room held back by
+   * its outbox for longer (an R2 or D1 outage): its lives are declared lost, and once it drains
+   * and ticks again a bot may briefly have two lives (the lost one and its next). Accepted: it
+   * frees the bots of a room that never recovers. Once a life ends, its report
+   * waits in the room's outbox for its replay chunk (at most two minutes of game time, two
+   * minutes of wall time in a real-time room) and for retries; this is well past both.
    */
   lostAfterMs: number;
+  /**
+   * A life its room reports this many ticks old (`RoomStatus.snakes[].lifeTick`) is retired
+   * (`leave`): past the life cap, which the engine never lets a life reach, so the room is broken
+   * on it. Measured in game time, not wall time: an accelerated room runs only as fast as its
+   * bots allow (a room of heavy bots can tick at ~5 per second, so a healthy 24-hour life can
+   * take two days or more of wall time), and a real-time room never runs faster than real time.
+   * A room that doesn't tick at all is handled by `lostAfterMs`.
+   */
+  overdueLifeTicks: number;
   /** How often to re-read the kill switch (`arena_control`) when nobody calls. */
   arenaControlPollMs: number;
   /** Most often the alarm writes the `arena.gauge` metric. */
@@ -58,6 +77,8 @@ export const DEFAULT_MATCHMAKER_CONFIG: MatchmakerConfig = {
   reconcileMs: 10 * 60_000,
   roomCheckMs: 60_000,
   lostAfterMs: 30 * 60_000,
+  // The life cap plus a minute of game time.
+  overdueLifeTicks: DEFAULT_CONFIG.lifeCap + 600,
   arenaControlPollMs: ARENA_CONTROL_POLL_MS,
   gaugeMs: 60_000,
   manual: false,

@@ -36,7 +36,8 @@
  *
  * Ratings: a version activated by a rollback starts its rating over (the site deletes its
  * `ratings` row and moves `versions.activated_at`). Ratings count only lives started at or after
- * `versions.activated_at`, and not those ended with `death_cause = 'retired'`. The site's rating
+ * `versions.activated_at`, and not those the platform stopped (`death_cause = 'retired'` short of
+ * a life cap; a life that reached the cap counts, `src/shared/lives.ts`). The site's rating
  * job (`src/server/ratings.ts`) computes them from `lives`, so the arena only inserts `lives` rows
  * (`INSERT ... ON CONFLICT (id) DO NOTHING`, never `INSERT OR REPLACE`) and writes no `ratings`.
  * It writes the `activated_at` it counted from into `ratings.activated_at`; a trigger
@@ -95,8 +96,7 @@ export interface MatchmakerSiteRpc {
  * `paused = 1` stops the arena. Then the matchmaker:
  * - starts no lives (`nextLife` returns `null`) and starts no rooms;
  * - ends the lives running in rooms (`RoomRpc.leave`), so rooms flush their replays and close.
- *   The lives end with `death_cause = 'retired'` (nobody's fault), rated however the arena
- *   rates retired lives elsewhere.
+ *   The lives end with `death_cause = 'retired'` (nobody's fault) and aren't rated.
  *
  * The site calls `arenaControlChanged` after each change (best effort), so the matchmaker can
  * act at once; it must also poll the row, at least every `ARENA_CONTROL_POLL_MS`, and before

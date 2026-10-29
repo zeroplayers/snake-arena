@@ -98,6 +98,32 @@ describe("checkLiveness", () => {
     expect(await check()).toMatchObject({ status: "ok", minutesSinceActivity: 5 });
   });
 
+  it("counts the matchmaker's heartbeat as activity while it has lives in flight", async () => {
+    await readyVersion(600);
+    await life("old", 500, 400);
+    const beat = (minutes: number, inFlight: number) =>
+      d1.db
+        .prepare(
+          `INSERT INTO arena_heartbeat (id, at, lives_in_flight, rooms) VALUES (1, ?, ?, 1)
+           ON CONFLICT (id) DO UPDATE SET at = excluded.at, lives_in_flight = excluded.lives_in_flight`,
+        )
+        .bind(minutesAgo(minutes), inFlight)
+        .run();
+    // Strong bots alive for hours: no new `lives` row, but the matchmaker has them out.
+    await beat(1, 2);
+    expect(await checkLiveness({ DB: d1.db }, NOW)).toMatchObject({
+      status: "ok",
+      minutesSinceActivity: 1,
+      livesInFlight: 2,
+    });
+    // A heartbeat with nothing in flight while bots wait isn't activity.
+    await beat(1, 0);
+    expect((await checkLiveness({ DB: d1.db }, NOW)).status).toBe("stalled");
+    // Nor is a stale one: the matchmaker stopped.
+    await beat(30, 2);
+    expect((await checkLiveness({ DB: d1.db }, NOW)).status).toBe("stalled");
+  });
+
   it("is paused while the kill switch is on, and gives a resumed arena time", async () => {
     await readyVersion(600);
     await d1.db.prepare("UPDATE arena_control SET paused = 1").run();

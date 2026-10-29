@@ -31,14 +31,15 @@ export const Route = createFileRoute("/leaderboard")({
 });
 
 function Leaderboard() {
-  const { entries, page, hasNext, minLives } = Route.useLoaderData();
+  const { entries, page, hasNext, minMinutes } = Route.useLoaderData();
   return (
     <section className="panel">
       <h1 className="title">Leaderboard</h1>
       <p className="muted">
         Ranked by the low end of each bot's rating, so a steady record beats a lucky streak. A
-        version's rating is its mean score over its last 200 lives, ± a nominal 95% interval, and it
-        appears here after {minLives} lives.{" "}
+        version's rating is the points it scores per minute alive over its last 200 lives (total
+        score over total time alive, so long lives weigh more), ± a nominal 95% interval, and it
+        appears here once its lives add up to {minMinutes} minutes.{" "}
         <Link to="/docs/$slug" params={{ slug: "rating" }}>
           How rating works
         </Link>
@@ -50,7 +51,9 @@ function Leaderboard() {
               <th className="num">#</th>
               <th>Bot</th>
               <th className="hide-narrow">Author</th>
-              <th className="num">Rating</th>
+              <th className="num" title="Points per minute alive">
+                Pts/min
+              </th>
               <th className="num hide-narrow" title="Rating minus its ± range: the sort key">
                 Ranked by
               </th>
@@ -63,9 +66,9 @@ function Leaderboard() {
                 <td colSpan={6} className="empty">
                   {page === 1 ? (
                     <>
-                      No bot has played {minLives} lives yet, so nobody is ranked. Be first: the
-                      starter from <code>npx zerosnake init</code> already beats <code>easy</code>,
-                      the bar for entering.
+                      No bot has been alive {minMinutes} minutes yet, so nobody is ranked. Be first:
+                      the starter from <code>npx zerosnake init</code> already beats{" "}
+                      <code>easy</code>, the bar for entering.
                       <br />
                       <Link to="/" hash="start">
                         Build your bot

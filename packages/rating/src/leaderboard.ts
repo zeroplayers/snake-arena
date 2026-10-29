@@ -1,4 +1,4 @@
-import { DEFAULT_RATING_CONFIG, type RatingConfig } from "./config.ts";
+import { DEFAULT_RATING_CONFIG, minRankedTicks, type RatingConfig } from "./config.ts";
 
 /**
  * One version as the leaderboard sees it. Field names are the D1 ones (`ratings` joined with
@@ -9,15 +9,17 @@ export interface RatedVersion {
   botId: string;
   /** `versions.status`; only `"ready"` (the bot's active version) is ranked. */
   status: string;
-  /** Mean score over the window (`ratings.mean`). */
+  /** Points per minute alive over the window (`ratings.mean`). */
   mean: number;
   /** Half-width of the confidence interval; `null` or `Infinity` when unknown. */
   ci: number | null;
   /** All-time lives (`ratings.n_lives`). */
   nLives: number;
+  /** All-time ticks alive (`ratings.alive_ticks`): the threshold applies to it. */
+  aliveTicks: number;
 }
 
-export type RankKey = Pick<RatedVersion, "mean" | "ci" | "nLives">;
+export type RankKey = Pick<RatedVersion, "mean" | "ci" | "aliveTicks">;
 
 export type Ranked<T> = T & {
   /** 1-based; rows that tie on every key share it. */
@@ -28,8 +30,8 @@ export type Ranked<T> = T & {
 
 /**
  * Lower end of the confidence interval: what the leaderboard sorts by. Ranking by the point
- * mean rewards luck: a 30-life mean is off by about ±60% (life scores are heavy-tailed), so the
- * best of a few fresh versions of the same code would outrank a truly better, well-measured one.
+ * estimate rewards luck: an hour of play can be a handful of lives, so the best of a few fresh
+ * versions of the same code would outrank a truly better, well-measured one.
  */
 export function lowerBound(r: Pick<RatedVersion, "mean" | "ci">): number {
   return r.ci !== null && Number.isFinite(r.ci) ? r.mean - r.ci : Number.NEGATIVE_INFINITY;
@@ -37,32 +39,35 @@ export function lowerBound(r: Pick<RatedVersion, "mean" | "ci">): number {
 
 /**
  * Leaderboard order: higher lower bound (`mean − ci`) first; then the narrower interval, then
- * more lives. Returns < 0 when `a` goes first.
+ * more time alive. Returns < 0 when `a` goes first.
  */
 export function compareRated(a: RankKey, b: RankKey): number {
   return (
-    order(lowerBound(b), lowerBound(a)) || order(width(a.ci), width(b.ci)) || b.nLives - a.nLives
+    order(lowerBound(b), lowerBound(a)) ||
+    order(width(a.ci), width(b.ci)) ||
+    b.aliveTicks - a.aliveTicks
   );
 }
 
 /**
  * The leaderboard, best first, each row with its `rank` and `lowerBound`. Rules:
  *
- * - only `status === "ready"` versions with at least `minLives` lives are ranked, so archived
- *   versions (frozen ratings) can't stay on the board;
+ * - only `status === "ready"` versions alive at least `minMinutes` in all are ranked, so
+ *   archived versions (frozen ratings) can't stay on the board;
  * - at most one version per bot, the best-ordered one (D1 allows one ready version per bot, so
  *   this is a guard);
  * - order by `compareRated`, then `versionId`, so the output doesn't depend on input order;
- * - rows that tie on lower bound, interval and lives share a rank ("1, 2, 2, 4").
+ * - rows that tie on lower bound, interval and time alive share a rank ("1, 2, 2, 4").
  *
  * Other fields of the rows are kept.
  */
 export function leaderboard<T extends RatedVersion>(
   rows: readonly T[],
-  config: Pick<RatingConfig, "minLives"> = DEFAULT_RATING_CONFIG,
+  config: Pick<RatingConfig, "minMinutes" | "ticksPerMinute"> = DEFAULT_RATING_CONFIG,
 ): Ranked<T>[] {
+  const min = minRankedTicks(config);
   const sorted = rows
-    .filter((r) => r.status === "ready" && r.nLives >= config.minLives)
+    .filter((r) => r.status === "ready" && r.aliveTicks >= min)
     .sort((a, b) => compareRated(a, b) || order(a.versionId, b.versionId));
   const bots = new Set<string>();
   const out: Ranked<T>[] = [];

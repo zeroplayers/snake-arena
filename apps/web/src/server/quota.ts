@@ -4,7 +4,7 @@
  * It counts every way a version can start a fresh rating: versions created today (except
  * deploys that failed before being queued) plus rollbacks made today (`activations` of kind
  * `activate`). A rollback restarts the version's rating, so if it were free, rolling back over
- * and over until one run of 30 lives came out lucky would get around the quota.
+ * and over until one first hour of play came out lucky would get around the quota.
  */
 import { count, type SQLWrapper, sql } from "drizzle-orm";
 import type { Db } from "../db";

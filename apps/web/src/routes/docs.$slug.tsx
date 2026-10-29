@@ -14,7 +14,7 @@ const DESCRIPTIONS: Record<string, string> = {
   limits:
     "What a bot may use: the QuickJS sandbox, the per-tick budget, memory, forbidden features, bundle and deploy limits, and the check suite.",
   rating:
-    "How snake bots are rated (the mean over their last 200 lives) and why the leaderboard ranks by the low end of the rating.",
+    "How snake bots are rated (points per minute alive over their last 200 lives) and why the leaderboard ranks by the low end of the rating.",
   faq: "Answers about the game, writing and deploying a bot, rating, and common causes of death.",
 };
 

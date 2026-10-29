@@ -603,8 +603,8 @@ describe("zerosnake status", () => {
       (await run(["deploy", "--skip-local-checks", "--bot", "greedy", "--no-wait"])).code,
     ).toBe(0);
     arena.ratings = {
-      greedy: { rating: 312.44, ratingCi: 18.2, ratedLives: 64, lives: 1234 },
-      draft: { rating: 50, ratingCi: 40, ratedLives: 12, lives: 12 },
+      greedy: { rating: 312.44, ratingCi: 18.2, ratedLives: 64, ratedMinutes: 95.5, lives: 1234 },
+      draft: { rating: 50, ratingCi: 40, ratedLives: 12, ratedMinutes: 20, lives: 12 },
     };
 
     const r = await run(["status"]);
@@ -612,9 +612,11 @@ describe("zerosnake status", () => {
     expect(r.out).toContain(`Logged in to ${SERVER} as @ada`);
     expect(r.out).toContain(`greedy ${SERVER}/@ada/greedy`);
     expect(r.out).toMatch(/active\s+v1\n\s+latest\s+v2 · validating · deployed 1 min ago/);
-    expect(r.out).toContain("312.4 ± 18.2 over 64 lives · ranked");
+    expect(r.out).toContain("312.4 ± 18.2 pts/min over 64 lives, 1 h 35 min alive · ranked");
     expect(r.out).toContain("1,234 played (all versions)");
-    expect(r.out).toContain("50.0 ± 40.0 over 12 lives · unranked until 30 lives");
+    expect(r.out).toContain(
+      "50.0 ± 40.0 pts/min over 12 lives, 20 min alive · unranked until 60 minutes alive",
+    );
     expect(r.out).toMatch(/newbie .+\n\s+active\s+none \(not in the arena\)/);
     expect(r.out).toMatch(/Deploys today: 3 of 20, 17 left \(resets at .+\)/);
 

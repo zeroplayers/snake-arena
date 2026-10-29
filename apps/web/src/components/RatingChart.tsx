@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { VersionRow } from "../queries/bot";
-import { formatRating } from "./format";
+import { formatMinutes, formatRating } from "./format";
 
 /** Width before the plot is measured (server render); the SVG then matches its box, so text
  * stays at its CSS size on a phone. */
@@ -9,11 +9,17 @@ const H = 200;
 const PAD = { top: 16, right: 16, bottom: 28, left: 44 };
 
 /**
- * Rating across a bot's versions: each rated version's mean with its 95% CI as a whisker, in
- * version order. Hollow markers are versions still under the leaderboard threshold. The
- * versions table next to it is the table view of the same numbers.
+ * Rating across a bot's versions: each rated version's points per minute with its 95% CI as a
+ * whisker, in version order. Hollow markers are versions still under the leaderboard threshold
+ * (`minMinutes` alive). The versions table next to it is the table view of the same numbers.
  */
-export function RatingChart({ versions, minLives }: { versions: VersionRow[]; minLives: number }) {
+export function RatingChart({
+  versions,
+  minMinutes,
+}: {
+  versions: VersionRow[];
+  minMinutes: number;
+}) {
   const [hover, setHover] = useState<number | null>(null);
   const plot = useRef<HTMLDivElement>(null);
   const [W, setWidth] = useState(DEFAULT_WIDTH);
@@ -67,7 +73,7 @@ export function RatingChart({ versions, minLives }: { versions: VersionRow[]; mi
           ))}
           <path className="chart-line" d={line} />
           {rated.map((v, i) => {
-            const ranked = (v.ratedLives ?? 0) >= minLives;
+            const ranked = isRanked(v, minMinutes);
             return (
               <g key={v.id} className={hover === i ? "chart-mark active" : "chart-mark"}>
                 <line
@@ -96,7 +102,7 @@ export function RatingChart({ versions, minLives }: { versions: VersionRow[]; mi
             key={v.id}
             type="button"
             className="chart-hit"
-            aria-label={`v${v.n}: ${formatRating(v.rating, v.ratingCi)} over ${v.ratedLives} lives`}
+            aria-label={`v${v.n}: ${formatRating(v.rating, v.ratingCi)} pts/min over ${ratedOver(v)}`}
             style={{
               left: `${((x(i) - step / 2) / W) * 100}%`,
               width: `${(step / W) * 100}%`,
@@ -113,18 +119,33 @@ export function RatingChart({ versions, minLives }: { versions: VersionRow[]; mi
       <figcaption className="chart-caption">
         {active ? (
           <span>
-            <strong>v{active.n}</strong> {formatRating(active.rating, active.ratingCi)} over{" "}
-            {active.ratedLives} lives
-            {(active.ratedLives ?? 0) < minLives ? " (unranked)" : ""}
+            <strong>v{active.n}</strong> {formatRating(active.rating, active.ratingCi)} pts/min over{" "}
+            {ratedOver(active)}
+            {isRanked(active, minMinutes) ? "" : " (unranked)"}
           </span>
         ) : (
           <span className="muted">
-            Mean score with 95% CI. Hollow: under {minLives} lives, not on the leaderboard yet.
+            Points per minute alive with 95% CI. Hollow: alive under {minMinutes} minutes in all,
+            not on the leaderboard yet.
           </span>
         )}
       </figcaption>
     </figure>
   );
+}
+
+/** Whether a version is on the leaderboard's side of the threshold (status aside). */
+export function isRanked(
+  v: Pick<VersionRow, "ratedLives" | "ratedMinutes">,
+  minMinutes: number,
+): boolean {
+  return (v.ratedLives ?? 0) >= 2 && (v.ratedMinutes ?? 0) >= minMinutes;
+}
+
+/** `12 lives, 3 h 05 min alive`. */
+export function ratedOver(v: Pick<VersionRow, "ratedLives" | "ratedMinutes">): string {
+  const lives = v.ratedLives ?? 0;
+  return `${lives} ${lives === 1 ? "life" : "lives"}, ${formatMinutes(v.ratedMinutes ?? 0)} alive`;
 }
 
 /** Rounded bounds and 3–5 gridlines covering `[lo, hi]`. */

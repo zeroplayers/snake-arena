@@ -50,7 +50,9 @@ function ProfilePage() {
             <tr>
               <th>Bot</th>
               <th className="num">Active</th>
-              <th className="num">Rating</th>
+              <th className="num" title="Rating: points per minute alive">
+                Pts/min
+              </th>
               <th className="num">Lives</th>
             </tr>
           </thead>

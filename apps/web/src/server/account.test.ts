@@ -134,7 +134,7 @@ async function seedBot(owner: string, slug: string, lives = 3) {
   statements.push(
     db
       .prepare(
-        "INSERT INTO ratings (version_id, mean, ci, n_lives, activated_at) VALUES (?, 20, 2, 40, 0)",
+        "INSERT INTO ratings (version_id, mean, ci, n_lives, alive_ticks, activated_at) VALUES (?, 20, 2, 40, 36000, 0)",
       )
       .bind(`${slug}-v2`),
   );

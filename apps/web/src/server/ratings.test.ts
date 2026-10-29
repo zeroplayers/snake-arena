@@ -48,6 +48,9 @@ async function readyBot(bot: string, activatedAt: number | null = T0) {
 interface LifeOptions {
   startedAt?: number;
   deathCause?: string;
+  /** Ticks alive (`end_tick`, from `start_tick` 0); a minute by default, so the rating, in
+   * points per minute, is the mean score. */
+  ticks?: number;
   /** Written while alive (`end_tick` null), as a writer that records starts would. */
   alive?: boolean;
   ids?: string[];
@@ -71,7 +74,7 @@ async function addLives(version: string, scores: readonly number[], options: Lif
           .bind(
             ids[i + j],
             version,
-            options.alive ? null : 100,
+            options.alive ? null : (options.ticks ?? 600),
             score,
             options.alive ? null : (options.deathCause ?? "collision"),
             startedAt,
@@ -86,7 +89,7 @@ async function addLives(version: string, scores: readonly number[], options: Lif
 async function rating(version: string) {
   return d1.db
     .prepare(
-      `SELECT mean, ci, lower_bound, n_lives, activated_at, recent_scores, life_seq
+      `SELECT mean, ci, lower_bound, n_lives, alive_ticks, activated_at, recent_scores, life_seq
        FROM ratings WHERE version_id = ?`,
     )
     .bind(version)
@@ -95,6 +98,7 @@ async function rating(version: string) {
       ci: number;
       lower_bound: number;
       n_lives: number;
+      alive_ticks: number;
       activated_at: number | null;
       recent_scores: string;
       life_seq: number | null;
@@ -109,9 +113,9 @@ async function progress() {
 
 const run = (options?: Parameters<typeof updateRatings>[2]) => updateRatings(d1.db, NOW, options);
 
-/** What `@zerosnake/rating` says the rating of these lives (oldest first) is. */
-function expected(scores: number[]) {
-  const r = rate(createRatingState(scores));
+/** What `@zerosnake/rating` says the rating of these lives (oldest first, `ticks` each) is. */
+function expected(scores: number[], ticks = 600) {
+  const r = rate(createRatingState(scores.map((score) => ({ score, ticks }))));
   if (!r) throw new Error("no lives");
   return r;
 }
@@ -129,26 +133,38 @@ describe("updateRatings", () => {
     const row = await rating(v);
     const want = expected(scores);
     expect(row?.n_lives).toBe(250);
+    expect(row?.alive_ticks).toBe(250 * 600);
     expect(row?.mean).toBeCloseTo(want.mean, 9);
     expect(row?.ci).toBeCloseTo(want.ci, 9);
     expect(row?.lower_bound).toBeCloseTo(want.mean - want.ci, 9);
     expect(row?.activated_at).toBe(T0);
     expect(row?.life_seq).toBe(250);
     expect(JSON.parse(row?.recent_scores ?? "")).toEqual({
-      v: 1,
+      v: 2,
       scoring: "raw",
-      scores: scores.slice(-DEFAULT_RATING_CONFIG.window),
+      lives: scores.slice(-DEFAULT_RATING_CONFIG.window).map((s) => [s, 600]),
     });
   });
 
-  it("puts versions on the leaderboard from 30 lives, ranked by the lower bound", async () => {
-    // `steady` has the lower mean but a much tighter interval, so it ranks first.
+  it("rates points per minute alive: total score over total time", async () => {
+    const v = await readyBot("a");
+    await addLives(v, [100], { ticks: 600 });
+    await addLives(v, [500], { ticks: 5400 });
+    await run();
+    // 600 points in 10 minutes, not the mean of 100 and 500.
+    expect(await rating(v)).toMatchObject({ n_lives: 2, alive_ticks: 6000, mean: 60 });
+  });
+
+  it("puts versions on the leaderboard from an hour alive, ranked by the lower bound", async () => {
+    // `steady` has the lower rate but a much tighter interval, so it ranks first.
     const steady = await readyBot("steady");
     const lucky = await readyBot("lucky");
     const fresh = await readyBot("fresh");
     await addLives(steady, scoresOf(200, 100, 10));
-    await addLives(lucky, [...scoresOf(35, 0, 5), ...scoresOf(5, 2000, 50)]);
-    await addLives(fresh, scoresOf(29, 500));
+    // 40 lives of two minutes: 80 minutes alive.
+    await addLives(lucky, [...scoresOf(35, 0, 5), ...scoresOf(5, 4000, 50)], { ticks: 1200 });
+    // 59 one-minute lives, whatever their scores: under the hour.
+    await addLives(fresh, scoresOf(59, 500));
     await run();
 
     const board = await getLeaderboard(createDb(d1.db));
@@ -156,7 +172,8 @@ describe("updateRatings", () => {
     const [first, second] = board;
     expect(first?.rating).toBeLessThan(second?.rating ?? 0);
     expect(first?.lowerBound).toBeGreaterThan(second?.lowerBound ?? 0);
-    expect((await rating(fresh))?.n_lives).toBe(29);
+    expect(second?.ratedMinutes).toBe(80);
+    expect(await rating(fresh)).toMatchObject({ n_lives: 59, alive_ticks: 59 * 600 });
 
     await addLives(fresh, [500]);
     await run();
@@ -186,12 +203,24 @@ describe("updateRatings", () => {
     expect(row?.ci).toBeCloseTo(expected(scores).ci, 9);
   });
 
-  it("doesn't count lives the platform retired", async () => {
+  it("doesn't count lives the platform retired, but counts lives that reached the cap", async () => {
     const v = await readyBot("a");
     await addLives(v, [10, 20, 30]);
+    // Stopped (version archived, arena paused...) short of a cap: not counted.
     await addLives(v, [5000, 5000], { deathCause: "retired" });
     await run();
     expect(await rating(v)).toMatchObject({ n_lives: 3, mean: 20 });
+    // Reached the 24-hour cap (864 000 ticks), or the old 10-minute one (6000): counted.
+    await addLives(v, [1440 * 100], { deathCause: "retired", ticks: 864_000 });
+    await addLives(v, [1000], { deathCause: "retired", ticks: 6000 });
+    await run();
+    const row = await rating(v);
+    expect(row).toMatchObject({ n_lives: 5, alive_ticks: 3 * 600 + 864_000 + 6000 });
+    expect(row?.mean).toBeCloseTo((60 + 144_000 + 1000) / (3 + 1440 + 10), 9);
+    // A rebuild counts the same lives.
+    await d1.db.prepare("UPDATE ratings SET life_seq = NULL").run();
+    await run();
+    expect(await rating(v)).toEqual(row);
   });
 
   it("continues from its cursor when a run hits its budget", async () => {
@@ -232,7 +261,9 @@ describe("updateRatings", () => {
     await run();
     const row = await rating(v);
     expect(row).toMatchObject({ n_lives: 3, mean: 30 });
-    expect(JSON.parse(row?.recent_scores ?? "").scores).toEqual([10, 20, 60]);
+    expect(JSON.parse(row?.recent_scores ?? "").lives.map(([s]: number[]) => s)).toEqual([
+      10, 20, 60,
+    ]);
   });
 
   it("numbers a life written while alive when it ends", async () => {
@@ -242,7 +273,7 @@ describe("updateRatings", () => {
     await run();
     expect(await rating(v)).toMatchObject({ n_lives: 2, mean: 15 });
     await d1.db
-      .prepare("UPDATE lives SET end_tick = 500, score = 60, ended_at = ?2 WHERE id = ?1")
+      .prepare("UPDATE lives SET end_tick = 600, score = 60, ended_at = ?2 WHERE id = ?1")
       .bind(alive, T0 + 120_000)
       .run();
     await run();
@@ -439,6 +470,32 @@ describe("rebuilds", () => {
     expect(await rating(v)).toEqual({ ...good, life_seq: 260 });
   });
 
+  it("rebuilds rows in the old per-life format, which the old job may write after the migration", async () => {
+    const v = await readyBot("a");
+    await addLives(v, [10, 20, 30]);
+    await run();
+    // As the job from before points per minute writes a row: its window, `alive_ticks` left at 0.
+    await d1.db
+      .prepare(
+        `UPDATE ratings SET mean = 20, alive_ticks = 0,
+           recent_scores = '{"v":1,"scoring":"raw","scores":[10,20,30]}'`,
+      )
+      .run();
+    expect(await run()).toMatchObject({ rebuilt: 1 });
+    expect(await rating(v)).toMatchObject({ n_lives: 3, alive_ticks: 1800, mean: 20 });
+    expect(JSON.parse((await rating(v))?.recent_scores ?? "").v).toBe(2);
+    // And one it continues: a new life's window is rebuilt, not added to.
+    await d1.db
+      .prepare(
+        `UPDATE ratings SET alive_ticks = 0,
+           recent_scores = '{"v":1,"scoring":"raw","scores":[10,20,30]}'`,
+      )
+      .run();
+    await addLives(v, [40]);
+    await run();
+    expect(await rating(v)).toMatchObject({ n_lives: 4, alive_ticks: 2400, mean: 25 });
+  });
+
   it("rebuilds rows written before the job (no window)", async () => {
     const v = await readyBot("a");
     await addLives(v, [10, 20, 30]);
@@ -500,6 +557,7 @@ describe("migration 0007", () => {
       .bind(v, T0)
       .run();
     await applyMigrations(d1.db, undefined, MIGRATION);
+    // (Through every later migration: 0014 replays every life into the ratings, bumping `rev`.)
 
     const { results } = await d1.db
       .prepare("SELECT id, seq FROM lives ORDER BY seq")
@@ -510,9 +568,42 @@ describe("migration 0007", () => {
       { id: "mid", seq: 2 },
       { id: "late", seq: 3 },
     ]);
-    expect(await progress()).toEqual({ assigned_seq: 3, rated_seq: 0, rev: 0 });
+    expect(await progress()).toEqual({ assigned_seq: 3, rated_seq: 0, rev: 1 });
     await addLives(v, [10]);
     expect((await progress())?.assigned_seq).toBe(4);
+  });
+});
+
+describe("migration 0014", () => {
+  const MIGRATION = "0014_long_lives.sql";
+
+  it("deletes the per-life ratings and replays every life into points per minute", async () => {
+    await d1.dispose();
+    d1 = await createTestD1({ migrateBefore: MIGRATION });
+    const v = await readyBot("a");
+    // Lives of a minute, half a minute and the old cap (10 minutes), one stopped short of it.
+    await addLives(v, [10], { ticks: 600 });
+    await addLives(v, [20], { ticks: 300 });
+    await addLives(v, [400], { ticks: 6000, deathCause: "retired" });
+    await addLives(v, [999], { ticks: 900, deathCause: "retired" });
+    // The old job's rating: the mean score per life of the lives it counted.
+    await d1.db
+      .prepare(
+        `INSERT INTO ratings (version_id, activated_at, mean, ci, n_lives, recent_scores, life_seq)
+         VALUES (?, ?, 15, 10, 2, '{"v":1,"scoring":"raw","scores":[10,20]}', 4)`,
+      )
+      .bind(v, T0)
+      .run();
+    await d1.db.prepare("UPDATE rating_progress SET rated_seq = 4 WHERE id = 1").run();
+    await applyMigrations(d1.db, undefined, MIGRATION);
+
+    expect(await rating(v)).toBeNull();
+    expect(await progress()).toMatchObject({ assigned_seq: 4, rated_seq: 0 });
+    await run();
+    // The capped life counts now; the stopped one still doesn't. 430 points in 11.5 minutes.
+    const row = await rating(v);
+    expect(row).toMatchObject({ n_lives: 3, alive_ticks: 6900, life_seq: 4 });
+    expect(row?.mean).toBeCloseTo(430 / 11.5, 9);
   });
 });
 
@@ -604,7 +695,7 @@ describe("budget", () => {
     const scores = Array.from({ length: 100 }, (_, k) => ((k * versions + 7) * 7919) % 1000);
     const row = await rating("v7");
     expect(row?.n_lives).toBe(100);
-    expect(row?.mean).toBeCloseTo(expected(scores).mean, 9);
+    expect(row?.mean).toBeCloseTo(expected(scores, 100).mean, 9);
   }, 60_000);
 });
 

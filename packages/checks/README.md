@@ -140,10 +140,14 @@ cap.
 We use score per life, not per slot (the total a seat collects over the window, however many
 lives it takes), because the arena works in lives:
 
-- a version's rating is its mean score over its last 200 lives (SPEC §4);
-- the daily quota is counted in lives (100 per bot), so each life a bot wastes costs it.
+- the daily quota is counted in lives (100 per bot), so each life a bot wastes costs it;
+- until lives became long, a version's rating was its mean score over its last 200 lives. It is
+  now points per minute alive (SPEC §4), so the gate and the rating no longer measure exactly the
+  same thing: in 1000-tick check matches lives rarely reach their natural end, and the per-life
+  margin over `easy` was calibrated on this metric (`packages/cli/scripts/margin.ts`). Moving the
+  gate to points per minute would need that calibration redone.
 
-So the check measures the number the bot will be ranked by. A per-slot metric would favour bots
+So the check measured the number the bot was ranked by. A per-slot metric would favour bots
 that die often but score quickly between deaths, because a respawn costs nothing within a fixed
 window. Those bots rank badly per life.
 

@@ -1,97 +1,145 @@
-import { DEFAULT_RATING_CONFIG, type RatingConfig } from "./config.ts";
-import { summarize } from "./stats.ts";
+import { DEFAULT_RATING_CONFIG, minRankedTicks, type RatingConfig } from "./config.ts";
+import { ratioSummary, tQuantile } from "./stats.ts";
+
+/** One counted life: its score and how long it lasted. */
+export interface RatedLife {
+  readonly score: number;
+  /** Ticks alive (`end_tick − start_tick`); at least 1. */
+  readonly ticks: number;
+}
 
 /**
- * Everything needed to update a version's rating without rereading its lives: the scores of the
- * last `window` lives and the all-time life count. Plain data (see `storage.ts` for the D1 row).
+ * Everything needed to update a version's rating without rereading its lives: the last `window`
+ * lives and the all-time life count and time alive. Plain data (see `storage.ts` for the D1 row).
  *
- * The window has to be kept in full: a sliding mean must subtract the score that falls out, and
- * no fixed-size summary remembers which one that is. 200 numbers are a few KB per version, less
- * than fetching the evicted life from `lives` (an `OFFSET 200` scan) on every write.
+ * The window has to be kept in full: a sliding sum must subtract the life that falls out, and no
+ * fixed-size summary remembers which one that is. 200 pairs are a few KB per version, less than
+ * fetching the evicted life from `lives` (an `OFFSET 200` scan) on every write.
  */
 export interface RatingState {
-  /** Scores of the most recent lives, oldest first. */
-  readonly scores: readonly number[];
-  /** Every life ever recorded for the version, evicted ones included. */
+  /** The most recent lives, oldest first. */
+  readonly window: readonly RatedLife[];
+  /** Every life recorded for the version, evicted ones included. */
   readonly lives: number;
+  /** Ticks alive over every life recorded, evicted ones included (the ranking threshold). */
+  readonly ticks: number;
 }
 
 export const EMPTY_RATING_STATE: RatingState = Object.freeze({
-  scores: Object.freeze([]),
+  window: Object.freeze([]),
   lives: 0,
+  ticks: 0,
 });
 
 /** A version's rating as shown on the leaderboard and the bot page. */
 export interface Rating {
-  /** Mean score over the window. */
+  /** Points per minute alive over the window: Σ score / Σ minutes alive. */
   mean: number;
   /** Half-width of the confidence interval around `mean`; `Infinity` with a single life. */
   ci: number;
-  /** Lives the mean is over: `min(lives, window)`. */
+  /** Lives the rating is over: `min(lives, window)`. */
   n: number;
+  /** Minutes alive the rating is over (the window's). */
+  minutes: number;
   /** Every life recorded for the version. */
   lives: number;
-  /** `lives >= minLives`: the version is on the leaderboard. */
+  /** Minutes alive over every life recorded. */
+  totalMinutes: number;
+  /** On the leaderboard: `totalMinutes >= minMinutes`, with at least two lives. */
   ranked: boolean;
 }
 
 /**
- * State for a version whose recent life scores (oldest first) are `scores`, e.g. read back from
- * `lives` to rebuild a rating. Only the last `window` are kept; `lives` defaults to their count.
+ * State for a version whose recent lives (oldest first) are `window`, e.g. read back from `lives`
+ * to rebuild a rating. Only the last `config.window` are kept; `lives` and `ticks` (all-time)
+ * default to the given lives' count and total.
  */
 export function createRatingState(
-  scores: readonly number[],
-  lives: number = scores.length,
+  window: readonly RatedLife[],
+  lives: number = window.length,
+  ticks?: number,
   config: RatingConfig = DEFAULT_RATING_CONFIG,
 ): RatingState {
-  for (const s of scores) checkScore(s);
-  if (!Number.isInteger(lives) || lives < scores.length) {
-    throw new RangeError(`lives must be an integer >= ${scores.length}, got ${lives}`);
+  const checked = window.map(checkLife);
+  const given = checked.reduce((t, l) => t + l.ticks, 0);
+  const total = ticks ?? given;
+  if (!Number.isInteger(lives) || lives < window.length) {
+    throw new RangeError(`lives must be an integer >= ${window.length}, got ${lives}`);
   }
-  return { scores: scores.slice(-config.window), lives };
+  if (!Number.isInteger(total) || total < 0) {
+    throw new RangeError(`ticks must be an integer >= 0, got ${total}`);
+  }
+  return { window: checked.slice(-config.window), lives, ticks: total };
 }
 
 /**
- * The state after one more life with `score`: O(window), the oldest score drops out once the
- * window is full. Pure; `state` is left as it was.
+ * The state after one more life: O(window), the oldest life drops out once the window is full.
+ * Pure; `state` is left as it was.
  */
 export function addLife(
   state: RatingState,
-  score: number,
+  life: RatedLife,
   config: RatingConfig = DEFAULT_RATING_CONFIG,
 ): RatingState {
-  checkScore(score);
-  const keep = state.scores.slice(Math.max(0, state.scores.length - config.window + 1));
-  keep.push(score);
-  return { scores: keep, lives: state.lives + 1 };
+  const checked = checkLife(life);
+  const keep = state.window.slice(Math.max(0, state.window.length - config.window + 1));
+  keep.push(checked);
+  return { window: keep, lives: state.lives + 1, ticks: state.ticks + checked.ticks };
 }
 
-/** The rating of `state`, or `null` before the first life. O(window). */
+/**
+ * The rating of `state`, or `null` before the first life. O(window).
+ *
+ * `mean` is the ratio estimator Σ score / Σ minutes over the window, i.e. every life weighs as
+ * much as it lasted: a 24-hour life counts for 24 hours, a 5-second one for 5 seconds, however
+ * high its own rate (a lucky short life can't swing it, and a long one can't be drowned out by
+ * many short ones). `ci` is `t(n − 1) × se`, with `se` the delta-method standard error of the
+ * ratio (`ratioSummary`) and `t` Student's quantile for the configured `z` (`tQuantile`), which
+ * keeps the interval wide while a version has few lives.
+ */
 export function rate(
   state: RatingState,
   config: RatingConfig = DEFAULT_RATING_CONFIG,
 ): Rating | null {
   const window =
-    state.scores.length > config.window ? state.scores.slice(-config.window) : state.scores;
+    state.window.length > config.window ? state.window.slice(-config.window) : state.window;
   if (window.length === 0) return null;
-  const { n, mean, sd } = summarize(window);
+  const perMinute = config.ticksPerMinute;
+  // Points per minute directly: scores × ticks per minute over ticks.
+  const { n, ratio, se } = ratioSummary(
+    window.map((l) => l.score * perMinute),
+    window.map((l) => l.ticks),
+  );
+  const ticks = window.reduce((t, l) => t + l.ticks, 0);
   return {
-    mean,
-    ci: n < 2 ? Number.POSITIVE_INFINITY : (config.z * sd) / Math.sqrt(n),
+    mean: ratio,
+    ci: n < 2 ? Number.POSITIVE_INFINITY : tQuantile(config.z, n - 1) * se,
     n,
+    minutes: ticks / perMinute,
     lives: state.lives,
-    ranked: state.lives >= config.minLives,
+    totalMinutes: state.ticks / perMinute,
+    ranked: n >= 2 && state.ticks >= minRankedTicks(config),
   };
 }
 
 /**
- * Largest life score magnitude accepted. Real scores are in the thousands; the bound keeps a
- * window's sums and squares far from overflow (which would turn the mean and the order into NaN).
+ * Largest life score magnitude accepted. Real scores are in the thousands to millions (a 24-hour
+ * life); the bound keeps a window's sums and squares far from overflow (which would turn the
+ * rating and the order into NaN).
  */
 export const MAX_LIFE_SCORE = 1e12;
+/** Longest life accepted, in ticks: far above any life cap (864 000 is 24 hours). */
+export const MAX_LIFE_TICKS = 1e9;
 
-function checkScore(score: number): void {
+/** The life as stored: a finite score within ±`MAX_LIFE_SCORE`, at least one tick. */
+function checkLife(life: RatedLife): RatedLife {
+  const { score, ticks } = life;
   if (!(Math.abs(score) <= MAX_LIFE_SCORE)) {
     throw new RangeError(`life score must be finite and within ±${MAX_LIFE_SCORE}, got ${score}`);
   }
+  if (!(Number.isInteger(ticks) && ticks >= 0 && ticks <= MAX_LIFE_TICKS)) {
+    throw new RangeError(`life ticks must be an integer in [0, ${MAX_LIFE_TICKS}], got ${ticks}`);
+  }
+  // A life lasts at least the tick it died on; 0 would divide by nothing.
+  return { score, ticks: Math.max(1, ticks) };
 }

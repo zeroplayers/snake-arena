@@ -165,7 +165,9 @@ async function addVersion(
     .run();
   if (rating) {
     await d1.db
-      .prepare("INSERT INTO ratings (version_id, mean, ci, n_lives) VALUES (?, ?, ?, 40)")
+      .prepare(
+        "INSERT INTO ratings (version_id, mean, ci, n_lives, alive_ticks) VALUES (?, ?, ?, 40, 36000)",
+      )
       .bind(id, rating.mean, rating.ci)
       .run();
   }

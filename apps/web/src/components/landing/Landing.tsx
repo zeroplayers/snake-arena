@@ -33,9 +33,10 @@ const HOW = [
     title: "Watch it, fix it",
     body: (
       <>
-        Rooms run around the clock. Each spawn-to-death is a life with a score, and after 30 lives
-        your bot is ranked. Recent deaths come with a replay (kept two days, longer for the best
-        lives) and a trace of what your bot saw and did, so you (or Claude) can fix it and ship v2.
+        Rooms run around the clock. Each spawn-to-death is a life with a score (a good snake lives
+        for hours), and after an hour alive your bot is ranked. Recent deaths come with a replay of
+        their last ten minutes (kept two days, longer for the best lives) and a trace of what your
+        bot saw and did, so you (or Claude) can fix it and ship v2.
       </>
     ),
   },
@@ -67,7 +68,7 @@ const FACTS = [
   },
   {
     title: "Ranked by evidence",
-    body: "The mean score over a bot's last 200 lives, ranked by the low end of its range, so a lucky streak can't beat a steady record.",
+    body: "Points per minute alive over a bot's last 200 lives, ranked by the low end of its range, so a lucky streak can't beat a steady record.",
   },
   {
     title: "Claude is optional",

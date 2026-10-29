@@ -42,6 +42,8 @@ interface SnakeEntry {
 }
 
 const INITIAL_BODY_CAPACITY = 64;
+/** Opacity of a `ghost` snake. */
+const GHOST_OPACITY = 0.4;
 const RENDER_ORDER_STRIDE = 3;
 /** The tail is aimed from this many body spacings up the body. */
 const TAIL_AIM = 2;
@@ -196,13 +198,17 @@ export class SnakeRenderer {
     const skin = resolveSkin(snake.skin?.id);
     const color =
       snake.skin?.color ?? (SNAKE_PALETTE[hashString(snake.id) % SNAKE_PALETTE.length] as string);
-    const skinKey = `${skin.id}|${color}`;
+    const opacity = snake.ghost ? GHOST_OPACITY : 1;
+    const skinKey = `${skin.id}|${color}|${opacity}`;
     const existing = this.snakes.get(snake.id);
     if (existing && existing.skinKey === skinKey) return existing;
 
-    const head = new Mesh(this.geometry, this.material(skin.head.svg, color));
-    const tail = new Mesh(this.geometry, this.material(skin.tail.svg, color));
-    const body = this.createBody(this.material(skin.body.svg, color), INITIAL_BODY_CAPACITY);
+    const head = new Mesh(this.geometry, this.material(skin.head.svg, color, opacity));
+    const tail = new Mesh(this.geometry, this.material(skin.tail.svg, color, opacity));
+    const body = this.createBody(
+      this.material(skin.body.svg, color, opacity),
+      INITIAL_BODY_CAPACITY,
+    );
     const state = existing?.state ?? {
       points: [],
       pathLength: 0,
@@ -253,14 +259,15 @@ export class SnakeRenderer {
     return body;
   }
 
-  /** Materials are shared by every snake with the same part and colour. */
-  private material(svg: string, color: string): MeshBasicMaterial {
-    const key = `${color}|${svg}`;
+  /** Materials are shared by every snake with the same part, colour and opacity. */
+  private material(svg: string, color: string, opacity: number): MeshBasicMaterial {
+    const key = `${color}|${opacity}|${svg}`;
     let material = this.materials.get(key);
     if (!material) {
       material = new MeshBasicMaterial({
         map: this.textures.get(svg, color),
         transparent: true,
+        opacity,
         depthWrite: false,
         depthTest: false,
       });

@@ -6,6 +6,7 @@ import {
   DEFAULT_CONFIG,
   decodeBroadcast,
   type Keyframe,
+  spawnGraceLeft,
   TICK_RATE,
 } from "@zerosnake/engine";
 import { type RenderFood, type RenderSnake, SNAKE_PALETTE } from "@zerosnake/renderer";
@@ -300,6 +301,7 @@ export class BroadcastSource implements MatchSource {
         length: snake.mass,
         radius: snake.size / 2,
         skin: { color: life.color },
+        ...(spawnGraceLeft(snake, config) > 0 && { ghost: true }),
       });
     }
     const deaths: string[] = [];

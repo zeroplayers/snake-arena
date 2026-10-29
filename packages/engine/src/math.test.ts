@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { atan2, exitTime, squareNorm, wrapAngle } from "./math.ts";
+import { atan2, exitTime } from "./math.ts";
 import { createRng } from "./rng.ts";
-import { createWorld, spawnSnake } from "./world.ts";
 
 describe("atan2", () => {
   it("matches Math.atan2 everywhere", () => {
@@ -34,22 +33,5 @@ describe("exitTime", () => {
     expect(exitTime(9, 8, 4, 4, 10)).toBe(0.25);
     expect(exitTime(0, 0, 1, 1, 10)).toBe(1);
     expect(exitTime(11, 0, 1, 0, 10)).toBe(0);
-  });
-});
-
-describe("spawning", () => {
-  it("places snakes inside the spawn square, facing the centre", () => {
-    const world = createWorld({ seed: 5 });
-    const c = world.config;
-    let corner = false;
-    for (let i = 0; i < 200; i++) {
-      const s = spawnSnake(world, { id: `s${i}`, author: "a" });
-      const { x, y } = s.head;
-      expect(squareNorm(x, y)).toBeLessThanOrEqual(c.arenaHalfSize * c.spawnHalfSizeFactor);
-      if (Math.hypot(x, y) > c.arenaHalfSize * c.spawnHalfSizeFactor) corner = true;
-      expect(Math.abs(wrapAngle(s.angle - Math.atan2(-y, -x)))).toBeLessThan(1e-12);
-    }
-    // Uniform over the square, so the corners beyond the inscribed circle get some.
-    expect(corner).toBe(true);
   });
 });

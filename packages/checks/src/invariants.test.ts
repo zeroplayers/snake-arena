@@ -21,6 +21,7 @@ const snake = (id: string, author: string): SnakeView => ({
   head: null,
   angle: null,
   boosting: false,
+  spawnGrace: 0,
   segments: [],
 });
 const view = (snakes: SnakeView[], tick = 123_456, id = ME, lifeTick = 5): BotState => ({
@@ -35,6 +36,7 @@ const view = (snakes: SnakeView[], tick = 123_456, id = ME, lifeTick = 5): BotSt
     radius: 1,
     turnRate: 0.4,
     boosting: false,
+    spawnGrace: 0,
     segments: [],
   },
   snakes,

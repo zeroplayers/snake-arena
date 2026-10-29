@@ -21,10 +21,15 @@ Sources: [`config.ts`](../packages/engine/src/config.ts),
   about the area of a disc of radius 100). `x` grows east (right), `y` grows **north (up)**.
 - Angles are radians, counter-clockwise from +x: `0` is east, `π/2` north. Headings are kept in
   (−π, π].
-- A new snake spawns at a uniformly random spot of the centred square [−71.2, 71.2]²
-  (`arenaHalfSize × 0.8`), trying up to 30 spots for one at least 10 units from every other
-  snake's body, then taking the last one tried. It faces the centre, with its body laid out
-  straight behind it.
+- A new snake spawns in the centred square [−71.2, 71.2]² (`arenaHalfSize × 0.8`), at the
+  roomiest of up to 24 random spots (`spawnCandidates`, [`spawn.ts`](../packages/engine/src/spawn.ts)).
+  Room is the gap to the nearest other snake's body point, head (counted 5 ticks of its movement
+  closer, since it can turn toward you) or the road that head drives over the next 2 s on its
+  current heading. The first spot with 10 units of room (`spawnClearance`) is taken. The snake
+  faces the one of 16 headings whose straight road over 2 s keeps the most room (other snakes and
+  the wall), the centre when several have 10 units, with its body laid out straight behind it.
+- For its first **15 ticks** (1.5 s, `spawnGraceTicks`) a new snake is in **spawn grace**; see
+  [Collisions](#collisions-and-death).
 
 ## Mass, size and body
 
@@ -123,6 +128,11 @@ head touches during its move is what kills it.
 - **Wall.** You die when your head point ends a tick outside the square, i.e. when
   `max(|x|, |y|) > 89` and `state.wallDistance` would drop below 0. Your body radius doesn't count
   here. Corners are the dangerous spots: heading into one, a snake has two walls to turn away from.
+- **Spawn grace.** For its first 15 ticks a new snake takes no part in snake-to-snake collisions:
+  heads pass through its body and its head passes through bodies and heads, so it can't kill and
+  can't be killed by another snake. The wall still kills it, and it eats as usual. Bots see the
+  ticks left as `spawnGrace` (on `self` and on every visible snake). When it runs out its body is
+  solid again, wherever it lies.
 - **Your own body** never kills you.
 - A snake that dies this tick still kills others: its body and head stay in place for this tick's
   collisions.

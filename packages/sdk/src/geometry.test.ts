@@ -32,6 +32,7 @@ function self(overrides: Partial<SelfState> = {}): SelfState {
     radius: 1,
     turnRate: 0.1,
     boosting: false,
+    spawnGrace: 0,
     segments: [{ x: 0, y: 0 }],
     ...overrides,
   };
@@ -46,6 +47,7 @@ function snake(segments: { x: number; y: number }[], radius = 1): SnakeView {
     head: segments[0] ?? null,
     angle: 0,
     boosting: false,
+    spawnGrace: 0,
     segments,
   };
 }

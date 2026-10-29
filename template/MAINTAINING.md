@@ -90,6 +90,13 @@ kills, which a bot that avoids everyone can't always match. Watch the 1% figure 
 never change (`packages/cli/src/testing/passing-bot.ts`), so a change here doesn't put them at risk.
 When the numbers change, update "Keep a margin over `easy`" in `CLAUDE.md`.
 
+Safe spawns and spawn grace (#102) made `easy` a little stronger again: it dies less at spawn, about
+42 per life instead of 40.5 on the sets below, while the bot stayed at about 140. On top of
+`turnRate` 0.4 (#98) and the remains spread (#103), the standard 1200 sets give 3 failures (as
+before), 35 sets below 1.5× (32 before) and 137 below 2× (110 before); 1% 1.26× / 1.37×, 5%
+1.58× / 1.68×, median 3.56× / 3.62× (`--from 100000` / `--from 200000 --minify`; worst set 100001,
+easy 177.7 per life against 144.9). Getting back to ≤ 1 failure in 1200 with 1% ≥ 1.5× is #105.
+
 The bot must also stay well inside the per-tick budget (the smoke test wants at most half of it
 on its seeds). QuickJS counts interrupts per ~10 000 branches or calls, and the sandbox's metering
 adds calls of its own, so a few nested loops (feelers × look-ahead ticks × body points) add up

@@ -66,6 +66,7 @@ export {
   replayChunkVersion,
 } from "./replay.ts";
 export { createRng, type Rng, type RngState } from "./rng.ts";
+export { spawnGraceLeft } from "./spawn.ts";
 export { quantizeTurn, step, TURN_STEPS } from "./step.ts";
 export type {
   Action,

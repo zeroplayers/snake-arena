@@ -20,6 +20,8 @@
  *   `info.visionRadius`; for other snakes only the visible body points are listed.
  * - Segments are ordered head first; `self.segments[0]` equals `self.head`.
  * - `lifeTick` is 0 on the first `tick()` of a life; `tick` is the room's tick counter.
+ * - Spawn grace: while a snake's `spawnGrace` is above 0 it neither kills nor dies by other
+ *   snakes (it passes through them); only the wall kills it.
  * - State is plain JSON (it is copied into a QuickJS sandbox every tick). Memory (`mem`) is
  *   NOT copied: it lives inside the sandbox for the whole life, so it may hold anything.
  * - The SDK itself has no dependencies and uses no host APIs, so it runs inside QuickJS.

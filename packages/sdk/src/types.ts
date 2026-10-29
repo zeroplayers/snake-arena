@@ -82,6 +82,12 @@ export interface SelfState {
   /** Whether you boosted this tick. */
   boosting: boolean;
   /**
+   * Ticks of spawn grace left, the coming one included; 0 once it is over. A new life starts with
+   * some (currently 15 ticks, 1.5 s). While it lasts no other snake can kill you and you kill
+   * none: bodies and heads pass through each other. The wall still kills, and you can eat.
+   */
+  spawnGrace: number;
+  /**
    * Body points from head (`[0]`) to tail. May be downsampled to keep state small, so the spacing
    * between points is not guaranteed; treat the body as circles of `radius` around each point.
    */
@@ -104,6 +110,12 @@ export interface SnakeView {
   angle: number | null;
   /** Whether it boosted this tick. */
   boosting: boolean;
+  /**
+   * Its spawn grace left (see {@link SelfState.spawnGrace}). While it is above 0 that snake can't
+   * kill you and you can't kill it: its body isn't solid, so don't waste a cut on it, and don't
+   * stay inside its body when the grace runs out.
+   */
+  spawnGrace: number;
   /**
    * Only the body points within your vision radius, ordered head-to-tail. Can be non-contiguous
    * (the body may leave and re-enter your vision) and downsampled. Never empty.

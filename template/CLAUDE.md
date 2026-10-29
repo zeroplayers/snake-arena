@@ -94,6 +94,9 @@ Only `src/` is deployed. Keep tests and tools out of it.
   - at load: module evaluation + `init()` over their 100-interrupt budget → `timeout` before the
     first tick; throwing there → `error`.
   - Your own body is harmless: you cannot hit yourself.
+  - Spawn grace: for the first 15 ticks of a life (`spawnGrace` > 0) a snake passes through other
+    snakes and they through it; only the wall kills it. A snake in grace can't be cut off, and its
+    body is solid again the moment its `spawnGrace` reaches 0.
   - Collisions are swept along the move: a fast head cannot jump through a thin body.
   - A dead snake drops its whole length as food.
 - **Life cap:** after `info.maxLifeTicks` (6000 ticks = 10 min) the snake retires with its score.
@@ -162,11 +165,13 @@ export default defineBot({
 | `food[]`       | Pellets `{ x, y, value }` within `visionRadius`, nearest first.                   |
 
 `self` (`SelfState`): `id`, `head`, `angle`, `length`, `speed` (distance moved last tick), `radius`,
-`turnRate`, `boosting`, `segments` (head first, `segments[0]` is the head).
+`turnRate`, `boosting`, `segments` (head first, `segments[0]` is the head), `spawnGrace` (ticks
+of spawn grace left).
 
 Each of `snakes[]` (`SnakeView`): `id`, `author` (`"house"` for house bots), `length` (full length,
 even if only part is visible), `radius`, `head` and `angle` (**`null` when the head is out of
-vision**), `boosting`, `segments` (only visible body points, head to tail, never empty).
+vision**), `boosting`, `segments` (only visible body points, head to tail, never empty),
+`spawnGrace`.
 
 What you see is capped to keep state small: the 32 nearest snakes, 256 body points over all of them
 (far parts of bodies are dropped first), 128 nearest food pellets, 128 points of your own body.
@@ -279,7 +284,7 @@ before uploading: a bot that fails isn't uploaded and costs no deploy.
 - **Keep a margin over `easy`.** easy's own score swings a lot from one set of seeds to the next
   (it dies often, and now and then has a long lucky life with kills), so a bot close to easy's
   score can pass on one version and fail on the next, by luck of the seeds. The starter bot scores
-  about 3.8× easy's mean score per life on typical seeds and at least 1.4× on about 99% of seed
+  about 3.6× easy's mean score per life on typical seeds and at least 1.3× on about 99% of seed
   sets, but even it failed 3 of the 1200 seed sets we measured (easy had an unusually good set
   there): aim for a margin like that. One passing `test` doesn't prove a bot is good enough: if a pass is narrow
   (look at "mean score per life … easy in your seat" seed by seed), make the bot clearly better,

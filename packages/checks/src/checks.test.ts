@@ -5,6 +5,7 @@ import {
   BAD_BOTS,
   botWithTick,
   easyWith,
+  flakyInit,
   houseBundle,
   input,
   longBody,
@@ -130,7 +131,12 @@ describe("bad bots are rejected with a clear reason", () => {
   });
 
   it("init() that throws on some lives fails the run, not just the load check", async () => {
-    const report = await runChecks(input(BAD_BOTS.flakyInit), QUICK);
+    // Life seeds come from the room's PRNG, so they move with the rules: ask for the load check's.
+    const told = await runChecks(input(BAD_BOTS.seedTeller), QUICK);
+    expect(told.load.status).toBe("fail");
+    const good = Number(/life seed (\d+)/.exec(told.load.error ?? "")?.[1]);
+    expect(Number.isInteger(good)).toBe(true);
+    const report = await runChecks(input(flakyInit(good)), QUICK);
     rejected(report);
     expect(report.load.status).toBe("pass");
     expect(report.run.fault).toMatchObject({ reason: "load", fault: "error", atLoad: true });
@@ -161,7 +167,9 @@ describe("bad bots are rejected with a clear reason", () => {
   it(
     "a bot that only survives (circles, never eats) does not qualify",
     async () => {
-      const report = await runChecks(input(BAD_BOTS.circler), QUICK);
+      // The full check: on QUICK's 3 × 400 ticks easy's bar swings with how a room plays out
+      // (since #102 the circler collects an ordinary kill on seed 101 there).
+      const report = await runChecks(input(BAD_BOTS.circler));
       rejected(report);
       expect(report.run.status).toBe("pass");
       expect(report.qualify.status).toBe("fail");

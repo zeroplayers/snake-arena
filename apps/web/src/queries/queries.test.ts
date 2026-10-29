@@ -136,7 +136,10 @@ describe("getBotPage", () => {
   it("counts deaths by cause, most common first", async () => {
     const causes = (await getBotPage(db, "ada", "greedy", { version: 1 }))?.selected?.causes ?? [];
     expect(causes.reduce((n, c) => n + c.count, 0)).toBe(120);
-    expect(causes[0]?.cause).toBe("collision");
+    expect(causes[0]?.ending).toBe("collision");
+    // The seed's `retired` lives end short of a life cap: their versions were stopped.
+    expect(causes.map((c) => c.ending)).toContain("stopped");
+    expect(causes.map((c) => c.ending)).not.toContain("capped");
     const counts = causes.map((c) => c.count);
     expect(counts).toEqual([...counts].sort((a, b) => b - a));
   });
@@ -241,7 +244,7 @@ describe("bounded page cost", () => {
     expect((await getBotPage(db, "linus", "many", { page: 9 }))?.versions).toEqual([]);
     expect((await getBotPage(db, "linus", "many", { version: 120 }))?.selected).toMatchObject({
       n: 120,
-      causes: [{ cause: "wall", count: 1 }],
+      causes: [{ ending: "wall", count: 1 }],
     });
   });
 
@@ -272,7 +275,7 @@ describe("leaderboard order", () => {
         "INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key) VALUES ('t-lucky-1', 't-lucky', 1, 'ready', 'b', 's'), ('t-steady-1', 't-steady', 1, 'ready', 'b', 's')",
       ),
       d1.db.prepare(
-        "INSERT INTO ratings (version_id, mean, ci, n_lives) VALUES ('t-lucky-1', 500, 450, 30), ('t-steady-1', 300, 20, 200)",
+        "INSERT INTO ratings (version_id, mean, ci, n_lives, alive_ticks) VALUES ('t-lucky-1', 500, 450, 30, 36000), ('t-steady-1', 300, 20, 200, 500000)",
       ),
     ]);
     const rows = await getLeaderboard(db);
@@ -296,7 +299,7 @@ describe("leaderboard order", () => {
         "INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key) VALUES ('t-gone-1', 't-gone', 1, 'ready', 'b', 's')",
       ),
       d1.db.prepare(
-        "INSERT INTO ratings (version_id, mean, ci, n_lives) VALUES ('t-gone-1', 900, 10, 200)",
+        "INSERT INTO ratings (version_id, mean, ci, n_lives, alive_ticks) VALUES ('t-gone-1', 900, 10, 200, 500000)",
       ),
     ]);
     expect((await getLeaderboard(db))[0]?.botSlug).toBe("gone");

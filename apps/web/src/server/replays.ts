@@ -35,10 +35,12 @@ import { createDb, type Db } from "../db";
 import { leaderboardQuery } from "../db/queries";
 import { bots, lives, users, versions } from "../db/schema";
 import {
+  parseChunkKey,
   REPLAY_PINNED_LIVES_PER_BOT,
   REPLAY_PINNED_TOP_BOTS,
   REPLAY_PINNED_TOP_LIVES,
   REPLAY_RETENTION_DAYS,
+  replayWindowStart,
 } from "../shared/replay";
 
 /** `triggers.crons` entry that runs the sweep (wrangler.jsonc). */
@@ -64,7 +66,7 @@ export interface ReplaySweepEnv {
   METRICS?: MetricsDataset;
 }
 
-/** A life whose replay is kept: every chunk from its birth to its death (`replayKey`). */
+/** A life whose replay is kept: the chunks of its replay window, up to its death (`replayKey`). */
 export interface PinnedLife {
   id: string;
   startTick: number;
@@ -200,12 +202,7 @@ export async function loadPinnedLives(db: Db, now: number): Promise<PinnedLife[]
   }
 }
 
-/** A chunk key's room prefix (`<roomId>/`) and start tick, or null for any other key. */
-export function parseChunkKey(key: string): { room: string; tick: number } | null {
-  const match = /^(.+\/)(\d+)\.zsr$/.exec(key);
-  if (!match) return null;
-  return { room: match[1] as string, tick: Number(match[2]) };
-}
+export { parseChunkKey };
 
 /** Pinned lives as tick ranges per room: chunks starting from `from`'s chunk up to `to`. */
 export interface Pins {
@@ -221,7 +218,9 @@ export function pinsOf(pinned: PinnedLife[]): Pins {
     const death = parseChunkKey(life.replayKey);
     if (!death) continue;
     const ranges = pins.rooms.get(death.room) ?? [];
-    ranges.push({ from: life.startTick, to: death.tick });
+    // Only the replay window (the last 10 minutes before the end), not a whole 24-hour life.
+    const end = life.endTick ?? death.tick;
+    ranges.push({ from: replayWindowStart(life.startTick, end), to: death.tick });
     pins.rooms.set(death.room, ranges);
   }
   return pins;
@@ -231,8 +230,9 @@ export function pinsOf(pinned: PinnedLife[]): Pins {
  * Whether a pinned life needs the chunk at `key`. `next` is the start tick of the room's next
  * chunk, `undefined` when unknown (or there's none), which keeps every chunk a pinned life could
  * need. A chunk plays from its start tick up to the next chunk's (each chunk opens with a world
- * snapshot, so it needs no earlier one), and a life needs every chunk from the one it was born in
- * to the one it died in.
+ * snapshot, so it needs no earlier one), and a life needs the chunks of its replay window: from
+ * the one holding `replayWindowStart` (its birth, or 10 minutes before its end) to the one it
+ * died in.
  */
 export function isPinned(pins: Pins, key: string, next: number | undefined): boolean {
   if (pins.keys.has(key)) return true;

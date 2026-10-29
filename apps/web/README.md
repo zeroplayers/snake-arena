@@ -47,10 +47,10 @@ and the empty cases `/@newbie`, `/@linus/draft`, `/@grace/wip`.
 
 | Route                | Data                                                                                                                                                                |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/leaderboard`       | `leaderboardQuery` (`src/db/queries.ts`): stored `ratings`, ≥ 30 lives                                                                                              |
+| `/leaderboard`       | `leaderboardQuery` (`src/db/queries.ts`): stored `ratings`, ≥ an hour alive (`alive_ticks`)                                                                         |
 | `/@{username}`       | `getProfile`: bots, active version, its rating                                                                                                                      |
 | `/@{username}/{bot}` | `src/queries/bot.ts`: versions, rating chart, recent lives; `?v=N` picks the version. Sources from `SOURCES` (`src/queries/sources.ts`), shown as escaped text only |
-| `/replay/{lifeId}`   | `src/queries/replay.ts` + the life's chunk from `REPLAYS` (`GET /api/lives/:id/replay`, 410 once expired), played by `ReplaySource`                                 |
+| `/replay/{lifeId}`   | `src/queries/replay.ts` + the life's replay window from `REPLAYS` (`GET /api/lives/:id/replay`, 410 once expired), played by `ReplaySource`                         |
 
 Pages only read `ratings`; the rating job below writes it. `ratings.lower_bound` is a generated
 column (`mean - ci`), the leaderboard's sort key.
@@ -58,9 +58,12 @@ column (`mean - ci`), the leaderboard's sort key.
 ## Ratings
 
 The rating job (`src/server/ratings.ts`, Cron Trigger every minute) turns `lives` into `ratings`
-with `@zerosnake/rating`: mean and 95% interval over the last 200 counted lives, ranked by the
-lower bound from 30 lives. The arena only inserts `lives` rows; nothing else writes `ratings`
-(a rollback deletes the version's row).
+with `@zerosnake/rating`: points per minute alive (Σ score / Σ minutes, each life's length from
+`end_tick − start_tick`) and a 95% interval over the last 200 counted lives, ranked by the lower
+bound once the counted lives add up to an hour alive (`ratings.alive_ticks`). The arena only
+inserts `lives` rows; nothing else writes `ratings` (a rollback deletes the version's row).
+Migration `0014_long_lives` deleted the per-life ratings and moved the cursor back to 0, so the
+job rebuilt every rating from `lives`.
 
 - **Cursor.** Triggers number each finished life in commit order (`lives.seq`, counter in
   `rating_progress.assigned_seq`, `migrations/0007_rating_job.sql`); the job reads lives after
@@ -68,8 +71,9 @@ lower bound from 30 lives. The arena only inserts `lives` rows; nothing else wri
   the rating writes. Lives the arena writes late just come later in the order. At most 20 000
   lives per run (about 45 D1 queries and well under a second of CPU per 10 000), so a backlog
   drains over a few runs.
-- **Counted lives**: started at or after the version's `activated_at` (its current stint),
-  `death_cause` not `retired`. A rating needs two of them.
+- **Counted lives**: started at or after the version's `activated_at` (its current stint), and
+  not stopped by the platform: `retired` counts only when the life lasted exactly a life cap
+  (864 000 ticks, or 6000 before long lives; `src/shared/lives.ts`). A rating needs two of them.
 - **Idempotent**: `ratings.life_seq` records which lives a rating covers, and every commit is
   guarded by `rating_progress.rev`, so overlapping runs, a cursor moved back or a life written
   twice never count a life twice.
@@ -87,13 +91,16 @@ range with a `LIMIT` (latest 20 lives, death causes over the latest 200).
 `src/replay/ReplaySource.ts` is the `MatchSource` the viewer plays replays from: it runs the chunks
 once through `ReplayPlayer` (checking hashes; on a mismatch it plays on and the page warns), keeps
 a world copy every 100 ticks and at each chunk start, and rebuilds any tick from the copy before
-it. The page loads the chunk, `@zerosnake/viewer` and three.js only in the browser, after
+it. The page loads the life's replay window (`src/queries/replay.ts`: the chunks covering its last
+10 minutes, `REPLAY_WINDOW_TICKS`, found with one R2 list from the death chunk's key, at most 6 of
+them; never a whole 24-hour life), `@zerosnake/viewer` and three.js only in the browser, after
 hydration. It assumes the room spawns each life with the engine snake id equal to `lives.id`, and
 that `lives.replay_key` is the chunk holding the death.
 
 ## Replay retention
 
-Replays are kept 2 days, plus every chunk a pinned life needs (`src/shared/replay.ts`: the 100
+Replays are kept 2 days, plus the chunks of a pinned life's replay window, its last 10 minutes,
+not the whole life (`src/shared/replay.ts`: the 100
 best lives of all time, leaving out banned authors' and bots' lives and scores over
 `MAX_LIFE_SCORE`, and the 5 best of each top-20 leaderboard bot over all its versions; by score,
 ties to the earlier life, among lives whose replay is still there). The sweep
@@ -107,8 +114,8 @@ ties to the earlier life, among lives whose replay is still there). The sweep
    (a query that silently returns too little), it deletes nothing;
 2. lists the rooms (`<roomId>/` prefixes), starting from a random one, and each room's chunks
    oldest first, until the first one younger than 2 days (by R2 upload time). A chunk is pinned if
-   a pinned life was born before the next chunk of the same room starts and died in it or a later
-   one;
+   a pinned life's replay window (from its birth, or 10 minutes before its end if it lived longer)
+   starts before the next chunk of the same room does, and the life died in it or a later one;
 3. sets `lives.replay_expired_at` on the lives that died in the chunks it deletes, then deletes
    them, 1,000 at a time. At most 300 list calls, 50,000 deletions and 60 s of listing per run;
    the next run carries on. An accelerated room writes ~5,800 chunks a day (~120 per run), so
@@ -219,7 +226,7 @@ also come from the site's origin (`Origin`, or `Sec-Fetch-Site: same-origin`).
   is deleted and `versions.activated_at` moves forward. The rollback uses one of
   `DEPLOYS_PER_DAY` (`src/server/quota.ts`; the CLI API counts it too). A kept rating would let an
   author deploy many versions and switch to the luckiest frozen one. A free restart would let them
-  roll back until 30 lives came out lucky. Either way the "redeploy lottery" would be back.
+  roll back until a first hour came out lucky. Either way the "redeploy lottery" would be back.
   Archiving the active version is free.
 - **Quotas shown:** deploys and rollbacks today against `DEPLOYS_PER_DAY`, active bots against
   `BOTS_PER_AUTHOR`, and per bot the lives started today against 100
@@ -368,8 +375,10 @@ counts for nothing. The arena's other alerts (rooms stuck, consumer failing, kil
 
 **No lives recorded** comes from the Cron Trigger (`*/5 * * * *`, `src/server/liveness.ts`). It
 reads D1: the newest `lives` rows (by `rowid`, a few rows, not a scan), the latest activation of a
-`ready` version and the kill switch's last change (and counts 00:00 UTC, when quotas reset, as
-a fresh start). It reports `stalled` when the latest of those is older than
+`ready` version, the kill switch's last change and the matchmaker's heartbeat while it has lives
+in flight (`arena_heartbeat`, written about every minute: a life reaches `lives` only when it
+ends, and a strong bot's life lasts hours), and counts 00:00 UTC, when quotas reset, as a fresh
+start. It reports `stalled` when the latest of those is older than
 `NO_LIVES_ALERT_MINUTES` (15) while the arena isn't paused and has playable versions: `ready`
 ones whose bot hasn't used its `livesPerBotPerDay` lives today. With no `ready` versions it's
 `idle` (house bots write no `lives` rows); when every bot's daily quota is used up, it's

@@ -194,7 +194,11 @@ async function fetchTrace(api: Api, id: string, server: string): Promise<TraceRe
  */
 export function formatDeathContext(trace: TraceResponse, ticks: number, server: string): string[] {
   const lifeTicks = trace.endTick - trace.startTick;
-  const ending = lifeEnding({ deathCause: causeOf(trace.cause), killer: trace.killerName });
+  const ending = lifeEnding({
+    deathCause: causeOf(trace.cause),
+    killer: trace.killerName,
+    ticks: lifeTicks,
+  });
   const out = [
     `${bold(`Life ${trace.lifeId}`)}: ${ending} at room tick ${trace.endTick}, after ${lifeTicks} ticks`,
   ];
@@ -252,6 +256,18 @@ function percent(n: number, of: number): string {
   return `${p < 10 ? p.toFixed(1) : Math.round(p)}%`;
 }
 
+/** Life caps the arena has used, in ticks: 6000 (10 minutes) until long lives, 864 000 (24 h). */
+const LIFE_CAPS = [6000, 864_000];
+
+function isCap(ticks: number | null | undefined): boolean {
+  return ticks != null && LIFE_CAPS.includes(ticks);
+}
+
+function capName(ticks: number): string {
+  const minutes = ticks / 600;
+  return minutes >= 60 ? `${minutes / 60}-hour` : `${minutes}-minute`;
+}
+
 function causeOf(cause: string): LifeEntry["deathCause"] {
   return cause === "collision" ||
     cause === "wall" ||
@@ -298,7 +314,20 @@ export function describeLife(life: LifeEntry, server: string): string {
   return `  ${when}  ${stats}  ${end}${replay}`;
 }
 
-export function lifeEnding(life: Pick<LifeEntry, "deathCause" | "killer">): string {
+/**
+ * How a life ended, in plain language. A `retired` life either reached the life cap (it then
+ * lasted exactly the cap: 864 000 ticks, 6000 before long lives) or was stopped because its
+ * version no longer plays; servers since long lives say which (`ending`), older ones don't.
+ */
+export function lifeEnding(
+  life: Pick<LifeEntry, "deathCause" | "killer" | "ending" | "ticks">,
+): string {
+  if (life.ending === "capped" || (life.deathCause === "retired" && isCap(life.ticks))) {
+    return dim(`finished: reached the ${capName(life.ticks ?? 0)} life cap`);
+  }
+  if (life.ending === "stopped" || (life.deathCause === "retired" && life.ticks != null)) {
+    return dim("stopped: version no longer plays");
+  }
   switch (life.deathCause) {
     case "collision":
       return red(`ran into ${life.killer ?? "another snake"}`);
@@ -309,7 +338,7 @@ export function lifeEnding(life: Pick<LifeEntry, "deathCause" | "killer">): stri
     case "error":
       return red("crashed: it kept throwing errors");
     case "retired":
-      return dim("retired at the life cap");
+      return dim("retired (reached the life cap, or its version stopped playing)");
     default:
       return dim("ended");
   }

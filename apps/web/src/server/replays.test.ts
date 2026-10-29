@@ -4,7 +4,7 @@
  * nothing) and the 410 of `GET /api/lives/:id/replay` once a replay is gone.
  */
 import { Buffer } from "node:buffer";
-import { createWorld, ReplayRecorder } from "@zerosnake/engine";
+import { createWorld, ReplayRecorder, replayChunkInfo } from "@zerosnake/engine";
 import { MAX_LIFE_SCORE } from "@zerosnake/rating";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDb } from "../db";
@@ -88,6 +88,7 @@ function lifeSql(
   {
     room = "r",
     start = 0,
+    end = undefined as number | undefined,
     score = 0,
     replayKey = null as string | null,
     expired = false,
@@ -96,7 +97,7 @@ function lifeSql(
 ) {
   return `INSERT INTO lives (id, version_id, room, start_tick, end_tick, score, replay_key,
             started_at, ended_at, replay_expired_at)
-          VALUES ('${id}', '${version}', '${room}', ${start}, ${start + 10}, ${score},
+          VALUES ('${id}', '${version}', '${room}', ${start}, ${end ?? start + 10}, ${score},
             ${replayKey === null ? "NULL" : `'${replayKey}'`}, 0, ${ended}, ${expired ? 1 : "NULL"})`;
 }
 
@@ -124,6 +125,16 @@ describe("chunk mapping", () => {
     expect(isPinned(pins, key("a", 200), 300)).toBe(true);
     expect(isPinned(pins, key("a", 300), 400)).toBe(false);
     expect(isPinned(pins, key("b", 100), 200)).toBe(false);
+  });
+
+  it("keeps only a long life's replay window, its last 10 minutes", () => {
+    // Born at 0, died at 30 500 in the chunk at 30 000 (chunks every 1000): the window starts at
+    // 24 500, so the chunks from 24 000 on are kept and none of the 24 before.
+    const long = pinsOf([{ id: "l", startTick: 0, endTick: 30_500, replayKey: key("a", 30_000) }]);
+    expect(isPinned(long, key("a", 0), 1000)).toBe(false);
+    expect(isPinned(long, key("a", 23_000), 24_000)).toBe(false);
+    expect(isPinned(long, key("a", 24_000), 25_000)).toBe(true);
+    expect(isPinned(long, key("a", 30_000), undefined)).toBe(true);
   });
 
   it("keeps a chunk whose end is unknown if the life might start in it", () => {
@@ -158,8 +169,9 @@ describe("pinned lives", () => {
         ...Array.from({ length: 7 }, (_, j) =>
           lifeSql(`v${n}-${j}`, `v${n}`, { score: 10 + j, replayKey: key(`room-${n}`, j) }),
         ),
-        `INSERT INTO ratings (version_id, activated_at, mean, ci, n_lives)
-         VALUES ('v${n}', (SELECT activated_at FROM versions WHERE id = 'v${n}'), ${99 - k}, 0, 30)`,
+        `INSERT INTO ratings (version_id, activated_at, mean, ci, n_lives, alive_ticks)
+         VALUES ('v${n}', (SELECT activated_at FROM versions WHERE id = 'v${n}'), ${99 - k}, 0, 30,
+           36000)`,
       ];
     });
     await run(
@@ -578,7 +590,7 @@ describe("GET /api/lives/:id/replay", () => {
     const { status, body } = await get("ok");
     expect(status).toBe(200);
     const replay = body as unknown as ReplayResponse;
-    expect(Buffer.from(replay.chunk, "base64")).toEqual(Buffer.from(chunk));
+    expect(replay.chunks.map((c) => Buffer.from(c, "base64"))).toEqual([Buffer.from(chunk)]);
     expect(replay.participants.map((p) => p.id).sort()).toEqual([
       "lost",
       "marked",
@@ -608,6 +620,39 @@ describe("GET /api/lives/:id/replay", () => {
       body: { error: "replay_expired", message: REPLAY_EXPIRED_MESSAGE },
     });
     expect(await getReplayLife(db, "old")).toMatchObject({ replayExpired: true });
+  });
+
+  it("serves a long life's last 10 minutes, never the whole life", async () => {
+    // Chunks of 1000 ticks from 0 to 8000; the life lived from 0 to 7500.
+    const chunks: { tick: number; bytes: Uint8Array }[] = [];
+    const recorder = new ReplayRecorder(createWorld({ seed: 2 }), {
+      chunkTicks: 1000,
+      onChunk: (bytes, c) => chunks.push({ tick: c.snapshot.tick, bytes }),
+    });
+    recorder.spawn({ id: "long", author: "u" });
+    for (let i = 0; i < 8000; i++) recorder.step();
+    recorder.flush();
+    for (const c of chunks) await env.REPLAYS.put(key("room-long", c.tick), c.bytes);
+    await run(
+      lifeSql("long", "v", {
+        room: "room-long",
+        start: 0,
+        end: 7500,
+        replayKey: key("room-long", 7000),
+      }),
+    );
+    const ticks = async () => {
+      const { status, body } = await get("long");
+      expect(status).toBe(200);
+      return (body as unknown as ReplayResponse).chunks.map(
+        (c) => replayChunkInfo(Buffer.from(c, "base64")).startTick,
+      );
+    };
+    // The window is 1500–7500: the chunk holding 1500 up to the one it died in.
+    expect(await ticks()).toEqual([1000, 2000, 3000, 4000, 5000, 6000, 7000]);
+    // A chunk gone from R2 (retention deletes oldest first) shortens it, never breaks it.
+    await env.REPLAYS.delete(key("room-long", 3000));
+    expect(await ticks()).toEqual([4000, 5000, 6000, 7000]);
   });
 
   it("answers 404 for a life without a replay, or no life", async () => {

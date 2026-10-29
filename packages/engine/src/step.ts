@@ -312,22 +312,61 @@ function deathRecord(world: World, snake: Snake, cause: DeathCause, killer: Snak
   };
 }
 
-/** Mass × deathDropRatio as pellets of at most remainsMaxValue, spread along the body. */
+/**
+ * Mass × deathDropRatio as pellets of at most remainsMaxValue (but at least remainsPerSegment
+ * per segment, and at most one per segment), spread evenly by length along the body: pellet k
+ * of n sits (k + ½)/n of the way from head to tail.
+ *
+ * A config without `remainsPerSegment` (a world or replay from before #101) gets the old layout:
+ * no minimum, pellet k on segment ⌊k × segments / n⌋, so it plays back as it was recorded.
+ */
 function dropRemains(world: World, snake: Snake, rng: Rng): void {
   const c = world.config;
   const total = snake.mass * c.deathDropRatio;
   if (total <= 0) return;
   const segs = snake.segments;
-  const count = Math.min(segs.length, Math.max(1, Math.ceil(total / c.remainsMaxValue)));
+  const perSegment = c.remainsPerSegment as number | undefined;
+  const legacy = perSegment === undefined;
+  const least = legacy ? 1 : Math.max(1, Math.ceil(segs.length * perSegment));
+  const count = Math.min(segs.length, Math.max(least, Math.ceil(total / c.remainsMaxValue)));
   const value = total / count;
   const jitter = c.remainsJitter * snake.size;
   const limit = c.arenaHalfSize * 0.98;
+  let length = 0;
+  if (!legacy) for (let i = 1; i < segs.length; i++) length += gap(segs, i);
+  // Walks the body once: segment `j` starts the gap holding the next pellet, `at` is its distance.
+  let j = 0;
+  let at = 0;
   for (let k = 0; k < count; k++) {
-    const p = segs[Math.floor((k * segs.length) / count)] as Vec2;
-    const x = clamp(p.x + rng.range(-jitter, jitter), -limit, limit);
-    const y = clamp(p.y + rng.range(-jitter, jitter), -limit, limit);
+    let px: number;
+    let py: number;
+    if (legacy) {
+      const p = segs[Math.floor((k * segs.length) / count)] as Vec2;
+      px = p.x;
+      py = p.y;
+    } else {
+      const target = (length * (k + 0.5)) / count;
+      while (j + 2 < segs.length && at + gap(segs, j + 1) < target) at += gap(segs, ++j);
+      const a = segs[j] as Vec2;
+      const b = (segs[j + 1] ?? a) as Vec2;
+      const d = j + 1 < segs.length ? gap(segs, j + 1) : 0;
+      const f = d > 0 ? Math.min(1, (target - at) / d) : 0;
+      px = a.x + (b.x - a.x) * f;
+      py = a.y + (b.y - a.y) * f;
+    }
+    const x = clamp(px + rng.range(-jitter, jitter), -limit, limit);
+    const y = clamp(py + rng.range(-jitter, jitter), -limit, limit);
     addFood(world, x, y, value, "remains");
   }
+}
+
+/** Distance between segments i − 1 and i. */
+function gap(segs: readonly Vec2[], i: number): number {
+  const a = segs[i - 1] as Vec2;
+  const b = segs[i] as Vec2;
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  return Math.sqrt(dx * dx + dy * dy);
 }
 
 // --- Scratch buffers ---------------------------------------------------------------------------

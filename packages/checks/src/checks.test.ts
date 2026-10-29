@@ -146,9 +146,10 @@ describe("bad bots are rejected with a clear reason", () => {
   it(
     "a suicidal bot: runs clean but scores below easy, mostly wall deaths",
     async () => {
-      // The full check: on QUICK's 3 × 400 ticks easy's bar swings with any change to how a
-      // room plays out (safe spawns, #102, moved it from 20 to 12 here).
-      const report = await runChecks(input(BAD_BOTS.suicidal));
+      // Many seeds: on a few, a snake runs into the straight-flying bot and its kill bonus
+      // lifts the mean of a 3-seed run above easy's.
+      const seeds = Array.from({ length: 30 }, (_, i) => 1000 + i * 37);
+      const report = await runChecks(input(BAD_BOTS.suicidal), { seeds, ticks: 1000 });
       const text = rejected(report);
       expect(report.run.status).toBe("pass");
       expect(report.qualify.status).toBe("fail");

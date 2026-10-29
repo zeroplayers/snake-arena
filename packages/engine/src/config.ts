@@ -83,6 +83,12 @@ export interface EngineConfig {
   remainsMaxValue: number;
   /** Remains are scattered up to this × size from their segment. */
   remainsJitter: number;
+  /**
+   * Fewest remains pellets per body segment, so a small snake's remains still trace its body;
+   * they are spread evenly by length along it (#101). Worlds made before it lack the key and
+   * keep the old layout (see `dropRemains`), so their replays still play back.
+   */
+  remainsPerSegment: number;
 
   // --- Life ----------------------------------------------------------------------------------
   /** A snake retires after this many ticks alive. */
@@ -172,6 +178,7 @@ export const DEFAULT_CONFIG: Readonly<EngineConfig> = Object.freeze({
   deathDropRatio: 1,
   remainsMaxValue: 10,
   remainsJitter: 0.5,
+  remainsPerSegment: 0.5,
 
   lifeCap: 6000,
   massScoreFactor: 0.001,

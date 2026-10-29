@@ -622,6 +622,34 @@ describe("GET /api/lives/:id/replay", () => {
     expect(await getReplayLife(db, "old")).toMatchObject({ replayExpired: true });
   });
 
+  it("includes the room's first chunk for a life born in it", async () => {
+    // Rooms' real chunks (1200 ticks) from tick 0; a life born at 50 that died at 2900.
+    const chunks: { tick: number; bytes: Uint8Array }[] = [];
+    const recorder = new ReplayRecorder(createWorld({ seed: 3 }), {
+      onChunk: (bytes, c) => chunks.push({ tick: c.snapshot.tick, bytes }),
+    });
+    recorder.spawn({ id: "early", author: "u" });
+    for (let i = 0; i < 3000; i++) recorder.step();
+    recorder.flush();
+    expect(chunks.map((c) => c.tick)).toEqual([0, 1200, 2400]);
+    for (const c of chunks) await env.REPLAYS.put(key("room-first", c.tick), c.bytes);
+    await run(
+      lifeSql("early", "v", {
+        room: "room-first",
+        start: 50,
+        end: 2900,
+        replayKey: key("room-first", 2400),
+      }),
+    );
+    const { status, body } = await get("early");
+    expect(status).toBe(200);
+    expect(
+      (body as unknown as ReplayResponse).chunks.map(
+        (c) => replayChunkInfo(Buffer.from(c, "base64")).startTick,
+      ),
+    ).toEqual([0, 1200, 2400]);
+  });
+
   it("serves a long life's last 10 minutes, never the whole life", async () => {
     // Chunks of 1000 ticks from 0 to 8000; the life lived from 0 to 7500.
     const chunks: { tick: number; bytes: Uint8Array }[] = [];

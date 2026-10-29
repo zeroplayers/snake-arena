@@ -115,6 +115,8 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
   private gaugeAt = Number.NEGATIVE_INFINITY;
   /** Each running room's tick at its last check, and since when it is that (in memory only). */
   private readonly progress = new Map<string, { tick: number; since: number }>();
+  /** Running rooms whose tick didn't move at their last check (in memory only). */
+  private readonly stalled = new Set<string>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -273,6 +275,7 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
   async roomClosed(roomId: string): Promise<void> {
     this.store.setRoom(roomId, "closed", this.now());
     this.progress.delete(roomId);
+    this.stalled.delete(roomId);
   }
 
   // --- Site → matchmaker (hints: the alarm loop finds the same in D1) ------------------------
@@ -314,7 +317,11 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
     this.gaugeAt = now;
     const day = utcDay(now);
     const rooms = this.store.rooms().length;
-    const livesInFlight = this.store.countIssued();
+    const liveSnakes = this.store.countIssued();
+    // The heartbeat counts only lives in rooms that are moving: a stuck room's lives aren't
+    // progress, and the liveness check should alert on them.
+    let livesInFlight = liveSnakes;
+    for (const roomId of this.stalled) livesInFlight -= this.store.issuedIn(roomId).length;
     try {
       await recordHeartbeat(this.env.DB, { at: now, livesInFlight, rooms });
     } catch (e) {
@@ -323,7 +330,7 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
     }
     writeMetric(this.env.METRICS, "arena.gauge", {
       rooms,
-      liveSnakes: livesInFlight,
+      liveSnakes,
       queuedLives: this.store.countWaiting(day, c.livesPerBotPerDay),
       readyVersions: this.store.countPlayable(),
       exhausted: this.store.countExhausted(day, c.livesPerBotPerDay),
@@ -509,8 +516,9 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
 
   /**
    * Compares rooms' lives with the ledger, a few rooms per alarm: a life the room holds is noted
-   * (`heldAt`); one it doesn't hold, last held (or issued, if never seen held) over `lostAfterMs`
-   * ago and not reported, is lost. Also notices rooms
+   * (`heldAt`) while the room's tick moves; one it doesn't hold, or holds in a room that stopped
+   * moving, last held (or issued, if never seen held) over `lostAfterMs` ago and not reported, is
+   * lost. A life held over `maxLifeMs` after it was issued is retired. Also notices rooms
    * that stopped, and running rooms whose tick didn't move since their last check (`room.stalled`:
    * a running room always ticks, real lives or house bots, unless its outbox is full).
    */
@@ -526,7 +534,7 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
       }
       const held = new Set([...s.snakes.map((x) => x.lifeId), ...s.pending]);
       const now = this.now();
-      this.checkProgress(r.roomId, s, now);
+      const moving = this.checkProgress(r.roomId, s, now);
       this.store.transaction(() => {
         this.store.roomChecked(r.roomId, now);
         const running = s.state === "running";
@@ -535,8 +543,15 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
         }
         for (const life of this.store.issuedIn(r.roomId)) {
           if (held.has(life.lifeId)) {
-            this.store.markHeld(life.lifeId, now);
-            continue;
+            if (now - life.issuedAt > c.maxLifeMs) {
+              // Longer than any life can take: its room is stuck on it. Freed once it leaves.
+              log("warn", "matchmaker.life_overdue", { roomId: r.roomId, lifeId: life.lifeId });
+              this.store.retireLife(life.lifeId);
+            }
+            if (moving) {
+              this.store.markHeld(life.lifeId, now);
+              continue;
+            }
           }
           if (now - Math.max(life.issuedAt, life.heldAt) < c.lostAfterMs) continue;
           console.warn("matchmaker: life lost", r.roomId, life.lifeId);
@@ -546,17 +561,23 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
     }
   }
 
-  /** Notes a room's tick; reports it stalled when it hasn't moved for a room check or more. */
-  private checkProgress(roomId: string, s: RoomStatus, now: number): void {
+  /**
+   * Notes a room's tick; reports it stalled when it hasn't moved for a room check or more.
+   * Returns whether it moved since the last check (also at the first check this object makes).
+   */
+  private checkProgress(roomId: string, s: RoomStatus, now: number): boolean {
     if (s.state !== "running") {
       this.progress.delete(roomId);
-      return;
+      this.stalled.delete(roomId);
+      return false;
     }
     const seen = this.progress.get(roomId);
     if (!seen || seen.tick !== s.tick) {
       this.progress.set(roomId, { tick: s.tick, since: now });
-      return;
+      this.stalled.delete(roomId);
+      return true;
     }
+    this.stalled.add(roomId);
     const fields = {
       roomId,
       reason: s.paused ? "outbox_full" : "no_progress",
@@ -566,6 +587,7 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
     };
     writeMetric(this.env.METRICS, "room.stalled", fields);
     log("error", "room.stalled", { ...fields, failing: s.outbox.failing });
+    return false;
   }
 
   // --- Helpers -----------------------------------------------------------------------------

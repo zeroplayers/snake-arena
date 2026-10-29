@@ -52,8 +52,8 @@ export function compareRated(a: RankKey, b: RankKey): number {
 /**
  * The leaderboard, best first, each row with its `rank` and `lowerBound`. Rules:
  *
- * - only `status === "ready"` versions alive at least `minMinutes` in all are ranked, so
- *   archived versions (frozen ratings) can't stay on the board;
+ * - only `status === "ready"` versions alive at least `minMinutes` in all, with an interval,
+ *   are ranked, so archived versions (frozen ratings) can't stay on the board;
  * - at most one version per bot, the best-ordered one (D1 allows one ready version per bot, so
  *   this is a guard);
  * - order by `compareRated`, then `versionId`, so the output doesn't depend on input order;
@@ -67,7 +67,7 @@ export function leaderboard<T extends RatedVersion>(
 ): Ranked<T>[] {
   const min = minRankedTicks(config);
   const sorted = rows
-    .filter((r) => r.status === "ready" && r.aliveTicks >= min)
+    .filter((r) => r.status === "ready" && r.aliveTicks >= min && Number.isFinite(width(r.ci)))
     .sort((a, b) => compareRated(a, b) || order(a.versionId, b.versionId));
   const bots = new Set<string>();
   const out: Ranked<T>[] = [];

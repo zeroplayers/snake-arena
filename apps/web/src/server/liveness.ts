@@ -10,8 +10,9 @@
  * - the matchmaker's latest heartbeat (`arena_heartbeat`, about every minute) while it reports
  *   lives in flight: a life is written to `lives` only when it ends, and lives last until the
  *   snake dies (up to 24 hours of game time), so an arena of a few strong bots can go hours
- *   without a new row while playing fine. A matchmaker that stops beating, or beats with no lives
- *   out while bots wait, still alerts;
+ *   without a new row while playing fine. It counts only lives in rooms whose tick moves, so a
+ *   matchmaker that stops beating, rooms stuck on their lives, or no lives out while bots wait
+ *   still alert;
  * - 00:00 UTC today (quotas reset then, and the matchmaker has had no time to use them),
  *
  * and reports `stalled` when that's over `NO_LIVES_ALERT_MINUTES` (default 15) while the

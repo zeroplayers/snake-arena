@@ -91,7 +91,7 @@ Based on the original ZeroSnake (growth formulas from `frontend/docs/snake_growt
 
 ### Rating
 
-- A version's rating is its **points per minute alive** over its last **200 lives**: total score / total minutes alive (time-weighted, so a 24-hour life counts for 24 hours and a 5-second one for 5 seconds), shown with a confidence interval (delta method, Student's t). Lives cut short by the platform don't count; a life that reached the life cap does.
+- A version's rating is its **points per minute alive** over its last **200 lives**: total score / total minutes alive (time-weighted, so a 24-hour life counts for 24 hours and a 5-second one for 5 seconds), shown with a confidence interval (delta method, Student's t, both over the effective number of lives `(Σt)²/Σt²`; none, and unranked, under two). Lives cut short by the platform don't count; a life that reached the life cap does.
 - A version enters the leaderboard once its counted lives add up to **an hour alive** (ranked by the interval's lower bound).
 - A new version starts unrated. The bot page shows a rating chart across versions.
 - If room composition turns out to skew scores too much: normalize by the room's average rating, or switch to rounds with OpenSkill.

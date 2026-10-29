@@ -62,8 +62,10 @@ with `@zerosnake/rating`: points per minute alive (Σ score / Σ minutes, each l
 `end_tick − start_tick`) and a 95% interval over the last 200 counted lives, ranked by the lower
 bound once the counted lives add up to an hour alive (`ratings.alive_ticks`). The arena only
 inserts `lives` rows; nothing else writes `ratings` (a rollback deletes the version's row).
-Migration `0014_long_lives` deleted the per-life ratings and moved the cursor back to 0, so the
-job rebuilt every rating from `lives`.
+`ratings.ci` is NULL (and the version unranked) under two effective lives. After migration
+`0014_long_lives` the job's first run finds `rating_progress.format = 1`, deletes the per-life
+ratings and moves the cursor back to 0, so it rebuilds every rating from `lives`; triggers then
+keep a run of the old code out (see `src/server/ratings.ts`, "Format").
 
 - **Cursor.** Triggers number each finished life in commit order (`lives.seq`, counter in
   `rating_progress.assigned_seq`, `migrations/0007_rating_job.sql`); the job reads lives after

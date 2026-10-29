@@ -35,17 +35,22 @@ export const EMPTY_RATING_STATE: RatingState = Object.freeze({
 export interface Rating {
   /** Points per minute alive over the window: Σ score / Σ minutes alive. */
   mean: number;
-  /** Half-width of the confidence interval around `mean`; `Infinity` with a single life. */
+  /**
+   * Half-width of the confidence interval around `mean`; `Infinity` while the window holds fewer
+   * than `MIN_EFFECTIVE_LIVES` lives' worth of evidence (`effectiveLives`).
+   */
   ci: number;
   /** Lives the rating is over: `min(lives, window)`. */
   n: number;
+  /** The window's effective number of lives, `(Σt)² / Σt²`: `n` if all last as long. */
+  effectiveLives: number;
   /** Minutes alive the rating is over (the window's). */
   minutes: number;
   /** Every life recorded for the version. */
   lives: number;
   /** Minutes alive over every life recorded. */
   totalMinutes: number;
-  /** On the leaderboard: `totalMinutes >= minMinutes`, with at least two lives. */
+  /** On the leaderboard: `totalMinutes >= minMinutes`, with a finite interval. */
   ranked: boolean;
 }
 
@@ -93,9 +98,11 @@ export function addLife(
  * `mean` is the ratio estimator Σ score / Σ minutes over the window, i.e. every life weighs as
  * much as it lasted: a 24-hour life counts for 24 hours, a 5-second one for 5 seconds, however
  * high its own rate (a lucky short life can't swing it, and a long one can't be drowned out by
- * many short ones). `ci` is `t(n − 1) × se`, with `se` the delta-method standard error of the
- * ratio (`ratioSummary`) and `t` Student's quantile for the configured `z` (`tQuantile`), which
- * keeps the interval wide while a version has few lives.
+ * many short ones). `ci` is `t(nEff − 1) × se`, with `se` the delta-method standard error of the
+ * ratio (`ratioSummary`), `nEff = (Σt)² / Σt²` the effective number of lives and `t` Student's
+ * quantile for the configured `z` (`tQuantile`): wide while a version has few lives' worth of
+ * evidence, and unbounded below `MIN_EFFECTIVE_LIVES`. So an hour-long life plus a death at spawn
+ * (on purpose or not) is one life's worth, not two, and isn't ranked.
  */
 export function rate(
   state: RatingState,
@@ -106,21 +113,31 @@ export function rate(
   if (window.length === 0) return null;
   const perMinute = config.ticksPerMinute;
   // Points per minute directly: scores × ticks per minute over ticks.
-  const { n, ratio, se } = ratioSummary(
+  const { n, nEff, ratio, se } = ratioSummary(
     window.map((l) => l.score * perMinute),
     window.map((l) => l.ticks),
   );
   const ticks = window.reduce((t, l) => t + l.ticks, 0);
   return {
     mean: ratio,
-    ci: n < 2 ? Number.POSITIVE_INFINITY : tQuantile(config.z, n - 1) * se,
+    ci:
+      nEff < MIN_EFFECTIVE_LIVES || !Number.isFinite(se)
+        ? Number.POSITIVE_INFINITY
+        : tQuantile(config.z, nEff - 1) * se,
     n,
+    effectiveLives: nEff,
     minutes: ticks / perMinute,
     lives: state.lives,
     totalMinutes: state.ticks / perMinute,
-    ranked: n >= 2 && state.ticks >= minRankedTicks(config),
+    ranked: nEff >= MIN_EFFECTIVE_LIVES && state.ticks >= minRankedTicks(config),
   };
 }
+
+/**
+ * Fewest effective lives (`Rating.effectiveLives`) with an interval: below it the window is
+ * essentially one life (say an hour-long one and a few short deaths) and `ci` is unbounded.
+ */
+export const MIN_EFFECTIVE_LIVES = 2;
 
 /**
  * Largest life score magnitude accepted. Real scores are in the thousands to millions (a 24-hour

@@ -34,7 +34,8 @@ export function RatingChart({
   }, []);
   const rated = versions
     .filter((v): v is VersionRow & { rating: number; ratingCi: number } => v.rating !== null)
-    .map((v) => ({ ...v, ratingCi: v.ratingCi ?? 0 }))
+    // Whiskers of 0 for a rating without an interval; `ranked` keeps telling it apart.
+    .map((v) => ({ ...v, ranked: isRanked(v, minMinutes), ratingCi: v.ratingCi ?? 0 }))
     .sort((a, b) => a.n - b.n);
   if (rated.length === 0) {
     return (
@@ -73,7 +74,7 @@ export function RatingChart({
           ))}
           <path className="chart-line" d={line} />
           {rated.map((v, i) => {
-            const ranked = isRanked(v, minMinutes);
+            const ranked = v.ranked;
             return (
               <g key={v.id} className={hover === i ? "chart-mark active" : "chart-mark"}>
                 <line
@@ -121,12 +122,12 @@ export function RatingChart({
           <span>
             <strong>v{active.n}</strong> {formatRating(active.rating, active.ratingCi)} pts/min over{" "}
             {ratedOver(active)}
-            {isRanked(active, minMinutes) ? "" : " (unranked)"}
+            {active.ranked ? "" : " (unranked)"}
           </span>
         ) : (
           <span className="muted">
-            Points per minute alive with 95% CI. Hollow: alive under {minMinutes} minutes in all,
-            not on the leaderboard yet.
+            Points per minute alive with 95% CI. Hollow: alive under {minMinutes} minutes in all, or
+            too few lives for an interval; not on the leaderboard yet.
           </span>
         )}
       </figcaption>
@@ -136,10 +137,11 @@ export function RatingChart({
 
 /** Whether a version is on the leaderboard's side of the threshold (status aside). */
 export function isRanked(
-  v: Pick<VersionRow, "ratedLives" | "ratedMinutes">,
+  v: Pick<VersionRow, "ratingCi" | "ratedMinutes">,
   minMinutes: number,
 ): boolean {
-  return (v.ratedLives ?? 0) >= 2 && (v.ratedMinutes ?? 0) >= minMinutes;
+  // No interval: under two lives' worth of evidence (`MIN_EFFECTIVE_LIVES`).
+  return v.ratingCi !== null && (v.ratedMinutes ?? 0) >= minMinutes;
 }
 
 /** `12 lives, 3 h 05 min alive`. */

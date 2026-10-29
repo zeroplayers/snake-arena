@@ -50,7 +50,7 @@ export const LIFE_ENDINGS: Record<LifeEnding, string> = {
   timeout: "timed out",
   error: "threw an error",
   capped: "reached the life cap",
-  stopped: "stopped: version no longer plays",
+  stopped: "stopped by the arena",
 };
 
 /** `LIFE_ENDINGS` for one life, naming the cap it reached (`24-hour`; `10-minute` before). */
@@ -62,7 +62,8 @@ export function endingLabel(ending: LifeEnding, ticks: number | null) {
 
 /**
  * The replay page's heading for a finished life. Only a death says "Died": a capped life is
- * "Finished: reached the 24-hour life cap", a stopped one "Stopped: version no longer plays".
+ * "Finished: reached the 24-hour life cap", a stopped one "Stopped by the arena" (its version
+ * stopped playing, or the arena was paused: `lives` doesn't say which).
  */
 export function endingHeading(
   ending: LifeEnding,
@@ -72,7 +73,7 @@ export function endingHeading(
     case "capped":
       return { verb: "Finished", text: endingLabel(ending, ticks), death: false };
     case "stopped":
-      return { verb: "Stopped", text: "version no longer plays", death: false };
+      return { verb: "Stopped", text: "by the arena", death: false };
     default:
       return { verb: "Died", text: LIFE_ENDINGS[ending], death: true };
   }

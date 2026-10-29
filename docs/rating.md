@@ -32,15 +32,17 @@ platform (the version was rolled back, archived or banned, the arena was paused)
   those 5 seconds) barely moves it, and one long life can't be drowned out by many short ones.
   It estimates what the version earns per minute alive in the long run.
 - **`ci`** is the half-width of a 95% confidence interval: the standard error of that ratio
-  (delta method) times Student's t for the number of lives, so a version with only a few lives
-  gets a wide interval. With a single life the interval is unbounded.
+  (delta method) times Student's t, both counted in **effective lives**, `(Σ length)² / Σ length²`:
+  as many as the lives when they last about as long, about one when a single life holds nearly
+  all the time. Under two effective lives there is no interval, and the version isn't ranked: an
+  hour-long life plus a death at spawn is one life's worth of evidence, not two.
 - The site shows `mean ± ci` as "pts/min"
   ([`format.ts`](../apps/web/src/components/format.ts)).
 
 As a guide: mass 100 held for a minute earns 60 points, so a bot that stays around mass 100 rates
 about 60 pts/min, plus 50 per kill. In the rating simulation (house bots in 12-snake rooms, see
 the [rating README](../packages/rating/README.md)) `easy` rates about 130, `medium` 770 and `hard`
-3300 pts/min; the interval holds the long-run rate 63–87% of the time at the ranking threshold and
+3300 pts/min; the interval holds the long-run rate 66–87% of the time at the ranking threshold and
 80–91% over 200 lives (scores are heavy-tailed, so it is optimistic).
 
 Why per minute and not per life: lives last until the snake dies, so a strong bot's lives run for
@@ -50,7 +52,7 @@ need weeks to play enough lives to be ranked.
 ## The leaderboard: ranked by the lower bound
 
 - Only **`ready`** versions (the active version of each bot) whose counted lives add up to **an
-  hour alive** (and at least two lives) are ranked (`RANKED_MIN_TICKS`). An archived version keeps
+  hour alive**, with an interval (two effective lives), are ranked (`RANKED_MIN_TICKS`). An archived version keeps
   its rating on the bot page but leaves the leaderboard.
 - **At most one version per bot.** A bot has only one active version (the unique index
   `versions_bot_ready_idx` in [`apps/web/src/db/schema.ts`](../apps/web/src/db/schema.ts)), so this

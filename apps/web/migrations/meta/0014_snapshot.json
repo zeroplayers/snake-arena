@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "da2d2adb-337c-4e09-bd24-3cde1c5c9600",
+  "id": "ce0dbdb5-45a1-4125-855e-bbb862f02099",
   "prevId": "0179e1b9-74ce-46f1-92b1-97585facaab7",
   "tables": {
     "accounts": {
@@ -1039,6 +1039,22 @@
           "autoincrement": false,
           "default": 0
         },
+        "format": {
+          "name": "format",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "job_rev": {
+          "name": "job_rev",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
         "updated_at": {
           "name": "updated_at",
           "type": "integer",
@@ -1080,7 +1096,7 @@
           "name": "ci",
           "type": "real",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "autoincrement": false
         },
         "n_lives": {
@@ -1163,7 +1179,7 @@
             "version_id"
           ],
           "isUnique": false,
-          "where": "life_seq IS NULL OR alive_ticks = 0"
+          "where": "life_seq IS NULL OR json_extract(recent_scores, '$.v') = 1"
         }
       },
       "foreignKeys": {

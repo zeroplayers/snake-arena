@@ -316,8 +316,9 @@ export function describeLife(life: LifeEntry, server: string): string {
 
 /**
  * How a life ended, in plain language. A `retired` life either reached the life cap (it then
- * lasted exactly the cap: 864 000 ticks, 6000 before long lives) or was stopped because its
- * version no longer plays; servers since long lives say which (`ending`), older ones don't.
+ * lasted exactly the cap: 864 000 ticks, 6000 before long lives) or was stopped by the arena (its
+ * version stopped playing, or the arena was paused); servers since long lives say which
+ * (`ending`), older ones don't.
  */
 export function lifeEnding(
   life: Pick<LifeEntry, "deathCause" | "killer" | "ending" | "ticks">,
@@ -326,7 +327,7 @@ export function lifeEnding(
     return dim(`finished: reached the ${capName(life.ticks ?? 0)} life cap`);
   }
   if (life.ending === "stopped" || (life.deathCause === "retired" && life.ticks != null)) {
-    return dim("stopped: version no longer plays");
+    return dim("stopped by the arena");
   }
   switch (life.deathCause) {
     case "collision":
@@ -338,7 +339,7 @@ export function lifeEnding(
     case "error":
       return red("crashed: it kept throwing errors");
     case "retired":
-      return dim("retired (reached the life cap, or its version stopped playing)");
+      return dim("retired (reached the life cap, or stopped by the arena)");
     default:
       return dim("ended");
   }

@@ -177,10 +177,13 @@ export async function chunksBefore(
   const death = parseChunkKey(deathKey);
   if (!death || from >= deathStart) return [];
   // Chunks are 1200 ticks; start listing a chunk's length before `from` to catch the one
-  // holding it. Keys are zero-padded, so they list in tick order.
+  // holding it. Keys are zero-padded, so they list in tick order. `startAfter` is exclusive: a
+  // chunk starting exactly there ends before `from`. Near the room's start, list from its first
+  // chunk (a key for tick 0 would leave chunk 0 out).
+  const after = from - CHUNK_TICKS - 1;
   const listed = await bucket.list({
     prefix: death.room,
-    startAfter: `${death.room}${String(Math.max(0, from - CHUNK_TICKS - 1)).padStart(10, "0")}.zsr`,
+    ...(after >= 0 && { startAfter: `${death.room}${String(after).padStart(10, "0")}.zsr` }),
     limit: REPLAY_WINDOW_MAX_CHUNKS * 2,
   });
   const starts = listed.objects

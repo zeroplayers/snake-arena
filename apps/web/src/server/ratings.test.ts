@@ -470,30 +470,92 @@ describe("rebuilds", () => {
     expect(await rating(v)).toEqual({ ...good, life_seq: 260 });
   });
 
-  it("rebuilds rows in the old per-life format, which the old job may write after the migration", async () => {
+  it("ignores the old job's commit arriving after a points-per-minute row", async () => {
     const v = await readyBot("a");
     await addLives(v, [10, 20, 30]);
     await run();
-    // As the job from before points per minute writes a row: its window, `alive_ticks` left at 0.
+    const good = await rating(v);
+    const before = await progress();
+    expect(JSON.parse(good?.recent_scores ?? "").v).toBe(2);
+    // A run of the job from before long lives, still in flight at the deploy, commits now with
+    // the current `rev`: its per-life upsert (`alive_ticks` untouched) and its cursor move.
+    const rev = before?.rev ?? 0;
+    await d1.db.batch([
+      d1.db
+        .prepare(
+          `INSERT INTO ratings
+             (version_id, activated_at, mean, ci, n_lives, recent_scores, life_seq, updated_at)
+           SELECT ?1, ?2, 2000, 1, 3, '{"v":1,"scoring":"raw","scores":[1990,2000,2010]}', 3, 0
+           WHERE (SELECT rev FROM rating_progress WHERE id = 1) = ?3
+           ON CONFLICT (version_id) DO UPDATE SET activated_at = excluded.activated_at,
+             mean = excluded.mean, ci = excluded.ci, n_lives = excluded.n_lives,
+             recent_scores = excluded.recent_scores, life_seq = excluded.life_seq,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(v, T0, rev),
+      d1.db
+        .prepare(
+          `UPDATE rating_progress SET rated_seq = max(rated_seq, 99), rev = rev + 1
+           WHERE id = 1 AND rev = ?1`,
+        )
+        .bind(rev),
+    ]);
+    // Both ignored: the row isn't a per-life mean of 2000 on the leaderboard, the cursor didn't
+    // skip ahead.
+    expect(await rating(v)).toEqual(good);
+    expect(await progress()).toEqual(before);
+    // A version-1 row that got in some other way is marked and rebuilt.
+    await d1.db.prepare("UPDATE rating_progress SET format = 1").run();
     await d1.db
       .prepare(
-        `UPDATE ratings SET mean = 20, alive_ticks = 0,
-           recent_scores = '{"v":1,"scoring":"raw","scores":[10,20,30]}'`,
+        `UPDATE ratings SET mean = 2000, recent_scores = '{"v":1,"scoring":"raw","scores":[1]}'`,
       )
       .run();
+    await d1.db.prepare("UPDATE rating_progress SET format = 2").run();
     expect(await run()).toMatchObject({ rebuilt: 1 });
     expect(await rating(v)).toMatchObject({ n_lives: 3, alive_ticks: 1800, mean: 20 });
-    expect(JSON.parse((await rating(v))?.recent_scores ?? "").v).toBe(2);
-    // And one it continues: a new life's window is rebuilt, not added to.
-    await d1.db
-      .prepare(
-        `UPDATE ratings SET alive_ticks = 0,
-           recent_scores = '{"v":1,"scoring":"raw","scores":[10,20,30]}'`,
-      )
-      .run();
-    await addLives(v, [40]);
+  });
+
+  it("resets per-life ratings on its first run and replays every life, skipped ones too", async () => {
+    // The old job ran up to the deploy: per-life rows, and its cursor past every life, `b`'s
+    // included, which it never rated (its only lives retired at the old cap: uncounted then).
+    const a = await readyBot("a");
+    const b = await readyBot("b");
+    await addLives(a, [10, 20, 30]);
+    await addLives(b, [400, 600], { deathCause: "retired", ticks: 6000 });
+    await d1.db.batch([
+      d1.db.prepare("UPDATE rating_progress SET format = 1, rated_seq = assigned_seq"),
+      d1.db
+        .prepare(
+          `INSERT INTO ratings (version_id, activated_at, mean, ci, n_lives, recent_scores, life_seq)
+           VALUES (?, ?, 20, 10, 3, '{"v":1,"scoring":"raw","scores":[10,20,30]}', 5)`,
+        )
+        .bind(a, T0),
+    ]);
+    expect(await run()).toMatchObject({ lives: 5, ratedSeq: 5 });
+    expect(await progress()).toMatchObject({ rated_seq: 5 });
+    expect(await rating(a)).toMatchObject({ n_lives: 3, alive_ticks: 1800, mean: 20 });
+    expect(await rating(b)).toMatchObject({ n_lives: 2, alive_ticks: 12_000, mean: 50 });
+    expect(await d1.db.prepare("SELECT format FROM rating_progress").first<number>("format")).toBe(
+      2,
+    );
+    // Done once: the next run carries on from the cursor.
+    expect(await run()).toMatchObject({ lives: 0, ratings: 0 });
+  });
+
+  it("keeps a rating without an interval off the leaderboard", async () => {
+    // An hour at 60 points per minute and a death at spawn: one life's worth of evidence.
+    const v = await readyBot("a");
+    await addLives(v, [3600], { ticks: 36_000 });
+    await addLives(v, [0], { ticks: 1 });
     await run();
-    expect(await rating(v)).toMatchObject({ n_lives: 4, alive_ticks: 2400, mean: 25 });
+    expect(await rating(v)).toMatchObject({ n_lives: 2, ci: null, lower_bound: null });
+    expect(await getLeaderboard(createDb(d1.db))).toEqual([]);
+    // A second hour-long life: two lives' worth, an interval, ranked.
+    await addLives(v, [3000], { ticks: 36_000 });
+    await run();
+    expect((await rating(v))?.ci).toBeGreaterThan(0);
+    expect((await getLeaderboard(createDb(d1.db))).map((r) => r.botId)).toEqual(["a"]);
   });
 
   it("rebuilds rows written before the job (no window)", async () => {
@@ -557,7 +619,6 @@ describe("migration 0007", () => {
       .bind(v, T0)
       .run();
     await applyMigrations(d1.db, undefined, MIGRATION);
-    // (Through every later migration: 0014 replays every life into the ratings, bumping `rev`.)
 
     const { results } = await d1.db
       .prepare("SELECT id, seq FROM lives ORDER BY seq")
@@ -568,7 +629,7 @@ describe("migration 0007", () => {
       { id: "mid", seq: 2 },
       { id: "late", seq: 3 },
     ]);
-    expect(await progress()).toEqual({ assigned_seq: 3, rated_seq: 0, rev: 1 });
+    expect(await progress()).toEqual({ assigned_seq: 3, rated_seq: 0, rev: 0 });
     await addLives(v, [10]);
     expect((await progress())?.assigned_seq).toBe(4);
   });
@@ -577,7 +638,7 @@ describe("migration 0007", () => {
 describe("migration 0014", () => {
   const MIGRATION = "0014_long_lives.sql";
 
-  it("deletes the per-life ratings and replays every life into points per minute", async () => {
+  it("keeps the per-life ratings until the new job resets them and replays every life", async () => {
     await d1.dispose();
     d1 = await createTestD1({ migrateBefore: MIGRATION });
     const v = await readyBot("a");
@@ -597,8 +658,12 @@ describe("migration 0014", () => {
     await d1.db.prepare("UPDATE rating_progress SET rated_seq = 4 WHERE id = 1").run();
     await applyMigrations(d1.db, undefined, MIGRATION);
 
-    expect(await rating(v)).toBeNull();
-    expect(await progress()).toMatchObject({ assigned_seq: 4, rated_seq: 0 });
+    // Copied as it was, for the old site until the deploy (`alive_ticks` 0: never ranked by the
+    // new one), and the format says it is to be reset.
+    expect(await rating(v)).toMatchObject({ mean: 15, alive_ticks: 0, life_seq: 4 });
+    expect(await d1.db.prepare("SELECT format FROM rating_progress").first<number>("format")).toBe(
+      1,
+    );
     await run();
     // The capped life counts now; the stopped one still doesn't. 430 points in 11.5 minutes.
     const row = await rating(v);

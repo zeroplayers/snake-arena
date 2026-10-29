@@ -73,12 +73,16 @@ room checks):
   (`versionQuarantined`) and one found in D1 stop the version at once too. Before issuing a life
   it re-reads the version in D1, so a change the poll hasn't seen yet doesn't start a life.
 - **Lost lives.** Every minute it compares each room's lives (`status()`) with its ledger; a life
-  its room stopped holding over 30 minutes ago (by these checks; or issued that long ago and never
-  seen held) and nobody reported frees its bot (and still counts toward the quota). Not time since
+  its room stopped holding (or holds in a room whose tick stopped moving) over 30 minutes ago (by
+  these checks; or issued that long ago and never seen held) and nobody reported frees its bot (and still counts toward the quota). Not time since
   issue: a life lasts until the snake dies, up to 24 hours of game time (more in wall time), so a
   strong bot keeps its one life, and its slot, for hours.
-- **Heartbeat.** About every minute it upserts `arena_heartbeat` in D1 (lives in flight, rooms):
-  lives reach `lives` only when they end, so the site's liveness check reads it.
+- **Heartbeat.** About every minute it upserts `arena_heartbeat` in D1 (lives in flight in rooms
+  whose tick moves, rooms): lives reach `lives` only when they end, so the site's liveness check
+  reads it.
+- **Stuck rooms.** A room counts as holding a life only while its tick moves between checks, so a
+  room stuck on its lives (outbox full, alarms failing) frees their bots 30 minutes later; and a
+  life held over 48 hours (`maxLifeMs`, more than a capped life can take) is retired.
 
 The cron (every 30 minutes) pings the matchmaker, which (re)starts the alarm loop after the first
 deploy. `MatchmakerDO.status()` shows the queue and rooms; `configure()` overrides tunables

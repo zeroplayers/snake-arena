@@ -24,7 +24,8 @@ const OPTIONS = {
 
 /**
  * A version is ranked once its counted lives add up to this many minutes alive
- * (`RANKED_MIN_MINUTES`, apps/web), with two lives at least.
+ * (`RANKED_MIN_MINUTES`, apps/web) and its rating has an interval (two lives' worth of evidence
+ * at least: an hour-long life and a death at spawn are one).
  */
 export const RANKED_MIN_MINUTES = 60;
 
@@ -153,7 +154,10 @@ export function describeRating(bot: PublicBot | undefined): string {
       : `${value} over ${lives} · unranked until 30 lives`;
   }
   const over = `over ${lives}, ${formatMinutes(bot.ratedMinutes)} alive`;
-  return bot.ratedLives >= 2 && bot.ratedMinutes >= RANKED_MIN_MINUTES
+  if (bot.ratingCi === null) {
+    return `${bot.rating.toFixed(1)} pts/min ${over} · unranked: too few lives for an interval yet`;
+  }
+  return bot.ratedMinutes >= RANKED_MIN_MINUTES
     ? `${bold(value)} pts/min ${over} · ${green("ranked")}`
     : `${value} pts/min ${over} · unranked until ${RANKED_MIN_MINUTES} minutes alive`;
 }

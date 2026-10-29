@@ -23,6 +23,13 @@
  * smaller `seq` is never added again, so a cursor moved back, a replayed batch or a rebuild that
  * got ahead of the cursor count every life once.
  *
+ * **Format.** `rating_progress.format` says what the ratings are: 1 means per life (before long
+ * lives), 2 points per minute. A run that finds 1 first deletes every rating and moves the cursor
+ * back to 0 (`resetFormat`), so they are all rebuilt from `lives`, however the old job left them
+ * (it runs until this code is deployed, after migration 0014). Then triggers keep a run of the old
+ * code that is still in flight out: its cursor moves (`job_rev` not set) and its version-1
+ * windows are ignored, and a version-1 row that got in anyway is rebuilt (marked, below).
+ *
  * **Rebuilds.** A row whose state can't be continued (none yet, `life_seq` null, another stint,
  * a window scored differently or in the old per-life format) is rebuilt from `lives`: the last 200
  * counted lives, and the count and total length of all of them.
@@ -70,8 +77,8 @@ export interface RatingJobOptions {
   /** Lives read per run; the rest wait for the next run. */
   maxLives?: number;
   /**
-   * Ratings marked for a rebuild (`life_seq IS NULL`, or `alive_ticks = 0`: written in the old
-   * per-life format) rebuilt per run.
+   * Ratings marked for a rebuild (`life_seq IS NULL`, or a version-1 window: the old per-life
+   * format) rebuilt per run.
    */
   rebuildsPerRun?: number;
   config?: RatingConfig;
@@ -111,7 +118,12 @@ interface Progress {
   ratedSeq: number;
   assignedSeq: number;
   rev: number;
+  /** `rating_progress.format`: 1 per-life ratings (to reset), 2 points per minute. */
+  format: number;
 }
+
+/** `rating_progress.format` of points-per-minute ratings. */
+export const RATINGS_FORMAT = 2;
 
 interface LifeRow {
   id: string;
@@ -142,7 +154,8 @@ interface RatingWrite {
   id: string;
   activatedAt: number | null;
   mean: number;
-  ci: number;
+  /** `null` without an interval (fewer than two lives' worth, `MIN_EFFECTIVE_LIVES`). */
+  ci: number | null;
   nLives: number;
   aliveTicks: number;
   recentScores: string;
@@ -163,7 +176,7 @@ export async function updateRatings(
 ): Promise<RatingJobResult> {
   const { batchLives, maxLives, rebuildsPerRun } = { ...RATING_JOB_DEFAULTS, ...options };
   const config = options.config ?? DEFAULT_RATING_CONFIG;
-  let progress = await readProgress(db);
+  let progress = await resetFormat(db, await readProgress(db), now);
   let lives = 0;
   let ratings = 0;
   let conflicts = 0;
@@ -206,7 +219,10 @@ export async function updateRatings(
   let rebuildsLeft = false;
   if (conflicts < MAX_CONFLICTS && rebuildsPerRun > 0) {
     const { results: marked } = await db
-      .prepare("SELECT version_id FROM ratings WHERE life_seq IS NULL OR alive_ticks = 0 LIMIT ?1")
+      .prepare(
+        `SELECT version_id FROM ratings
+         WHERE life_seq IS NULL OR json_extract(recent_scores, '$.v') = 1 LIMIT ?1`,
+      )
       .bind(rebuildsPerRun)
       .all<{ version_id: string }>();
     if (marked.length > 0) {
@@ -422,7 +438,6 @@ function toWrite(
   config: RatingConfig,
 ): RatingWrite {
   const row = toRatingsRow(state, config);
-  if (row.ci === null) throw new RangeError(`rating of ${c.versionId} has no interval`);
   return {
     id: c.versionId,
     activatedAt: c.activatedAt,
@@ -484,7 +499,8 @@ async function commit(
   statements.push(
     db
       .prepare(
-        `UPDATE rating_progress SET rated_seq = max(rated_seq, ?1), rev = rev + 1, updated_at = ?3
+        `UPDATE rating_progress SET rated_seq = max(rated_seq, ?1), rev = rev + 1,
+           job_rev = rev + 1, updated_at = ?3
          WHERE id = 1 AND rev = ?2
          RETURNING rated_seq, rev`,
       )
@@ -499,10 +515,42 @@ async function commit(
 
 async function readProgress(db: D1Database): Promise<Progress> {
   const row = await db
-    .prepare("SELECT rated_seq, assigned_seq, rev FROM rating_progress WHERE id = 1")
-    .first<{ rated_seq: number; assigned_seq: number; rev: number }>();
+    .prepare("SELECT rated_seq, assigned_seq, rev, format FROM rating_progress WHERE id = 1")
+    .first<{ rated_seq: number; assigned_seq: number; rev: number; format: number }>();
   if (!row) throw new Error("rating_progress has no row: run the D1 migrations");
-  return { ratedSeq: row.rated_seq, assignedSeq: row.assigned_seq, rev: row.rev };
+  return {
+    ratedSeq: row.rated_seq,
+    assignedSeq: row.assigned_seq,
+    rev: row.rev,
+    format: row.format,
+  };
+}
+
+/**
+ * Ratings in an older format (`rating_progress.format` below `RATINGS_FORMAT`: means per life)
+ * are all deleted and the cursor goes back to 0, in one transaction guarded by `rev`, so the job
+ * replays every life into new ratings. Whatever the old job wrote or skipped before this code was
+ * deployed is gone with it; the triggers of migration 0014 keep it out afterwards. Returns the
+ * progress to carry on from.
+ */
+async function resetFormat(db: D1Database, progress: Progress, now: Date): Promise<Progress> {
+  if (progress.format >= RATINGS_FORMAT) return progress;
+  const guard = "(SELECT rev FROM rating_progress WHERE id = 1) = ?1";
+  await db.batch([
+    db.prepare(`DELETE FROM ratings WHERE ${guard}`).bind(progress.rev),
+    db
+      .prepare(
+        `UPDATE rating_progress SET format = ?2, rated_seq = 0, rev = rev + 1, job_rev = rev + 1,
+           updated_at = ?3
+         WHERE id = 1 AND rev = ?1`,
+      )
+      .bind(progress.rev, RATINGS_FORMAT, now.getTime()),
+  ]);
+  const after = await readProgress(db);
+  if (after.format >= RATINGS_FORMAT) {
+    log("info", "ratings.format_reset", { format: after.format, rev: after.rev });
+  }
+  return after;
 }
 
 /** `versionIds` that still exist, with their rating rows. */

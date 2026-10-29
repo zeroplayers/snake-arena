@@ -105,8 +105,8 @@ outside the sandbox, which is faster but not bit-identical to the arena.
 [Limits: deploy](limits.md#bundle-and-deploy-limits).
 
 **My new version isn't on the leaderboard.**
-A version needs to pass the checks (`ready`) and then be alive an hour in all (over at least two
-lives) before it is ranked. See [Rating](rating.md). A strong bot's lives last long, so that can
+A version needs to pass the checks (`ready`) and then be alive an hour in all, over at least two
+lives' worth of play (an hour-long life and a death at spawn count as one), before it is ranked. See [Rating](rating.md). A strong bot's lives last long, so that can
 take a few lives or a few hours of play.
 
 **Can I redeploy until I get lucky?**

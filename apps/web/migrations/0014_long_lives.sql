@@ -6,25 +6,59 @@ CREATE TABLE `arena_heartbeat` (
 	CONSTRAINT "arena_heartbeat_singleton" CHECK("arena_heartbeat"."id" = 1)
 );
 --> statement-breakpoint
-DROP INDEX `ratings_rank_idx`;--> statement-breakpoint
-DROP INDEX `ratings_rebuild_idx`;--> statement-breakpoint
-ALTER TABLE `ratings` ADD `alive_ticks` integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+-- Hand-written from here (Drizzle's table rebuild copies the generated column and drops the
+-- triggers). Long lives (`@zerosnake/rating`, `src/server/ratings.ts`): ratings become points per
+-- minute alive, ranked from an hour alive (`alive_ticks`); `ci` may be NULL (too little evidence
+-- for an interval, e.g. an hour-long life and a death at spawn). SQLite can't drop NOT NULL in
+-- place, so `ratings` is rebuilt; its rows are copied as they are, so the site keeps serving them
+-- until its new code is deployed. Nothing references `ratings`.
+CREATE TABLE `__new_ratings` (
+	`version_id` text PRIMARY KEY NOT NULL,
+	`mean` real NOT NULL,
+	`ci` real,
+	`n_lives` integer NOT NULL,
+	`alive_ticks` integer DEFAULT 0 NOT NULL,
+	`activated_at` integer,
+	`lower_bound` real GENERATED ALWAYS AS (mean - ci) VIRTUAL,
+	`recent_scores` text,
+	`life_seq` integer,
+	`updated_at` integer DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)) NOT NULL,
+	FOREIGN KEY (`version_id`) REFERENCES `versions`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+INSERT INTO `__new_ratings` (`version_id`, `mean`, `ci`, `n_lives`, `activated_at`, `recent_scores`, `life_seq`, `updated_at`)
+SELECT `version_id`, `mean`, `ci`, `n_lives`, `activated_at`, `recent_scores`, `life_seq`, `updated_at` FROM `ratings`;--> statement-breakpoint
+DROP TABLE `ratings`;--> statement-breakpoint
+ALTER TABLE `__new_ratings` RENAME TO `ratings`;--> statement-breakpoint
+CREATE INDEX `ratings_mean_idx` ON `ratings` (`mean`);--> statement-breakpoint
 CREATE INDEX `ratings_rank_idx` ON `ratings` (`lower_bound`,"ci" DESC,`alive_ticks`,"version_id" DESC);--> statement-breakpoint
-CREATE INDEX `ratings_rebuild_idx` ON `ratings` (`version_id`) WHERE life_seq IS NULL OR alive_ticks = 0;--> statement-breakpoint
--- Hand-written below (Drizzle doesn't model data changes).
---
--- Ratings become points per minute alive (`@zerosnake/rating`, `src/server/ratings.ts`):
--- Σ score / Σ minutes over the last 200 counted lives, ranked from an hour alive
--- (`alive_ticks`). Every stored rating is a mean score per life over a window of scores without
--- lengths, so none can be continued: they are deleted and rebuilt from `lives`, which hold each
--- life's `start_tick` and `end_tick`. Moving the job's cursor back to 0 makes its next runs replay
--- every finished life (20 000 a minute) and write each version's rating anew; `ratings.life_seq`
--- keeps every life counted once, and bumping `rev` makes a run in flight commit nothing. The
--- rebuild also counts retired lives that reached the life cap (`end_tick - start_tick` equal to
--- a cap, 6000 before long lives), which the old job left out together with the lives the
--- platform stopped. The leaderboard fills up again within minutes.
---
--- The site still runs the old job until its deploy, a minute or so after this: rows it writes
--- meanwhile keep `alive_ticks` at 0, and the new job rebuilds those (`ratings_rebuild_idx`).
-DELETE FROM `ratings`;--> statement-breakpoint
-UPDATE `rating_progress` SET `rated_seq` = 0, `rev` = `rev` + 1 WHERE `id` = 1;
+CREATE INDEX `ratings_rebuild_idx` ON `ratings` (`version_id`) WHERE life_seq IS NULL OR json_extract(recent_scores, '$.v') = 1;--> statement-breakpoint
+-- The stint triggers of migration 0004, which the rebuild dropped.
+CREATE TRIGGER `ratings_stint_insert` BEFORE INSERT ON `ratings`
+WHEN NEW.`activated_at` IS NOT (SELECT `activated_at` FROM `versions` WHERE `id` = NEW.`version_id`) BEGIN
+	SELECT RAISE(IGNORE);
+END;--> statement-breakpoint
+CREATE TRIGGER `ratings_stint_update` BEFORE UPDATE ON `ratings`
+WHEN NEW.`activated_at` IS NOT (SELECT `activated_at` FROM `versions` WHERE `id` = NEW.`version_id`) BEGIN
+	SELECT RAISE(IGNORE);
+END;--> statement-breakpoint
+ALTER TABLE `rating_progress` ADD `format` integer DEFAULT 1 NOT NULL;--> statement-breakpoint
+ALTER TABLE `rating_progress` ADD `job_rev` integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+-- The reset itself is the new rating job's (`src/server/ratings.ts`, "Format"): on its first run
+-- it sees `format = 1`, deletes every rating, moves the cursor back to 0 and sets `format = 2`, so
+-- every rating is rebuilt from `lives` (each holds `start_tick` and `end_tick`), whatever the old
+-- job did between this migration and the site's deploy. From then on these triggers keep the old
+-- code out: a cursor move that changes `rev` without setting `job_rev` to it (only the new job
+-- does) is ignored, and so is a rating with a version-1 window (scores without lengths).
+CREATE TRIGGER `rating_progress_current_job` BEFORE UPDATE ON `rating_progress`
+WHEN OLD.`format` >= 2 AND NEW.`rev` IS NOT OLD.`rev` AND NEW.`job_rev` IS NOT NEW.`rev` BEGIN
+	SELECT RAISE(IGNORE);
+END;--> statement-breakpoint
+CREATE TRIGGER `ratings_no_v1_insert` BEFORE INSERT ON `ratings`
+WHEN json_extract(NEW.`recent_scores`, '$.v') = 1 AND (SELECT `format` FROM `rating_progress` WHERE `id` = 1) >= 2 BEGIN
+	SELECT RAISE(IGNORE);
+END;--> statement-breakpoint
+CREATE TRIGGER `ratings_no_v1_update` BEFORE UPDATE ON `ratings`
+WHEN json_extract(NEW.`recent_scores`, '$.v') = 1 AND (SELECT `format` FROM `rating_progress` WHERE `id` = 1) >= 2 BEGIN
+	SELECT RAISE(IGNORE);
+END;

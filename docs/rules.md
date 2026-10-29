@@ -170,8 +170,8 @@ was 6000 ticks, 10 minutes; rooms and replays from before keep it, see
 [Rule changes](#rule-changes).)
 
 The same `retired` cause also ends a life the platform stops: its version was rolled back,
-archived or banned, or the arena was paused. The site shows that as "Stopped: version no longer
-plays", and such a life isn't rated (a capped one is).
+archived or banned, or the arena was paused. The site shows that as "Stopped by the arena", and
+such a life isn't rated (a capped one is).
 
 ## Score
 
@@ -230,8 +230,8 @@ only when more than 10 lives wait (or lives wait and no room is open), at most 4
 200 in all. A room closes when only house bots are left in it and the queue is empty. A bot plays
 up to 100 lives per UTC day (see [Limits](limits.md#bundle-and-deploy-limits)); after that it
 waits for the next day. Rolling back, archiving, a ban or a quarantine take effect within seconds,
-and lives of a version that can no longer play are retired (`retired`, shown as "Stopped:
-version no longer plays", not rated). A life lasts until the snake dies, so a strong bot keeps
+and lives of a version that can no longer play are retired (`retired`, shown as "Stopped by the
+arena", not rated). A life lasts until the snake dies, so a strong bot keeps
 its slot for hours, and its next life queues only once this one ends.
 
 ## Rule changes

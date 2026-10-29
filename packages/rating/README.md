@@ -57,19 +57,31 @@ ratio weighs lives by length, so the window covers 30 minutes of a weak bot and 
 one, and both are rated on what they did.
 
 **Threshold: an hour alive in all**, counted over the stint (`RatingState.ticks`), not just the
-window, with at least two lives (no interval with one). A weak bot gets there in ~200–270 lives,
-`medium` in ~40–50, a strong bot in a couple of long lives.
+window, with an interval: at least two lives' worth of evidence (below). A weak bot gets there
+in ~200–270 lives, `medium` in ~40–50, a strong bot in a few long lives.
 
-**Interval.** `ci = t(n − 1) × se`, with `se` the delta-method standard error of the ratio,
-`√(Σ(yᵢ − R·tᵢ)² / (n − 1)) · √n / Σt` (`ratioSummary`, two-pass and compensated, so it doesn't
-drift), and `t` Student's quantile for `z` (`tQuantile`, Cornish–Fisher, A&S 26.7.5: within 0.1%
-from 3 degrees of freedom). The t quantile matters now that a strong bot can reach the threshold
-in a handful of lives: with z = 1.96 two lucky lives of similar rate would get a narrow interval;
-t(1) = 12.7 and t(2) = 4.3 keep it wide. A weighted variance would need a model of how a life's
-rate varies with its length; the delta method needs none and is the standard ratio-estimator
-variance.
+**Interval.** `ci = t(n_eff − 1) × se`, with
 
-Scores are heavy-tailed, so the interval is optimistic (simulation below: 63–87% coverage at the
+- `n_eff = (Σt)² / Σt²`, the effective number of lives (Kish): `n` when all lives last as long,
+  about 1 when one life holds nearly all the time;
+- `se` the delta-method standard error of the ratio with the reliability-weights correction for
+  `n_eff`, `√(Σ(yᵢ − R·tᵢ)² / (Σt)² · n_eff / (n_eff − 1))` (`ratioSummary`, two-pass and
+  compensated, so it doesn't drift); with equal lengths it is the classical ratio-estimator
+  variance;
+- `t` Student's quantile for `z` (`tQuantile`, Cornish–Fisher, A&S 26.7.5: within 0.1% from 3
+  degrees of freedom), at `n_eff − 1` degrees of freedom.
+
+No interval (`ci = ∞`, NULL in D1, unranked) while `n_eff < 2` (`MIN_EFFECTIVE_LIVES`). Counting
+lives instead would be wrong for uneven lengths: with an hour-long life at 60 points per minute
+and a 1-tick death, the two residuals are forced equal, opposite and tiny, and `n = 2` gives
+`ci ≈ 0.04`, a lower bound of 59.96 and a rank, on one life's worth of play (a bot could suicide
+at spawn on purpose; short spawn deaths happen anyway). `n_eff ≈ 1.0` there, and still under 2
+with a 10-second or 5-minute death; two hour-long lives give `n_eff = 2` and `t(1) ≈ 11`, an
+interval wide enough to put the lower bound below 0 (`rating.test.ts`, "leaderboard threshold").
+With exponential life lengths `n_eff ≈ n / 2`. A weighted variance would need a model of how a
+life's rate varies with its length; the delta method needs none.
+
+Scores are heavy-tailed, so the interval is optimistic (simulation below: 66–87% coverage at the
 threshold, 80–91% over 200 lives, for a nominal 95%). The leaderboard ranks by its lower end
 anyway. A bootstrap wouldn't fix this (percentile intervals under-cover skewed samples the same
 way) and costs ~1000× more per update.
@@ -87,9 +99,13 @@ it to the row (`apps/web/src/db/schema.ts`):
 
 `fromRatingsRow` returns `null` when the window can't be continued: scored differently (so raw and
 normalized scores never mix) or in format version 1 (scores without lengths, from when the rating
-was a mean per life). The caller rebuilds from `lives`. Migration `0014_long_lives` deleted every
-rating and replayed all lives into the new ones; the job also rebuilds any row with
-`alive_ticks = 0` (one the old code wrote after the migration).
+was a mean per life). The caller rebuilds from `lives`.
+
+Switching formats is the job's own doing (`apps/web/src/server/ratings.ts`, "Format"): on its
+first run it finds `rating_progress.format = 1`, deletes every rating and replays every life,
+whatever the old job wrote or skipped until the deploy; then triggers (migration 0014) ignore the
+old code's cursor moves and version-1 windows, and a version-1 row that got in anyway is marked
+for a rebuild (`ratings_rebuild_idx`).
 
 Integration notes:
 
@@ -115,8 +131,8 @@ The rules:
 
 Why the lower bound and not the mean: an author who redeploys the same code 10 times and keeps the
 copy with the luckiest first hour outranks a rival that is truly 1.5× better (ten hours of play)
-in ~49% of trials when ranked by the point estimate, ~1.6% by the lower bound (K = 3 / 30: 20% /
-82% vs 0.3% / 4%; exponential life lengths, lognormal per-life rates, `leaderboard.test.ts`).
+in ~49% of trials when ranked by the point estimate, ~1% by the lower bound (K = 3 / 30: 20% /
+82% vs 0.1% / 2%; exponential life lengths, lognormal per-life rates, `leaderboard.test.ts`).
 
 `compareRated` is the comparator alone; `lowerBound(row)` is the sort key.
 
@@ -157,9 +173,9 @@ Long-run ratings: easy 127, medium 768, hard 3344 pts/min (chaos 216).
 | normalized max/min (leave-one-out alpha)                        |       2.0 |       2.2 |       4.6 |
 | 200-life rating in random rooms, sd / mean                      |       24% |       15% |       26% |
 | stuck in worst vs best room: gap / sd (raw)                     |       6.2 |       7.8 |       7.0 |
-| CI coverage, first hour, random rooms (median lives to an hour) | 86% (226) |  80% (40) |  63% (54) |
-| CI coverage, 200 lives, random rooms                            |       84% |       91% |       80% |
-| CI coverage, first hour / 200 lives, balanced room              | 87% / 84% | 83% / 90% | 84% / 86% |
+| CI coverage, first hour, random rooms (median lives to an hour) | 86% (226) |  82% (40) |  66% (54) |
+| CI coverage, 200 lives, random rooms                            |       84% |       91% |       81% |
+| CI coverage, first hour / 200 lives, balanced room              | 87% / 84% | 84% / 90% | 85% / 87% |
 
 Pooled elasticity of the rate to room strength `alpha` ≈ 0.53. 200-life windows rank the three
 kinds in their long-run order in 100% of draws, raw or normalized.
@@ -173,7 +189,7 @@ kinds in their long-run order in 100% of draws, raw or normalized.
 2. **Composition still skews ratings** (3–11× between the weakest and strongest rooms), slightly
    less than per life (4–13×). Normalization halves it but doesn't fix it; leave it off and rerun
    on arena data, as before.
-3. **The interval under-covers at the threshold for hunters** (`hard`: 63%), because a few lives
+3. **The interval under-covers at the threshold for hunters** (`hard`: 66%), because a few lives
    in prey-rich rooms are worth 5× the rest. The lower-bound ranking and the t quantile absorb most
    of it; if the leaderboard churns, raise `minMinutes`.
 4. **Watch kill trading.** Per minute, a kill (50 points) is worth mass 83 held for a minute, so a

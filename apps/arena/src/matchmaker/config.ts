@@ -37,11 +37,19 @@ export interface MatchmakerConfig {
    * long ago and never seen held) that nobody reported is lost: the bot gets its next life (the
    * lost one still counts toward its quota: it may have run). Counted from when the room last
    * held it, not from when it was issued: a life lasts until the snake dies (up to 24 hours of
-   * game time, more in wall time), so time since issue says nothing. Once a life ends, its report
+   * game time, more in wall time), so time since issue says nothing. A room counts as holding a
+   * life only while its tick moves: one stuck on it (outbox full, alarm crash loop) stops
+   * refreshing it, so its bots are freed `lostAfterMs` later. Once a life ends, its report
    * waits in the room's outbox for its replay chunk (at most two minutes of game time, two
    * minutes of wall time in a real-time room) and for retries; this is well past both.
    */
   lostAfterMs: number;
+  /**
+   * A life its room still holds this long after it was issued is retired (`leave`): longer than
+   * a capped life can take (24 hours of game time, 24 hours of wall time even in a room that ran
+   * in real time throughout), so its room is assumed stuck on it.
+   */
+  maxLifeMs: number;
   /** How often to re-read the kill switch (`arena_control`) when nobody calls. */
   arenaControlPollMs: number;
   /** Most often the alarm writes the `arena.gauge` metric. */
@@ -62,6 +70,7 @@ export const DEFAULT_MATCHMAKER_CONFIG: MatchmakerConfig = {
   reconcileMs: 10 * 60_000,
   roomCheckMs: 60_000,
   lostAfterMs: 30 * 60_000,
+  maxLifeMs: 48 * 60 * 60_000,
   arenaControlPollMs: ARENA_CONTROL_POLL_MS,
   gaugeMs: 60_000,
   manual: false,

@@ -37,6 +37,7 @@ export {
   EMPTY_RATING_STATE,
   MAX_LIFE_SCORE,
   MAX_LIFE_TICKS,
+  MIN_EFFECTIVE_LIVES,
   type RatedLife,
   type Rating,
   type RatingState,

@@ -58,7 +58,13 @@ export class FakeArena {
   traces: Record<string, unknown> = {};
   ratings: Record<
     string,
-    { rating: number; ratingCi: number; ratedLives: number; ratedMinutes?: number; lives: number }
+    {
+      rating: number;
+      ratingCi: number | null;
+      ratedLives: number;
+      ratedMinutes?: number;
+      lives: number;
+    }
   > = {};
   requests: { method: string; path: string; headers: Headers; body: unknown }[] = [];
   private faults: { method: string; path: RegExp; fault: Fault }[] = [];

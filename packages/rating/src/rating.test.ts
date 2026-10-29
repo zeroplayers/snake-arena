@@ -25,15 +25,23 @@ function feed(lives: readonly RatedLife[], config = DEFAULT_RATING_CONFIG): Rati
 /** Lives of a minute each: the per-minute rating is then the plain mean score. */
 const minutes = (xs: readonly number[]) => xs.map((x) => ({ score: x, ticks: MINUTE }));
 
-/** Textbook ratio estimator, delta-method interval, for comparison. */
+/** Effective number of lives, `(Σt)² / Σt²`. */
+const nEffOf = (ts: readonly number[]) =>
+  ts.reduce((a, t) => a + t, 0) ** 2 / ts.reduce((a, t) => a + t * t, 0);
+
+/**
+ * Textbook ratio estimator and delta-method interval, with the effective number of lives for
+ * the variance correction and the degrees of freedom, for comparison.
+ */
 function naive(lives: readonly RatedLife[], z: number) {
-  const n = lives.length;
   const y = lives.reduce((a, l) => a + l.score, 0);
   const t = lives.reduce((a, l) => a + l.ticks, 0);
+  const nEff = nEffOf(lives.map((l) => l.ticks));
   const r = y / t;
-  const s2 = lives.reduce((a, l) => a + (l.score - r * l.ticks) ** 2, 0) / (n - 1);
-  const se = Math.sqrt(s2 / n) / (t / n);
-  return { mean: r * MINUTE, ci: tQuantile(z, n - 1) * se * MINUTE };
+  const se2 =
+    (lives.reduce((a, l) => a + (l.score - r * l.ticks) ** 2, 0) / t ** 2) * (nEff / (nEff - 1));
+  const ci = nEff < 2 ? Infinity : tQuantile(z, nEff - 1) * Math.sqrt(se2) * MINUTE;
+  return { mean: r * MINUTE, ci };
 }
 
 describe("rate", () => {
@@ -46,6 +54,7 @@ describe("rate", () => {
       mean: 21,
       ci: Infinity,
       n: 1,
+      effectiveLives: 1,
       minutes: 2,
       lives: 1,
       totalMinutes: 2,
@@ -76,7 +85,8 @@ describe("rate", () => {
         const r = rate(feed(lives));
         const want = naive(lives.slice(-200), 1.96);
         expect(r?.mean).toBeCloseTo(want.mean, 6);
-        expect(r?.ci).toBeCloseTo(want.ci, 6);
+        if (Number.isFinite(want.ci)) expect(r?.ci).toBeCloseTo(want.ci, 6);
+        else expect(r?.ci).toBe(Infinity);
       }),
     );
   });
@@ -115,7 +125,9 @@ describe("time weighting", () => {
       fc.property(fc.array(ticks, { minLength: 2, maxLength: 50 }), (ts) => {
         const r = rate(feed(ts.map((t) => ({ score: t / 10, ticks: t }))));
         expect(r?.mean).toBeCloseTo(60, 9);
-        expect(r?.ci).toBeLessThan(1e-6);
+        // Zero width, unless one life holds nearly all the time (no interval then).
+        if (nEffOf(ts) >= 2) expect(r?.ci).toBeLessThan(1e-6);
+        else expect(r?.ci).toBe(Infinity);
       }),
     );
   });
@@ -187,7 +199,7 @@ describe("leaderboard threshold", () => {
             config,
           );
           const total = ts.reduce((a, t) => a + t, 0);
-          expect(rate(s, config)?.ranked).toBe(ts.length >= 2 && total >= min * MINUTE);
+          expect(rate(s, config)?.ranked).toBe(nEffOf(ts) >= 2 && total >= min * MINUTE);
         },
       ),
     );
@@ -204,6 +216,47 @@ describe("leaderboard threshold", () => {
   it("doesn't rank a single long life, which has no interval", () => {
     const r = rate(feed([{ score: 1e6, ticks: 864_000 }]));
     expect(r).toMatchObject({ totalMinutes: 1440, ranked: false, ci: Infinity });
+  });
+
+  it("counts an hour-long life and a death at spawn as one life's worth, not two", () => {
+    // An hour at 60 points per minute, then a 1-tick death: with n = 2 the two residuals are
+    // equal, opposite and tiny, so the interval would be ±0.04 and the version ranked at ~60.
+    const hour = { score: 3600, ticks: 36_000 };
+    for (const death of [
+      { score: 0.01, ticks: 1 },
+      { score: 1, ticks: 100 }, // 10 seconds
+      { score: 30, ticks: 3000 }, // 5 minutes
+    ]) {
+      const r = rate(feed([hour, death]));
+      expect(r?.effectiveLives).toBeLessThan(2);
+      expect(r).toMatchObject({ ci: Infinity, ranked: false });
+    }
+    // Two such hours with a death at spawn each: two lives' worth, a (wide) interval.
+    const two = rate(
+      feed([
+        hour,
+        { score: 0.01, ticks: 1 },
+        { score: 3000, ticks: 36_000 },
+        { score: 0, ticks: 1 },
+      ]),
+    );
+    expect(two?.effectiveLives).toBeCloseTo(2, 3);
+    expect(two?.ranked).toBe(true);
+    expect(two?.ci).toBeGreaterThan(10 * (two?.mean ?? 0) * 0.01);
+    // Spawn deaths can't buy a version a tight interval: the lower bound stays far down.
+    const lb = (two?.mean ?? 0) - (two?.ci ?? 0);
+    expect(lb).toBeLessThan(0);
+  });
+
+  it("sizes the interval by the effective number of lives", () => {
+    // 20 equal lives: nEff = 20. 19 one-minute lives and one of 3 hours: nEff ≈ 1.4.
+    const equal = rate(feed(minutes(Array.from({ length: 20 }, (_, i) => 50 + i))));
+    expect(equal?.effectiveLives).toBeCloseTo(20, 9);
+    const skewed = rate(
+      feed([...minutes(Array.from({ length: 19 }, () => 50)), { score: 9000, ticks: 108_000 }]),
+    );
+    expect(skewed?.effectiveLives).toBeLessThan(2);
+    expect(skewed?.ci).toBe(Infinity);
   });
 });
 
@@ -268,7 +321,7 @@ describe("numeric stability", () => {
     fc.assert(
       fc.property(
         fc.double({ min: -1e6, max: 1e6, noNaN: true }),
-        fc.array(fc.integer({ min: 1, max: 864_000 }), { minLength: 2, maxLength: 200 }),
+        fc.array(fc.integer({ min: 1000, max: 2000 }), { minLength: 3, maxLength: 200 }),
         (perTick, ts) => {
           const r = rate(feed(ts.map((t) => ({ score: perTick * t, ticks: t }))));
           expect(r?.mean).toBeCloseTo(perTick * MINUTE, 0);
@@ -322,7 +375,7 @@ describe("numeric stability", () => {
       last.map((l) => l.ticks),
     );
     expect(r?.mean).toBe(fresh.ratio);
-    expect(r?.ci).toBe(tQuantile(1.96, 199) * fresh.se);
+    expect(r?.ci).toBe(tQuantile(1.96, fresh.nEff - 1) * fresh.se);
     expect(r?.lives).toBe(20_000);
   });
 });

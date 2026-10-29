@@ -28,11 +28,17 @@ export function summarize(xs: readonly number[]): Summary {
 
 export interface RatioSummary {
   n: number;
+  /**
+   * Effective number of lives, `(Σt)² / Σt²` (Kish): `n` when every life lasts as long, about 1
+   * when one life holds nearly all the time. The ratio is as good as that many equal lives.
+   */
+  nEff: number;
   /** Σy / Σt. */
   ratio: number;
   /**
-   * Standard error of `ratio` by the delta method (the classical ratio-estimator variance):
-   * `√(Σ(yᵢ − ratio·tᵢ)² / (n − 1)) · √n / Σt`. 0 for a single pair.
+   * Standard error of `ratio` by the delta method (the classical ratio-estimator variance) with
+   * the reliability-weights correction for `nEff` instead of `n`:
+   * `√(Σ(yᵢ − ratio·tᵢ)² / (Σt)² · nEff / (nEff − 1))`. `Infinity` while `nEff <= 1`.
    */
   se: number;
 }
@@ -43,14 +49,19 @@ export interface RatioSummary {
  * renewal–reward theorem, what the version earns per unit of time alive in the long run. Each
  * life weighs as much as it lasted: a 5-second life moves the ratio by 5 seconds' worth, however
  * high its own rate. Residuals `yᵢ − ratio·tᵢ` are summed in two passes (as in `summarize`).
+ *
+ * The variance correction uses the effective sample size, not the count: with an hour-long life
+ * and a 1-tick one, the two residuals are forced equal and opposite and tiny, and `n = 2` would
+ * call that a precise estimate; `nEff ≈ 1` says there is one life's worth of evidence.
  */
 export function ratioSummary(ys: readonly number[], ts: readonly number[]): RatioSummary {
   const n = ys.length;
   if (n !== ts.length) throw new RangeError("ys and ts must have the same length");
-  if (n === 0) return { n: 0, ratio: Number.NaN, se: Number.NaN };
+  if (n === 0) return { n: 0, nEff: 0, ratio: Number.NaN, se: Number.NaN };
   const total = sum(ts);
   const ratio = sum(ys) / total;
-  if (n === 1) return { n, ratio, se: 0 };
+  const nEff = Math.min(n, (total * total) / sum(ts.map((t) => t * t)));
+  if (n === 1 || !(nEff > 1)) return { n, nEff, ratio, se: Number.POSITIVE_INFINITY };
   let d = 0;
   let d2 = 0;
   for (let i = 0; i < n; i++) {
@@ -59,7 +70,7 @@ export function ratioSummary(ys: readonly number[], ts: readonly number[]): Rati
     d2 += e * e;
   }
   const m2 = Math.max(0, d2 - (d * d) / n);
-  return { n, ratio, se: (Math.sqrt(m2 / (n - 1)) * Math.sqrt(n)) / total };
+  return { n, nEff, ratio, se: Math.sqrt((m2 / (total * total)) * (nEff / (nEff - 1))) };
 }
 
 /**

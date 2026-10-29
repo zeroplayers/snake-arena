@@ -1,5 +1,5 @@
 import { DEFAULT_RATING_CONFIG, minRankedTicks } from "@zerosnake/rating";
-import { and, asc, desc, eq, gte, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNotNull, isNull, sql } from "drizzle-orm";
 import type { BotSummary, LeaderboardEntry, LeaderboardQuery, Profile } from "../lib/api";
 import type { Db } from ".";
 import { bots, ratings, users, versions } from "./schema";
@@ -107,6 +107,8 @@ export function leaderboardQuery(db: Db, { limit = 50, offset = 0 }: Leaderboard
         // Checked on the version row the join already looks up by key, so the plan is unchanged.
         isNull(versions.quarantinedAt),
         gte(ratings.aliveTicks, RANKED_MIN_TICKS),
+        // No interval: too little evidence yet (an hour-long life and a death at spawn).
+        isNotNull(ratings.ci),
       ),
     )
     .orderBy(
@@ -126,7 +128,9 @@ export async function getLeaderboard(db: Db, query: LeaderboardQuery = {}) {
     (row, i): LeaderboardEntry => ({
       ...row,
       author: row.author ?? "",
-      lowerBound: row.lowerBound ?? row.rating - row.ratingCi,
+      // Ranked rows always have an interval (`ci IS NOT NULL` above).
+      ratingCi: row.ratingCi ?? 0,
+      lowerBound: row.lowerBound ?? row.rating - (row.ratingCi ?? 0),
       rank: offset + i + 1,
     }),
   );

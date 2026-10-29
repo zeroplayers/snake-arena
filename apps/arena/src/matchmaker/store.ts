@@ -502,6 +502,19 @@ export class MatchmakerStore {
     );
   }
 
+  /**
+   * One life is to be retired (`leave`): it has been held far longer than any life can last, so
+   * its room is assumed stuck on it.
+   */
+  retireLife(lifeId: string): void {
+    this.sql.exec(
+      "UPDATE lives SET leave = ? WHERE life_id = ? AND state = 'issued' AND leave = ?",
+      LEAVE_WANTED,
+      lifeId,
+      LEAVE_NONE,
+    );
+  }
+
   /** The arena stopped: every life in flight is to be retired. */
   retireAll(): void {
     this.sql.exec(

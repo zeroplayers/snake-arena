@@ -24,7 +24,8 @@ export type StoredDeathCause = "collision" | "wall" | "timeout" | "error" | "ret
 
 /**
  * `death_cause` with `retired` split: `capped` reached the life cap, `stopped` was ended by the
- * platform.
+ * arena (its version was rolled back, archived, banned or quarantined, or the arena was paused;
+ * `lives` doesn't say which, so the site says "Stopped by the arena").
  */
 export type LifeEnding = Exclude<StoredDeathCause, "retired"> | "capped" | "stopped";
 

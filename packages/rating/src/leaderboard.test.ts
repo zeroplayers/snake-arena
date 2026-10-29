@@ -67,7 +67,9 @@ describe("leaderboard", () => {
 
   it("puts versions without an interval last", () => {
     const rows = [row("a", 1e6, null, 60), row("b", 1e6, Infinity, 61), row("c", 1, 1e9, 60)];
-    expect(ids(leaderboard(rows))).toEqual(["c", "b", "a"]);
+    // Without an interval a version isn't ranked at all (too few lives' worth of evidence).
+    expect(ids(leaderboard(rows))).toEqual(["c"]);
+    expect(compareRated(rows[2] as RatedVersion, rows[1] as RatedVersion)).toBeLessThan(0);
     expect(lowerBound({ mean: 5, ci: null })).toBe(-Infinity);
   });
 
@@ -103,7 +105,9 @@ describe("leaderboard", () => {
             (a, b) => ((hash(a.versionId) ^ seed) % 7) - ((hash(b.versionId) ^ seed) % 7),
           );
           expect(leaderboard(shuffled)).toEqual(board);
-          const eligible = rows.filter((r) => r.status === "ready" && r.aliveTicks >= 36_000);
+          const eligible = rows.filter(
+            (r) => r.status === "ready" && r.aliveTicks >= 36_000 && r.ci !== null,
+          );
           expect(board.map((r) => r.botId).sort()).toEqual(
             [...new Set(eligible.map((r) => r.botId))].sort(),
           );

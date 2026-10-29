@@ -15,7 +15,8 @@ import {
 } from "@zerosnake/web/shared";
 import { afterAll, describe, expect, it } from "vitest";
 import { main } from "./cli.ts";
-import { DEFAULT_CONTEXT } from "./commands/logs.ts";
+import { DEFAULT_CONTEXT, lifeEnding } from "./commands/logs.ts";
+import { describeRating } from "./commands/status.ts";
 import { Credentials } from "./remote/config.ts";
 import { apiError, FakeArena, htmlNotFound, SERVER } from "./testing/fake-arena.ts";
 import {
@@ -591,6 +592,29 @@ describe("zerosnake deploy", () => {
 });
 
 describe("zerosnake status", () => {
+  it("states the ranking rule of long lives: an hour alive and an interval", () => {
+    const bot = { slug: "s", activeVersion: 1, lives: 2 };
+    expect(
+      describeRating({ ...bot, rating: 60, ratingCi: null, ratedLives: 2, ratedMinutes: 61 }),
+    ).toBe(
+      "60.0 pts/min over 2 lives, 1 h 01 min alive · unranked: too few lives for an interval yet",
+    );
+    expect(
+      describeRating({ ...bot, rating: 60, ratingCi: 5, ratedLives: 9, ratedMinutes: 59.9 }),
+    ).toContain("unranked until 60 minutes alive");
+  });
+
+  it("tells a life that reached the cap from one the arena stopped", () => {
+    const end = (ticks: number) =>
+      lifeEnding({ deathCause: "retired", killer: null, ticks }).replace(
+        new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"),
+        "",
+      );
+    expect(end(864_000)).toBe("finished: reached the 24-hour life cap");
+    expect(end(6000)).toBe("finished: reached the 10-minute life cap");
+    expect(end(1234)).toBe("stopped by the arena");
+  });
+
   it("shows bots, versions, ratings and deploys left", async () => {
     const { arena, run } = setUp();
     arena.addBot("greedy");

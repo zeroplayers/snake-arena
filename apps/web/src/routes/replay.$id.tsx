@@ -63,7 +63,9 @@ function ReplayPage() {
       <h1 className="title">
         {heading ? (
           <>
-            {heading.verb}: <span className={heading.death ? "red" : "accent"}>{heading.text}</span>
+            {heading.verb}
+            {heading.verb === "Stopped" ? " " : ": "}
+            <span className={heading.death ? "red" : "accent"}>{heading.text}</span>
           </>
         ) : (
           "Still alive"

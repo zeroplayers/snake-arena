@@ -449,8 +449,12 @@ export const ratings = sqliteTable(
      * (`@zerosnake/rating`). Before migration `0014_long_lives`: the mean score per life.
      */
     mean: real("mean").notNull(),
-    /** Half-width of the 95% confidence interval around `mean`. */
-    ci: real("ci").notNull(),
+    /**
+     * Half-width of the 95% confidence interval around `mean`; `null` while the lives hold too
+     * little evidence for one (fewer than two lives' worth, `MIN_EFFECTIVE_LIVES`: e.g. an
+     * hour-long life and a death at spawn). Such a version isn't ranked.
+     */
+    ci: real("ci"),
     /** Counted lives in the stint, all of them. */
     nLives: integer("n_lives").notNull(),
     /**
@@ -496,10 +500,12 @@ export const ratings = sqliteTable(
       t.aliveTicks,
       sql`${t.versionId} DESC`,
     ),
-    // Rating job: rows waiting for a rebuild (marked, or written in the old per-life format by
-    // a job still on the code from before migration `0014_long_lives`, which leaves
-    // `alive_ticks` at 0; a points-per-minute rating has two lives of a tick at least).
-    index("ratings_rebuild_idx").on(t.versionId).where(sql`life_seq IS NULL OR alive_ticks = 0`),
+    // Rating job: rows waiting for a rebuild: marked, or holding a window in the old per-life
+    // format (version 1), as a job still on the code from before migration `0014_long_lives`
+    // writes it.
+    index("ratings_rebuild_idx")
+      .on(t.versionId)
+      .where(sql`life_seq IS NULL OR json_extract(recent_scores, '$.v') = 1`),
   ],
 );
 
@@ -516,6 +522,16 @@ export const ratingProgress = sqliteTable(
     ratedSeq: integer("rated_seq").notNull().default(0),
     /** One more on every commit of the job; its writes are guarded by it, so runs never interleave. */
     rev: integer("rev").notNull().default(0),
+    /**
+     * The ratings' format: 1 a mean score per life, 2 points per minute alive (`@zerosnake/rating`
+     * since long lives). The job finds 1, deletes every rating and replays every life (`0` cursor)
+     * before anything else, then sets 2. From then on a trigger ignores cursor moves that don't
+     * also set `job_rev` to the new `rev`, as only the current job does, so a run of the old
+     * job still in flight can't skip lives; another ignores ratings with a version-1 window.
+     */
+    format: integer("format").notNull().default(1),
+    /** `rev` as the current job last committed it (see `format`). */
+    jobRev: integer("job_rev").notNull().default(0),
     updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(now),
   },
   (t) => [check("rating_progress_singleton", sql`${t.id} = 1`)],

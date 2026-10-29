@@ -35,6 +35,7 @@ import {
   type TickDelta,
   type World,
 } from "@zerosnake/engine";
+import { houseLabel } from "./house.ts";
 
 /** How long a room stays in real time after its last spectator left. */
 export const SPECTATOR_GRACE_MS = 30_000;
@@ -78,6 +79,8 @@ export interface SpectatedLife {
   versionId: string | null;
   /** House bot kind, null for a deployed version. */
   house: string | null;
+  /** `house:<kind>`, `house:<kind>#2`, … for a house bot (its label tells instances apart). */
+  author: string;
 }
 
 /** What spectators need from their room. */
@@ -336,7 +339,7 @@ export class Spectators {
     const life = room.life(lifeId);
     if (!life) return UNKNOWN;
     if (life.versionId === null) {
-      return { author: "house", bot: life.house ?? "house", version: 0, house: true };
+      return { author: "house", bot: houseLabel(life.author, life.house), version: 0, house: true };
     }
     return this.labels.get(life.versionId) ?? UNKNOWN;
   }

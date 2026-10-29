@@ -30,7 +30,6 @@ import {
   batchTicks,
   DEFAULT_MAX_OUTBOX,
   DEFAULT_MAX_SNAKES,
-  DEFAULT_MIN_AUTHORS,
   DO_CPU_LIMIT_MS,
   METRICS_MS,
   NEXT_LIFE_RETRY_MS,
@@ -81,7 +80,7 @@ import {
   watchWindow,
 } from "./room/backstop.ts";
 import { BundleCache, lifeStarter } from "./room/bundles.ts";
-import { houseFill } from "./room/house.ts";
+import { houseFill, houseToRetire } from "./room/house.ts";
 import { BatchMetrics } from "./room/metrics.ts";
 import {
   type BatchHooks,
@@ -120,15 +119,19 @@ const TICK_MS = 1000 / TICK_RATE;
 const REPORT_GRACE_MS = 60_000;
 
 /**
- * One persistent room of up to 20 snakes (SPEC §4–5), simulated in batches of ticks from
- * `alarm()`: as fast as the CPU allows (`accelerated`) or at 10 ticks/s (`realtime`).
+ * One persistent room of 20 snakes (SPEC §4–5): deployed bots' lives, at most one per author, and
+ * house bots in every slot they don't use (house snakes make way for them). Simulated in batches
+ * of ticks from `alarm()`: as fast as the CPU allows (`accelerated`) or at 10 ticks/s
+ * (`realtime`).
  *
  * A batch, step by step:
- *  1. plan: spawn the pending tickets (and house bots up to 5 distinct authors), kill evicted and
- *     leaving lives; size the batch for the worst case (see `limits.ts`);
+ *  1. plan: spawn the pending tickets, retiring house snakes for those that don't fit (user lives
+ *     take priority), fill every free slot with house bots, kill evicted and leaving lives; size
+ *     the batch for the worst case (see `limits.ts`);
  *  2. write a marker with the invocation's start time and `sync()` it, so a batch that dies is
  *     noticed by the next alarm;
- *  3. run it (engine + one QuickJS life per snake, recorded by `ReplayRecorder`);
+ *  3. run it (engine + a QuickJS life per deployed version's snake and a native one per house
+ *     bot, `room/house-life.ts`; recorded by `ReplayRecorder`);
  *  4. in one transaction: save the world, the open replay chunk, the roster and what changed in
  *     the lives' traces (`room/trace.ts`, `room/trace-store.ts`), queue the side effects (replay
  *     chunks and finished lives' traces for R2, finished lives for D1 and the matchmaker), clear
@@ -245,7 +248,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         state: "running",
         mode: options.mode ?? "accelerated",
         maxSnakes: options.maxSnakes ?? DEFAULT_MAX_SNAKES,
-        minAuthors: options.minAuthors ?? DEFAULT_MIN_AUTHORS,
+        ...(options.fillTo !== undefined && { fillTo: options.fillTo }),
         manual: options.manual ?? false,
         limits: {
           cpuLimitMs: limits.cpuLimitMs ?? DO_CPU_LIMIT_MS,
@@ -264,6 +267,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
           outboxPerCycle: limits.outboxPerCycle ?? OUTBOX_PER_CYCLE,
         },
         livesEnded: 0,
+        realLivesEnded: 0,
         startedAt: Date.now(),
         lastBatchTicks: 0,
         nextLifeAfter: 0,
@@ -302,7 +306,10 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     if (present.some((p) => p.author === ticket.author)) {
       return { ok: false, reason: "author-present" };
     }
-    if (present.length >= meta.maxSnakes) return { ok: false, reason: "full" };
+    // House snakes don't count: they make way for it at the next batch (`plan`).
+    if (present.filter((p) => p.versionId !== null).length >= meta.maxSnakes) {
+      return { ok: false, reason: "full" };
+    }
     this.store.addPending({ ...ticket, house: null });
     await this.kick(meta);
     return { ok: true };
@@ -450,7 +457,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     if (!meta) return;
     const sim = await this.loadSim(meta);
     const maxPendingSeq = this.store.lastPendingSeq();
-    const plan = this.plan(meta, sim.roster, sim.world.tick, sim.idleLives, maxPendingSeq);
+    const plan = this.plan(meta, sim.roster, sim.world, sim.idleLifeIds(), maxPendingSeq);
     const watch = watching(meta.watch, sim.world.tick, Date.now());
     // Labels of the lives spectators are about to see (D1 only for versions not seen yet).
     await this.spectators.prepare();
@@ -497,6 +504,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       workUnits: result.work,
       livesStarted: result.spawned.filter((e) => e.versionId !== null).length,
       livesEnded: result.ended.filter((e) => e.entry.versionId !== null).length,
+      houseRetired: plan.houseRetired,
       wallMs: now - ranFrom,
       watched: watch,
       cut: result.aborted || blamed !== null || result.ticks < plan.ticks,
@@ -800,37 +808,73 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     this.store.enqueue({ kind: "quarantine", json: JSON.stringify(record) });
   }
 
-  /** What the next batch does. Depends only on saved state, so a rerun plans the same batch. */
+  /**
+   * What the next batch does. Depends only on saved state (the roster, the pending tickets and
+   * the saved `world`), so a rerun plans the same batch.
+   *
+   * Only deployed bots' lives count toward `maxSnakes` for tickets: a house snake's slot is free
+   * for them. Tickets take the slots left by dead snakes first; past `maxSnakes`, house snakes
+   * give theirs up (`houseToRetire`) and die on the batch's first tick without running their code
+   * again, like a leaving life. House bots then fill what is still free, up to `fillTo`.
+   */
   private plan(
     meta: Meta,
     roster: readonly RosterEntry[],
-    tick: number,
-    idleLives: number,
+    world: World,
+    idle: readonly string[],
     maxPendingSeq: number,
-  ): BatchPlan {
+  ): BatchPlan & { houseRetired: number } {
     const faults = new Map<string, Fault>();
     // The engine has no `evicted` cause: the replay shows `error`, the life result `evicted`.
     for (const e of roster) if (e.evicted || e.leaving) faults.set(e.lifeId, "error");
-    const staying: LifeEntry[] = roster.filter((e) => !faults.has(e.lifeId));
+    let staying: RosterEntry[] = roster.filter((e) => !faults.has(e.lifeId));
     const spawns: LifeEntry[] = [];
+    let real = staying.filter((e) => e.versionId !== null).length;
     for (const p of this.store.pending(maxPendingSeq)) {
       const taken = [...staying, ...spawns].some((e) => e.author === p.author);
       const quarantined = p.versionId !== null && this.store.isQuarantined(p.versionId);
-      if (taken || quarantined || staying.length + spawns.length >= meta.maxSnakes) {
+      if (taken || quarantined || real >= meta.maxSnakes) {
         console.warn("room drops ticket", p.lifeId, { taken, quarantined });
         continue;
       }
       spawns.push(stripSeq(p));
+      if (p.versionId !== null) real++;
     }
-    // House bots keep real lives company; with none (the arena stopped), the room closes.
-    if ([...staying, ...spawns].some((e) => e.versionId !== null)) {
-      spawns.push(...houseFill([...staying, ...spawns], meta.maxSnakes, meta.minAuthors, tick));
+    // User lives take priority: house snakes make way for the tickets that don't fit.
+    const mass = new Map(world.snakes.map((s) => [s.id, s.mass]));
+    const retire = houseToRetire(
+      staying
+        .filter((e) => e.versionId === null)
+        .map((e) => ({ lifeId: e.lifeId, mass: mass.get(e.lifeId) ?? 0, startTick: e.startTick })),
+      staying.length + spawns.length - meta.maxSnakes,
+    );
+    for (const lifeId of retire) faults.set(lifeId, "error");
+    if (retire.length > 0) staying = staying.filter((e) => !faults.has(e.lifeId));
+    // House bots keep real lives company in every free slot; with none (the arena stopped), the
+    // room closes.
+    if (real > 0) {
+      const fillTo = Math.min(meta.fillTo ?? meta.maxSnakes, meta.maxSnakes);
+      spawns.push(...houseFill([...staying, ...spawns], fillTo, world.tick));
     }
-    const bots = staying.length + spawns.length;
-    const starts = spawns.length + idleLives;
-    let ticks = meta.limits.batchTicks || batchTicks(bots, starts, meta.limits.cpuBudgetMs);
+    // House bots run natively (`room/house-life.ts`): sized at their own cost, not a sandboxed
+    // bot's worst case.
+    const running = [...staying, ...spawns];
+    const isHouse = new Set(running.filter((e) => e.house).map((e) => e.lifeId));
+    const restarting = idle.filter((id) => !faults.has(id));
+    const houseStarts =
+      spawns.filter((e) => e.house).length + restarting.filter((id) => isHouse.has(id)).length;
+    const starts = spawns.length + restarting.length - houseStarts;
+    let ticks =
+      meta.limits.batchTicks ||
+      batchTicks(
+        running.length - isHouse.size,
+        starts,
+        meta.limits.cpuBudgetMs,
+        isHouse.size,
+        houseStarts,
+      );
     if (this.mode(meta) === "realtime") ticks = Math.min(ticks, REALTIME_BATCH_TICKS);
-    return { spawns, faults, ticks };
+    return { spawns, faults, ticks, houseRetired: retire.length };
   }
 
   /** Saves the marker (and a safety alarm) durably before a batch runs. */
@@ -893,6 +937,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         this.store.enqueue({ kind: "life", json: JSON.stringify(life), chunkTick, traceKey: key });
       }
       meta.livesEnded += result.ended.length;
+      meta.realLivesEnded = (meta.realLivesEnded ?? 0) + real;
       meta.lastBatchTicks = result.ticks;
       meta.openChunkTick = sim.openChunkTick;
       if (real > 0) meta.nextLifeAfter = 0;
@@ -1020,7 +1065,8 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
   }
 
   /**
-   * Asks the matchmaker for lives while there is room. Returns true when it had none (its queue
+   * Asks the matchmaker for lives while there is room for them: slots that house snakes hold count
+   * as free, since they make way for user lives (`plan`). Returns true when it had none (its queue
    * is empty for us, now or at the last ask).
    */
   private async refill(): Promise<boolean> {
@@ -1029,7 +1075,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     if (this.superseded() || Date.now() < meta.nextLifeAfter) return true;
     const present: LifeEntry[] = [...this.store.roster(), ...this.store.pending()];
     const excludeAuthors = present.map((p) => p.author);
-    let vacancies = meta.maxSnakes - present.length;
+    let vacancies = meta.maxSnakes - present.filter((p) => p.versionId !== null).length;
     for (let asks = 0; vacancies > 0 && asks < meta.maxSnakes; asks++) {
       let ticket: LifeTicket | null;
       try {
@@ -1098,7 +1144,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       roomId: meta.roomId,
       reason: this.paused ? "kill_switch" : this.superseded() ? "superseded" : "empty",
       ticks: sim.world.tick,
-      lives: meta.livesEnded,
+      lives: meta.realLivesEnded ?? meta.livesEnded,
       durationMs: meta.startedAt ? now - meta.startedAt : 0,
     };
     this.store.transaction(() => {
@@ -1154,7 +1200,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       roomId: meta.roomId,
       reason: "outdated",
       ticks: world?.tick ?? 0,
-      lives: meta.livesEnded,
+      lives: meta.realLivesEnded ?? meta.livesEnded,
       durationMs: meta.startedAt ? now - meta.startedAt : 0,
     };
     this.store.transaction(() => {
@@ -1307,6 +1353,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         snakes: world.snakes.length,
         spectators: this.spectators.count,
         tick: world.tick,
+        realLives: this.store.roster().filter((e) => e.versionId !== null).length,
       },
       now,
       meta.limits.metricsMs ?? METRICS_MS,

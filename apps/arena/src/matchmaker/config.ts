@@ -3,19 +3,23 @@
  * tools) overrides them in the object's storage.
  */
 import { ARENA_CONTROL_POLL_MS, ARENA_LIMITS } from "@zerosnake/web/shared";
-import { DEFAULT_MAX_SNAKES, DEFAULT_MIN_AUTHORS } from "../limits.ts";
+import { DEFAULT_MAX_SNAKES } from "../limits.ts";
 import type { RoomStartOptions } from "../protocol.ts";
 
 export interface MatchmakerConfig {
   /**
    * Lives waiting in the queue beyond which new rooms open ("New rooms open when the queue
    * exceeds a threshold"): enough rooms to bring it back down to this. Below it, waiting lives
-   * go to rooms as their snakes die. With none open, any waiting life opens a room.
+   * go to the open rooms: into slots their snakes leave, and into slots house bots hold, which
+   * make way for them (rooms count only deployed bots' lives toward `maxSnakes`). With none
+   * open, any waiting life opens a room.
    */
   openThreshold: number;
-  /** Rooms' `maxSnakes` and `minAuthors` (house bots fill up to it). */
+  /**
+   * Rooms' `maxSnakes`: lives of deployed versions a room takes. House bots fill the slots they
+   * don't use, so a room always runs this many snakes.
+   */
   maxSnakes: number;
-  minAuthors: number;
   /** Lives a bot (all its versions) starts per UTC day. */
   livesPerBotPerDay: number;
   /** Most rooms open at once. */
@@ -47,7 +51,6 @@ export interface MatchmakerConfig {
 export const DEFAULT_MATCHMAKER_CONFIG: MatchmakerConfig = {
   openThreshold: 10,
   maxSnakes: DEFAULT_MAX_SNAKES,
-  minAuthors: DEFAULT_MIN_AUTHORS,
   livesPerBotPerDay: ARENA_LIMITS.livesPerBotPerDay,
   maxRooms: 200,
   roomsPerAlarm: 4,

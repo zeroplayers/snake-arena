@@ -1,6 +1,6 @@
 import { CHUNK_TICKS, ReplayPlayer, replayChunkInfo } from "@zerosnake/engine";
 import { describe, expect, it } from "vitest";
-import { batchTicks } from "./limits.ts";
+import { batchTicks, ROOM_CPU_BUDGET_MS } from "./limits.ts";
 import type { LifeDrop, LifeTicket, RoomStatus } from "./protocol.ts";
 import { BOTS } from "./testing/harness.ts";
 import {
@@ -20,7 +20,7 @@ import {
 useRoomHarness();
 
 describe("RoomDO", () => {
-  it("runs worst-case-sized batches, fills up to 5 authors with house bots", async () => {
+  it("runs worst-case-sized batches, fills every free slot with house bots", async () => {
     const tickets = await Promise.all([
       ticket("alice", house.hard as string),
       ticket("bob", house.medium as string),
@@ -37,22 +37,115 @@ describe("RoomDO", () => {
     });
 
     const s1 = await h.room<RoomStatus>("batches", "runBatch");
-    // 3 tickets + 2 house bots spawned (some may already have died).
-    expect(s1.snakes.length + s1.livesEnded).toBe(5);
+    // 3 tickets + 17 house bots spawned (some may already have died).
+    expect(s1.snakes.length + s1.livesEnded).toBe(20);
     expect(new Set(s1.snakes.map((s) => s.author)).size).toBe(s1.snakes.length);
-    for (const s of s1.snakes.filter((x) => x.house)) {
-      expect(["house:easy", "house:medium"]).toContain(s.author);
-    }
-    // 5 bots, all 5 starting a life.
-    expect(s1.lastBatchTicks).toBe(batchTicks(5, 5));
-    expect(s1.tick).toBe(batchTicks(5, 5));
+    // Several instances of a kind, each its own author (`house:medium#2`, …).
+    expect(s1.snakes.filter((x) => x.house === "medium").length).toBeGreaterThan(1);
+    // 3 sandboxed bots and 17 native house bots, all starting a life: house bots are sized at
+    // their own cost, not a sandboxed bot's worst case.
+    const first = batchTicks(3, 3, ROOM_CPU_BUDGET_MS, 17, 17);
+    expect(first).toBeGreaterThan(batchTicks(20, 20) * 4);
+    expect(s1.lastBatchTicks).toBe(first);
+    expect(s1.tick).toBe(first);
 
     const s2 = await h.room<RoomStatus>("batches", "runBatch");
-    // Between "5 bots, none starting" and "5 bots, all starting" (house bots refill deaths).
-    expect(s2.lastBatchTicks).toBeLessThanOrEqual(batchTicks(5, 0));
-    expect(s2.lastBatchTicks).toBeGreaterThanOrEqual(batchTicks(5, 5));
+    // Full again: house bots replaced the snakes that died.
+    expect(s2.snakes.length + s2.livesEnded - s1.livesEnded).toBe(20);
+    // Between "none starting" and "all starting".
+    expect(s2.lastBatchTicks).toBeLessThanOrEqual(batchTicks(3, 0, ROOM_CPU_BUDGET_MS, 17, 0));
+    expect(s2.lastBatchTicks).toBeGreaterThanOrEqual(first);
     expect(s2.tick).toBe(s1.tick + s2.lastBatchTicks);
     expect(s2.watching).toBe(false);
+  }, 60_000);
+
+  it("house snakes make way for user lives: the smallest retire, refills count them as free", async () => {
+    const [ann, ben, cat, dan, eve] = await Promise.all(
+      ["ann", "ben", "cat", "dan", "eve"].map((a) => ticket(a, house.medium as string)),
+    );
+    if (!ann || !ben || !cat || !dan || !eve) throw new Error("no tickets");
+    await startRoom("priority", [ann], { maxSnakes: 4 });
+    const s1 = await h.room<RoomStatus>("priority", "runBatch");
+    expect(s1.snakes).toHaveLength(4);
+    expect(s1.snakes.filter((x) => x.house)).toHaveLength(3);
+
+    // House slots are free for tickets: the room takes two more though it runs full.
+    expect(await h.room("priority", "join", ben)).toEqual({ ok: true });
+    expect(await h.room("priority", "join", cat)).toEqual({ ok: true });
+    // The two smallest house snakes give their slots up (the youngest of equal ones).
+    const houseBefore = s1.snakes
+      .filter((x) => x.house)
+      .sort((a, b) => a.mass - b.mass || b.lifeTick - a.lifeTick || (a.lifeId < b.lifeId ? -1 : 1));
+    const s2 = await h.room<RoomStatus>("priority", "runBatch");
+    const ids = s2.snakes.map((x) => x.lifeId);
+    expect(ids).toEqual(expect.arrayContaining([ann.lifeId, ben.lifeId, cat.lifeId]));
+    expect(ids).not.toContain(houseBefore[0]?.lifeId);
+    expect(ids).not.toContain(houseBefore[1]?.lifeId);
+    expect(s2.snakes).toHaveLength(4);
+    // Retired house bots are not reported: they have no version.
+    const reported = (await events()).filter((e) => e.kind === "lifeEnded");
+    expect(reported).toEqual([]);
+
+    // A refill asks for lives while fewer than `maxSnakes` are real, house slots included: the
+    // room asked after its first batch, though it ran full.
+    const asks = (await events()).filter(
+      (e) => e.kind === "nextLife" && (e.body as { roomId: string }).roomId === "priority",
+    );
+    expect(asks.length).toBeGreaterThan(0);
+    // Four real lives (one pending) fill the room: the next is refused.
+    expect(await h.room("priority", "join", dan)).toEqual({ ok: true });
+    expect(await h.room("priority", "join", eve)).toEqual({ ok: false, reason: "full" });
+
+    const s3 = await h.room<RoomStatus>("priority", "runBatch");
+    expect(s3.snakes.map((x) => x.lifeId).sort()).toEqual(
+      [ann.lifeId, ben.lifeId, cat.lifeId, dan.lifeId].sort(),
+    );
+    expect(s3.snakes.filter((x) => x.house)).toEqual([]);
+  }, 60_000);
+
+  it("runs house bots natively: identical rooms stay identical across a reload", async () => {
+    const [kim] = await Promise.all([ticket("kim", BOTS.circler)]);
+    if (!kim) throw new Error("no ticket");
+    // Two rooms from the same seed with the same life: one deployed bot, 19 house bots.
+    for (const name of ["twin-a", "twin-b"]) {
+      await startRoom(name, [kim], { limits: { batchTicks: 60, chunkTicks: 100 } });
+    }
+    const view = (s: RoomStatus) => ({
+      tick: s.tick,
+      snakes: s.snakes.map(({ lifeId, house, lifeTick, mass }) => ({
+        lifeId,
+        house,
+        lifeTick,
+        mass,
+      })),
+      livesEnded: s.livesEnded,
+    });
+    const a1 = await h.room<RoomStatus>("twin-a", "runBatch");
+    const b1 = await h.room<RoomStatus>("twin-b", "runBatch");
+    // Kim and 19 house bots spawned (some may already have died).
+    expect(a1.snakes.length + a1.livesEnded).toBe(20);
+    expect(a1.snakes.filter((x) => x.house).length).toBeGreaterThan(10);
+    expect(view(b1)).toEqual(view(a1));
+    // Both reload (memory gone, every bot starts again at the saved frame) and play on alike.
+    await h.restart();
+    for (let i = 0; i < 4; i++) {
+      const a = await h.room<RoomStatus>("twin-a", "runBatch");
+      const b = await h.room<RoomStatus>("twin-b", "runBatch");
+      expect(view(b)).toEqual(view(a));
+    }
+    // The replays (actions recorded, house bots' included) are the same and play back, hash
+    // checked.
+    const r2 = await h.r2();
+    const chunk = async (name: string) =>
+      new Uint8Array(
+        await ((await r2.get(`${name}/0000000100.zsr`)) as R2ObjectBody).arrayBuffer(),
+      );
+    const [ca, cb] = await Promise.all([chunk("twin-a"), chunk("twin-b")]);
+    expect(cb).toEqual(ca);
+    const player = new ReplayPlayer([ca]);
+    player.seek(player.endTick);
+    expect(player.world.tick).toBe(player.endTick);
+    expect(player.endTick).toBeGreaterThan(100);
   }, 60_000);
 
   it("writes a dead life to D1 once its replay chunk is in R2, and pulls a replacement", async () => {
@@ -60,7 +153,8 @@ describe("RoomDO", () => {
     const erin = await ticket("erin", house.hard as string);
     const frank = await ticket("frank", house.medium as string);
     await h.call("matchmaker", "offer", frank);
-    await startRoom("deaths", [dave, erin], { limits: { chunkTicks: 200 } });
+    // A first batch that ends before the chunk does (house bots alone would size it longer).
+    await startRoom("deaths", [dave, erin], { limits: { chunkTicks: 200, batchTicks: 100 } });
 
     const s1 = await h.room<RoomStatus>("deaths", "runBatch");
     expect(s1.tick).toBeLessThan(200);
@@ -90,9 +184,10 @@ describe("RoomDO", () => {
       replay_key: "deaths/0000000000.zsr",
     });
     expect(await (await h.r2()).head("deaths/0000000000.zsr")).not.toBeNull();
-    expect((await events()).find((e) => e.kind === "lifeEnded")?.body).toMatchObject({
-      lifeId: dave.lifeId,
-    });
+    const ended = (await events()).filter(
+      (e) => e.kind === "lifeEnded" && (e.body as { roomId: string }).roomId === "deaths",
+    );
+    expect(ended[0]?.body).toMatchObject({ lifeId: dave.lifeId });
     // No `METRICS` binding in this harness: nothing is written, and the room doesn't mind.
     expect(await h.room("deaths", "metricPoints")).toEqual([]);
   }, 60_000);
@@ -105,7 +200,7 @@ describe("RoomDO", () => {
       ),
     );
     // No house bots: the room's life depends on these alone.
-    await startRoom("replay", tickets.slice(0, 2), { minAuthors: 0 });
+    await startRoom("replay", tickets.slice(0, 2), { fillTo: 0 });
     for (const t of tickets.slice(2)) await h.call("matchmaker", "offer", t);
 
     let s = await h.room<RoomStatus>("replay", "runBatch");
@@ -194,7 +289,13 @@ describe("RoomDO", () => {
     // `versions` row wouldn't do: a life of a deleted version is dropped, not retried.)
     const ghost = await ticket("ghost", BOTS.thrower);
     const rita = await ticket("rita", house.hard as string);
-    await startRoom("outbox", [ghost, rita], { limits: { chunkTicks: 50, maxOutbox: 0 } });
+    // A few house bots, as when this was written: the first batch (~80 ticks) runs past the
+    // chunk, so the life is due at once (20 starting bots would size it at 4 ticks), and Rita
+    // isn't crowded into dying while no delivery may wait (`maxOutbox: 0`).
+    await startRoom("outbox", [ghost, rita], {
+      fillTo: 5,
+      limits: { chunkTicks: 50, maxOutbox: 0 },
+    });
     const db = await h.d1();
     await db.prepare("ALTER TABLE lives RENAME TO lives_away").run();
 
@@ -251,7 +352,8 @@ describe("RoomDO", () => {
     const tickets = await Promise.all(
       ["rule1", "rule2"].map((a) => ticket(a, house.hard as string)),
     );
-    await startRoom("old-rules", tickets, { limits: { chunkTicks: 100 } });
+    // Batches shorter than the life cap below (house bots alone would size them at ~200 ticks).
+    await startRoom("old-rules", tickets, { limits: { chunkTicks: 100, batchTicks: 50 } });
     await spares("old-rules", 1);
     // The room was started by an engine with other defaults (before #98: turnRate 0.25), then
     // this one was deployed under it. A short life cap stands in for "its lives end eventually".

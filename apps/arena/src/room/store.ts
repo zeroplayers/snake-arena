@@ -50,10 +50,18 @@ export interface Meta {
   state: "running" | "closed";
   mode: RoomMode;
   maxSnakes: number;
-  minAuthors: number;
+  /**
+   * House bots fill the room up to this many snakes (`RoomStartOptions.fillTo`); missing means
+   * `maxSnakes`. Rooms saved before every slot was filled still have a `minAuthors` here, which
+   * nothing reads any more.
+   */
+  fillTo?: number;
   manual: boolean;
   limits: Required<RoomLimits>;
+  /** Lives that ended here, house bots included. */
   livesEnded: number;
+  /** Of those, deployed versions' lives (missing in rooms saved before it was counted). */
+  realLivesEnded?: number;
   /** Wall ms the room started; missing in rooms saved before it was recorded. */
   startedAt?: number;
   lastBatchTicks: number;

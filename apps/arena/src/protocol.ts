@@ -178,10 +178,16 @@ export interface RoomStartOptions {
   seed?: number;
   /** Default `accelerated`. */
   mode?: RoomMode;
-  /** Most snakes in the room (house bots included). Default 20. */
+  /**
+   * Most snakes in the room (house bots included), and most lives of deployed versions. Default
+   * 20.
+   */
   maxSnakes?: number;
-  /** Fewest distinct authors; house bots fill up to it. Default 5. */
-  minAuthors?: number;
+  /**
+   * House bots fill the room up to this many snakes while it holds a deployed version's life.
+   * Default `maxSnakes`: every free slot (SPEC §4). Tests lower it to keep rooms small.
+   */
+  fillTo?: number;
   /** Don't schedule alarms; batches run only through `RoomRpc.runBatch` (tests, tools). */
   manual?: boolean;
   limits?: RoomLimits;

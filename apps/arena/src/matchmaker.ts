@@ -86,7 +86,9 @@ export interface MatchmakerStatus {
  *     backoff while a room can't act on it yet;
  *  4. opens rooms when more lives wait than `openThreshold` (one if lives wait and none is open),
  *     filling each with up to `maxSnakes` lives of distinct authors, after a fresh read of the
- *     kill switch (none if it can't be read);
+ *     kill switch (none if it can't be read). Below the threshold, waiting lives go to open
+ *     rooms as they ask (`nextLife`): a room asks while it holds fewer than `maxSnakes` real
+ *     lives, and a house bot gives its slot up for each life it gets;
  *  5. compares rooms' lives with the ledger (`status()`), so a life nobody reported for
  *     `lostAfterMs` frees its bot;
  *  6. forgets ledger rows older than yesterday, and evictions older than `EVICTION_WINDOW_MS`;
@@ -97,7 +99,8 @@ export interface MatchmakerStatus {
  * `room.stalled` (step 5 found a running room whose tick didn't move since its last check) and
  * `version.quarantined` (by evictions across rooms).
  *
- * Rooms close by themselves when only house bots remain and `nextLife` has nothing for them.
+ * The matchmaker knows nothing of house bots: rooms fill every slot real lives don't use with
+ * them, and close by themselves when only house bots remain and `nextLife` has nothing for them.
  */
 export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, MatchmakerSiteRpc {
   private readonly store: MatchmakerStore;
@@ -451,7 +454,6 @@ export class MatchmakerDO extends DurableObject<Env> implements MatchmakerRpc, M
       await this.room(roomId).start({
         roomId,
         maxSnakes: c.maxSnakes,
-        minAuthors: c.minAuthors,
         ...c.room,
       });
       this.store.setRoom(roomId, "open", this.now());

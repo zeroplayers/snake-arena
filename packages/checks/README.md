@@ -39,17 +39,20 @@ event and reports its seed, tick, life, the sandbox's message and the bot's last
 ### Matches
 
 Each match is one arena room, run by RoomDO's own rules (`src/room-rules.ts`, a verbatim port
-of `houseFill` and `batchTicks` from `apps/arena`, PR #56):
+of `houseFill`, `houseToRetire` and `batchTicks` from `apps/arena`, PR #56):
 
 - Every arena room starts at tick 0 and its tick only grows, and a candidate often joins a
   young room. So half the check rooms open at tick 0. The others are older rooms that open at a
   tick from 1 000 to 9 999 999, the same share for each power of ten.
 - A room runs in batches. A batch lasts `batchTicks(bots, starts)` ticks, the arena's
-  worst-case sizing (~65–100 ticks for these rooms).
+  worst-case sizing (~25 ticks: every room runs 20 snakes).
 - Snakes join only at batch boundaries:
-  - first the tickets: deployed bots, in arrival order;
-  - then `houseFill` tops the room up to 5 authors, in fill order (medium, easy, hard, chaos,
-    then `house:medium#2`, …), with ids `house-<kind>-<tick>-<index in that fill>`.
+  - first the tickets: deployed bots, in arrival order. Only they count toward the room's 20:
+    when a ticket finds no empty slot, `houseToRetire` picks the house snake that makes way (the
+    smallest, then the youngest), which dies on the batch's first tick without running;
+  - then `houseFill` fills every free slot, each house bot of the kind the room has fewest of
+    (ties in the order medium, easy, hard, chaos; then `house:medium#2`, …), with ids
+    `house-<kind>-<tick>-<index in that fill>`.
   - Nobody respawns in the middle of a batch.
 - 0–3 of the house bots play as tickets under user names: Better Auth user ids as authors (32
   letters and digits, what `apps/web` gets with no `generateId`), a fresh UUID life id per

@@ -190,6 +190,8 @@ export class ReplaySource implements MatchSource {
     const label =
       options.label ?? ((s: { id: string; author: string }) => defaultLabel(s.id, s.author));
     let lastIds: readonly string[] = [];
+    /** Snakes the room recorded as house bots (`house:<kind>`, `house:<kind>#<n>`). */
+    const house = new Set<string>();
     let world = player.seek(player.startTick);
     for (;;) {
       const tick = world.tick;
@@ -203,6 +205,7 @@ export class ReplaySource implements MatchSource {
         const life: MutableLife = { id: snake.id, bot, author, color, bornTick: snake.bornTick };
         this.lifeList.push(life);
         this.lifeById.set(snake.id, life);
+        if (snake.author.startsWith("house:")) house.add(snake.id);
       }
       const same =
         world.snakes.length === lastIds.length && world.snakes.every((s, i) => s.id === lastIds[i]);
@@ -224,7 +227,9 @@ export class ReplaySource implements MatchSource {
         if (!life) continue;
         life.death = {
           tick: d.tick,
-          cause: d.cause,
+          // A house bot's only `error` is the room retiring it (to make way for a real life, or
+          // the arena stopping): house bots run natively and never die of their own errors.
+          cause: d.cause === "error" && house.has(d.id) ? "retired" : d.cause,
           killerId: d.killerId,
           score: d.score,
           mass: d.mass,

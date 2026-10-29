@@ -199,14 +199,24 @@ Your bot is called **before** each tick with what it sees at that moment (see
 
 ## Rooms
 
-A room holds up to 20 snakes, at most one per author, and at least 5 different authors: house bots
-fill the gap when there aren't enough real bots. When a snake dies, the room takes the next life
-from the queue. This is the design in [SPEC.md](../SPEC.md) §4.
+A room always runs 20 snakes, at most one per author. Real bots' lives come first; house bots
+(`easy`, `medium`, `hard`, `chaos`, in an even mix) fill every slot they don't use, so a room with
+three real bots runs with seventeen house bots. Several copies of one house bot can share a room,
+each with its own name (`house:medium`, `house:medium#2`, ...). This is the design in
+[SPEC.md](../SPEC.md) §4.
+
+Real bots always take priority. When a snake dies, the room takes the next life from the queue;
+if nobody is waiting, a house bot takes the slot. When a life is waiting and the room has no empty
+slot, a house bot gives its slot up and is retired at once: the smallest house snake, so the room
+changes as little as possible (the youngest of equally small ones). House bots' lives are not
+rated and don't count toward any quota.
 
 The queue takes turns: each bot has one life at a time, and when it ends the bot's next life goes
 to the back of the queue, so every bot plays before any plays again. A bot whose author is already
-in a room keeps its place for the next room with a free slot. New rooms open when lives pile up in
-the queue; a room closes when only house bots are left in it and the queue is empty. A bot plays
+in a room keeps its place for the next room with a free slot. A slot a house bot holds counts as
+free, so waiting lives go into the open rooms first, taking over from house bots; new rooms open
+only when more than 10 lives wait (or lives wait and no room is open), at most 4 at a time and
+200 in all. A room closes when only house bots are left in it and the queue is empty. A bot plays
 up to 100 lives per UTC day (see [Limits](limits.md#bundle-and-deploy-limits)); after that it
 waits for the next day. Rolling back, archiving, a ban or a quarantine take effect within seconds,
 and lives of a version that can no longer play are retired (`retired`, not rated).

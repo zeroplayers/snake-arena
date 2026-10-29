@@ -13,7 +13,7 @@ import {
   outcomes,
   sleep,
   spares,
-  startRoom,
+  startQuietRoom,
   ticket,
   useRoomHarness,
 } from "./testing/room-tests.ts";
@@ -31,7 +31,7 @@ describe("RoomDO backstop", () => {
       ticket("tess", house.hard as string),
       ticket("ugo", house.medium as string),
     ]);
-    await startRoom("spinner", [spinner, ...others], {
+    await startQuietRoom("spinner", [spinner, ...others], {
       limits: { cpuLimitMs: 10_000, cpuBudgetMs: 1000, batchTicks: 50 },
     });
     await h.call("matchmaker", "offer", { ...spinner, lifeId: "life-sven-2" }, "spinner");
@@ -67,7 +67,7 @@ describe("RoomDO backstop", () => {
     const honest = await Promise.all(
       ["h5", "h6", "h7", "h8", "h9"].map((a) => ticket(a, `${house.hard}\n// ${a}\n`)),
     );
-    await startRoom("storm", honest, { limits });
+    await startQuietRoom("storm", honest, { limits });
     await h.room("storm", "slowInstrument", 150);
     await h.room("storm", "runBatch");
     for (let i = 0; i < 40; i++) {
@@ -108,7 +108,7 @@ describe("RoomDO backstop", () => {
     // Default 30 s CPU limit; a slow but honest bot just makes the batch long enough to interrupt.
     const slowpoke = await ticket("pia", BOTS.slow(30));
     const tom = await ticket("tom", house.hard as string);
-    await startRoom("restarts", [slowpoke, tom], { limits: { batchTicks: 50 } });
+    await startQuietRoom("restarts", [slowpoke, tom], { limits: { batchTicks: 50 } });
     for (let i = 0; i < 2; i++) {
       void h.fire("restarts", "runBatch");
       await sleep(800);
@@ -133,7 +133,9 @@ describe("RoomDO backstop", () => {
       ticket("ruth", house.hard as string),
       ticket("sam", house.medium as string),
     ]);
-    await startRoom("slow", [slow, ...honest], { limits: { cpuLimitMs: 2000, batchTicks: 50 } });
+    await startQuietRoom("slow", [slow, ...honest], {
+      limits: { cpuLimitMs: 2000, batchTicks: 50 },
+    });
     const { kills, s } = await drive("slow", (s) => s.tick >= 80, { hangMs: 4000, max: 200 });
     expect(kills).toBe(1);
     expect(outcomes(s)).toEqual(["overrun"]);

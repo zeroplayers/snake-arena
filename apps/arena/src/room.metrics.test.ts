@@ -48,9 +48,11 @@ async function stopRoom(name: string): Promise<RoomStatus> {
 describe("RoomDO metrics", () => {
   it("writes room.started, room.batch per batch, life.ended once delivered, room.closed", async () => {
     const dave = await ticket("dave", BOTS.thrower);
-    // Erin circles in open space: she can't die before the stop, whatever the rules.
+    // Erin circles in open space: she can't die before the stop, whatever the rules. Three house
+    // bots, not a full room's crowd, so the space stays open.
     const erin = await ticket("erin", BOTS.circler);
     await startRoom("metered", [dave, erin], {
+      fillTo: 5,
       limits: { chunkTicks: 50, metricsMs: 0, arenaControlPollMs: 0 },
     });
     let s = await run("metered");
@@ -70,11 +72,16 @@ describe("RoomDO metrics", () => {
       // Dave throws every tick: dead by `error` on his third.
       livesEnded: 1,
       snakes: s.snakes.length,
+      // Erin; house bots fill the other slots (3 spawned with the two tickets).
+      realLives: 1,
+      houseRetired: 0,
       spectators: 0,
       watched: 0,
       cut: 0,
     });
-    expect(batch?.botTicks).toBeGreaterThan(s.tick);
+    expect(s.snakes.length + s.livesEnded).toBe(5);
+    // Sandboxed bot ticks only (Dave's 3 and Erin's): house bots run natively.
+    expect(batch?.botTicks).toBe(s.tick + 3);
     expect(batch?.workUnits).toBeGreaterThan(0);
     expect(batch?.periodMs).toBeGreaterThanOrEqual(0);
     expect(batch?.wallMs).toBeGreaterThanOrEqual(0);
@@ -111,7 +118,8 @@ describe("RoomDO metrics", () => {
         roomId: "metered",
         reason: "kill_switch",
         ticks: closed.tick,
-        lives: closed.livesEnded,
+        // Dave and Erin: the house bots that died in it aren't counted.
+        lives: 2,
         durationMs: expect.any(Number),
       },
     ]);
@@ -139,14 +147,42 @@ describe("RoomDO metrics", () => {
     ]);
   }, 60_000);
 
+  it("counts the house snakes retired to make way for real lives", async () => {
+    const [una, vic, wes] = await Promise.all(
+      ["una", "vic", "wes"].map((a) => ticket(a, BOTS.circler)),
+    );
+    if (!una || !vic || !wes) throw new Error("no tickets");
+    await startRoom("retiring", [una], {
+      maxSnakes: 3,
+      limits: { batchTicks: 10, metricsMs: 0, arenaControlPollMs: 0 },
+    });
+    await run("retiring");
+    expect(await h.room("retiring", "join", vic)).toEqual({ ok: true });
+    expect(await h.room("retiring", "join", wes)).toEqual({ ok: true });
+    const s = await run("retiring");
+    expect(s.snakes.filter((x) => x.house)).toEqual([]);
+    expect(
+      metricsNamed(await points("retiring"), "room.batch").map((b) => [
+        b.houseRetired,
+        b.realLives,
+        b.snakes,
+      ]),
+    ).toEqual([
+      [0, 1, 3],
+      [2, 3, 3],
+    ]);
+  }, 60_000);
+
   it("writes room.crashed for every incident, room.evicted when a life is evicted", async () => {
     const evil = await ticket("mallory", BOTS.hostile(30));
     const others = await Promise.all([
       ticket("kate", house.hard as string),
       ticket("liam", house.medium as string),
     ]);
-    // Small CPU limit and batches, so "killed after 1.5 s" counts as CPU-limit evidence.
+    // Small CPU limit and batches, so "killed after 1.5 s" counts as CPU-limit evidence. Few
+    // house bots, so watched batches of honest calls stay well within the harness's 4 s.
     await startRoom("crashy", [evil, ...others], {
+      fillTo: 5,
       limits: { cpuLimitMs: 1000, batchTicks: 50, metricsMs: 0 },
     });
     let s: RoomStatus | null = null;

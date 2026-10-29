@@ -15,6 +15,12 @@ import { ARENA_INVARIANTS } from "./testing/invariants.ts";
 // A full run (5 seeds × 1000 ticks) takes a few seconds; most tests use shorter matches so the
 // suite doesn't starve the timing tests of other packages running in parallel.
 const FULL = 60_000;
+/**
+ * 30 seeds, six deploy checks' worth. Each match is a 20-snake room (19 house bots run natively,
+ * ~0.45 ms a tick on an M1), played for the bot and again for `easy`'s bar: ~35 s on an M1, ~70 s
+ * on a CI runner. The time goes into the rooms' ticks, not into the bot's lives.
+ */
+const THIRTY_SEEDS = 180_000;
 const QUICK = { seeds: [101, 202, 303], ticks: 400 };
 
 describe("honest bots", () => {
@@ -51,6 +57,16 @@ describe("honest bots", () => {
       const second = await runChecks(input(medium), QUICK);
       expect(first.passed).toBe(true);
       expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+      // Pausing after each batch (what the checks consumer does) changes nothing.
+      let pauses = 0;
+      const paused = await runChecks(input(medium), {
+        ...QUICK,
+        pause: async () => {
+          pauses++;
+        },
+      });
+      expect(pauses).toBeGreaterThan(QUICK.seeds.length * 2);
+      expect(JSON.stringify(paused)).toBe(JSON.stringify(first));
     },
     FULL,
   );
@@ -153,7 +169,8 @@ describe("bad bots are rejected with a clear reason", () => {
       const text = rejected(report);
       expect(report.run.status).toBe("pass");
       expect(report.qualify.status).toBe("fail");
-      expect(report.qualify.score).toBeLessThan((report.qualify.bar as number) / 10);
+      // A full room (19 others) gives it more snakes to be run into: still far below easy.
+      expect(report.qualify.score).toBeLessThan((report.qualify.bar as number) / 5);
       const wall = report.run.seeds.reduce((n, s) => n + (s.ends.wall ?? 0), 0);
       const deaths = report.run.seeds.reduce((n, s) => n + s.lives - (s.ends.window ?? 0), 0);
       expect(wall).toBeGreaterThan(deaths / 2);
@@ -161,7 +178,7 @@ describe("bad bots are rejected with a clear reason", () => {
       expect(report.qualify.hint).toMatch(/deaths were into the wall/);
       expect(text).toContain("✗ Qualifies scores below easy");
     },
-    FULL,
+    THIRTY_SEEDS,
   );
 
   it(
@@ -260,14 +277,19 @@ describe("formatReport", () => {
 });
 
 describe("the check can't be told apart from the arena", () => {
-  it("a bot checking the arena's invariants finds nothing wrong", async () => {
-    // Throws (and so logs a warning) whenever what it sees breaks a rule a real room keeps.
-    const detector = await easyWith(`${ARENA_INVARIANTS}; checkArena(state)`);
-    const report = await runChecks(input(detector), QUICK);
-    expect(report.run.warnings).toEqual([]);
-    expect(report.run.stats.errorTicks).toBe(0);
-    expect(report.run.status).toBe("pass");
-  });
+  it(
+    "a bot checking the arena's invariants finds nothing wrong",
+    async () => {
+      // Throws (and so logs a warning) whenever what it sees breaks a rule a real room keeps.
+      const detector = await easyWith(`${ARENA_INVARIANTS}; checkArena(state)`);
+      const report = await runChecks(input(detector), QUICK);
+      expect(report.run.warnings).toEqual([]);
+      expect(report.run.stats.errorTicks).toBe(0);
+      expect(report.run.status).toBe("pass");
+      // ~2.4 s on an M1 with full rooms: over half of vitest's 5 s default on a CI runner.
+    },
+    FULL,
+  );
 
   // Each detector is `easy` plus a throw whenever it sees a sign of the arena that the check used
   // to lack. A bot keyed on it would misbehave in the arena; the check must see it misbehave too.
@@ -344,8 +366,10 @@ describe("suite budget", () => {
       const report = await runChecks(input(await houseBundle("hard")), QUICK);
       expect(report.run.status).toBe("pass");
       // The sandbox's cost meter (#60) adds calls and branches, which QuickJS counts as it polls.
-      expect(report.run.cost.interrupts).toBeLessThan(report.budget.maxInterrupts / 4);
-      expect(report.run.cost.work).toBeLessThan(report.budget.maxWork / 5);
+      // In a full room (20 snakes to look at) `hard` uses about a third of the ops cap and a
+      // quarter of the work cap.
+      expect(report.run.cost.interrupts).toBeLessThan(report.budget.maxInterrupts / 2);
+      expect(report.run.cost.work).toBeLessThan(report.budget.maxWork / 3);
       expect(report.budget.maxInterrupts).toBe((3 * 400 * report.opBudget) / 2);
     },
     FULL,

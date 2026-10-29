@@ -1,6 +1,7 @@
 /**
- * The simulation half of a room: the engine world, its replay recorder and one sandbox life per
- * snake. No storage or network here; `RoomDO` loads it, runs batches and saves the result.
+ * The simulation half of a room: the engine world, its replay recorder and one life per snake (a
+ * sandbox life per deployed version, a native one per house bot, `house-life.ts`). No storage or
+ * network here; `RoomDO` loads it, runs batches and saves the result.
  */
 import {
   type Action,
@@ -14,18 +15,13 @@ import {
 } from "@zerosnake/engine";
 import { type BotLife, DEFAULT_OP_BUDGET, type TickReport, WORK_PER_OP } from "@zerosnake/sandbox";
 import { type BotInfo, type BotState, LOG_LIMIT_BYTES } from "@zerosnake/sdk";
-import { HOUSE_BUNDLES } from "../house-bundles.gen.ts";
+import { type SimLife, startHouseLife } from "./house-life.ts";
 import type { LifeEntry, RosterEntry } from "./store.ts";
 import { type TraceChange, TraceRecorder } from "./trace.ts";
 
 /** R2 key (REPLAYS) of a room's replay chunk that starts at `tick`. */
 export function chunkKey(roomId: string, tick: number): string {
   return `${roomId}/${String(tick).padStart(10, "0")}.zsr`;
-}
-
-/** The bundle a life runs: its version's, or the house bot's that ships with the worker. */
-export function botSource(entry: LifeEntry): string {
-  return entry.house ? (HOUSE_BUNDLES[entry.house] ?? "") : entry.source;
 }
 
 export interface EndedLife {
@@ -86,6 +82,7 @@ export interface BatchResult {
   ticks: number;
   /** A tick was abandoned halfway: some bots ran it, the world didn't step. */
   aborted: boolean;
+  /** Sandboxed bot ticks (house bots run natively and aren't counted). */
   botTicks: number;
   /** The sandbox's cost units of the bot ticks (`TickReport.work`), summed. */
   work: number;
@@ -93,7 +90,8 @@ export interface BatchResult {
 
 interface Running {
   entry: RosterEntry;
-  life: BotLife | null;
+  /** A sandbox life for a deployed version, a native one for a house bot. */
+  life: SimLife | null;
   /** Real lives only (house bots aren't traced). */
   trace: TraceRecorder | null;
 }
@@ -133,13 +131,6 @@ export class RoomSim {
   /** Lives in the room, spawn order. */
   get roster(): RosterEntry[] {
     return [...this.running.values()].map((r) => r.entry);
-  }
-
-  /** Lives in the room whose bot isn't running (a resumed room): they start with the batch. */
-  get idleLives(): number {
-    let n = 0;
-    for (const r of this.running.values()) if (!r.life) n++;
-    return n;
   }
 
   /** Lives whose bot will (re)start with the next batch, unless the plan kills them. */
@@ -191,16 +182,24 @@ export class RoomSim {
     );
     if (shuffleStarts) shuffle(resumed);
     // Instrument bundles before the first bot call is marked: it's host work, not the bot's.
-    await this.sandbox.prepare([
-      ...[...this.running.values()].map((r) => botSource(r.entry)),
-      ...plan.spawns.map(botSource),
-    ]);
+    // House bots run natively: nothing to instrument, and the watch hooks skip their calls.
+    await this.sandbox.prepare(
+      [...[...this.running.values()].map((r) => r.entry), ...plan.spawns]
+        .filter((e) => !e.house)
+        .map((e) => e.source),
+    );
+    const watched = (e: LifeEntry) => !e.house;
     for (const r of resumed) {
+      if (!watched(r.entry)) {
+        r.life = this.startLife(r.entry);
+        continue;
+      }
       if (beforeBot) await beforeBot(r.entry.lifeId, "init", world.tick);
-      r.life = this.startLife(r.entry);
+      const life = this.startSandboxLife(r.entry);
+      r.life = life;
       if (afterBot) await afterBot();
-      if (r.trace) r.trace.restart(world.tick, r.life);
-      else r.trace = this.startTrace(r.entry, r.life);
+      if (r.trace) r.trace.restart(world.tick, life);
+      else r.trace = this.startTrace(r.entry, life);
     }
     for (const entry of plan.spawns) {
       this.recorder.spawn({ id: entry.lifeId, author: entry.author });
@@ -214,10 +213,15 @@ export class RoomSim {
       const r: Running = { entry: spawned, life: null, trace: null };
       this.running.set(entry.lifeId, r);
       result.spawned.push(spawned);
+      if (!watched(entry)) {
+        r.life = this.startLife(spawned);
+        continue;
+      }
       if (beforeBot) await beforeBot(entry.lifeId, "init", world.tick);
-      r.life = this.startLife(spawned);
+      const life = this.startSandboxLife(spawned);
+      r.life = life;
       if (afterBot) await afterBot();
-      r.trace = this.startTrace(spawned, r.life);
+      r.trace = this.startTrace(spawned, life);
     }
 
     const ended = new Map<string, Running>();
@@ -235,15 +239,18 @@ export class RoomSim {
           faults[id] = forced ?? "error";
           continue;
         }
-        if (beforeBot && (await beforeBot(id, "tick", world.tick)) === "abort") {
+        const sandboxed = watched(r.entry);
+        if (sandboxed && beforeBot && (await beforeBot(id, "tick", world.tick)) === "abort") {
           result.aborted = true;
           return finish();
         }
         const seen = buildBotState(world, snake);
         const report = r.life.tick(seen);
-        if (afterBot) await afterBot();
-        result.botTicks++;
-        result.work += report.work;
+        if (sandboxed) {
+          if (afterBot) await afterBot();
+          result.botTicks++;
+          result.work += report.work;
+        }
         if (r.trace) calls.push({ trace: r.trace, seen, report });
         actions[id] = report.action;
         if (report.death) faults[id] = report.death.fault;
@@ -287,14 +294,25 @@ export class RoomSim {
     this.running.clear();
   }
 
-  private startLife(entry: RosterEntry): BotLife {
+  /** A house bot's native life, or a deployed version's sandbox life. */
+  private startLife(entry: RosterEntry): SimLife {
+    return entry.house
+      ? startHouseLife(entry.house, this.info(entry))
+      : this.startSandboxLife(entry);
+  }
+
+  private startSandboxLife(entry: RosterEntry): BotLife {
+    return this.sandbox.startLife(entry.source, this.info(entry));
+  }
+
+  /** What `init` gets: the same for a house bot as for a deployed one. */
+  private info(entry: RosterEntry): BotInfo {
     const snake = this.world.snakes.find((s) => s.id === entry.lifeId);
     if (!snake) throw new Error(`life ${entry.lifeId} has no snake`);
-    const info = buildBotInfo(this.world, snake, {
+    return buildBotInfo(this.world, snake, {
       opBudget: DEFAULT_OP_BUDGET,
       logLimitBytes: LOG_LIMIT_BYTES,
     });
-    return this.sandbox.startLife(botSource(entry), info);
   }
 
   private startTrace(entry: RosterEntry, life: BotLife): TraceRecorder | null {

@@ -74,8 +74,8 @@ seeds and lineup, and `zerosnake sim --seed <n> --vs <old bot>` lets you watch t
 
 The same bot scores very differently depending on who else is in its room: in the rating
 simulation, 4–13× more in a room of weak bots than in a room of strong ones. Rooms are filled from
-a first-in, first-out queue, and house bots top them up when there aren't enough real bots, so
-rooms are weaker when few real bots are online. Over 200 lives this mostly evens out, but not
+a first-in, first-out queue, and house bots fill every slot real bots don't use, so rooms are
+weaker when few real bots are online. Over 200 lives this mostly evens out, but not
 completely, so treat rank differences between bots whose ranges overlap as noise. Each life's room
 strength is recorded, and a room-strength normalization exists
 ([`normalize.ts`](../packages/rating/src/normalize.ts)) but is **off** at launch; it will be

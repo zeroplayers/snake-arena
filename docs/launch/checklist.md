@@ -154,7 +154,9 @@ versions; publishing the tarball with `npm` uploads exactly what you listed.
 Then, for later releases without tokens, on npmjs.com → **zerosnake** → Settings:
 
 - [ ] **Trusted Publisher** → GitHub Actions: organization or user `zeroplayers`, repository
-  `snake-arena`, workflow filename `release-cli.yml`, environment `npm`.
+  `snake-arena`, workflow filename `release-cli.yml`, environment `npm`, with **Allow npm publish**
+  ticked under Allowed actions (otherwise only `npm stage publish` is allowed and the release fails
+  with "403 OIDC permission denied for this action").
 - [ ] **Publishing access** → "Require two-factor authentication and disallow tokens".
 
 Both are set on npmjs.com; they're confirmed by the first tag release (cli-v0.1.1).

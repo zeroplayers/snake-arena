@@ -284,8 +284,8 @@ before uploading: a bot that fails isn't uploaded and costs no deploy.
 - **Keep a margin over `easy`.** easy's own score swings a lot from one set of seeds to the next
   (it dies often, and now and then has a long lucky life with kills), so a bot close to easy's
   score can pass on one version and fail on the next, by luck of the seeds. The starter bot scores
-  about 4.3× easy's mean score per life on typical seeds and at least 1.5× on about 99% of seed
-  sets, but even it failed 1 of the 1200 seed sets we measured (easy had an unusually good set
+  about 3.6× easy's mean score per life on typical seeds and at least 1.3× on about 99% of seed
+  sets, but even it failed 3 of the 1200 seed sets we measured (easy had an unusually good set
   there): aim for a margin like that. One passing `test` doesn't prove a bot is good enough: if a pass is narrow
   (look at "mean score per life … easy in your seat" seed by seed), make the bot clearly better,
   e.g. fewer early deaths, rather than re-rolling seeds.

@@ -645,6 +645,9 @@ function actionView(action: { turn: number; boost?: boolean } | undefined): HTML
 }
 
 function deathText(d: NonNullable<LifeInfo["death"]>, source: MatchSource): string {
+  // Not a death: the life reached the life cap, or the room ended it (a house snake making way
+  // for a real life, a version that no longer plays).
+  if (d.cause === "retired") return `retired on tick ${d.tick}`;
   const killer = d.killerId ? ` by ${source.life(d.killerId)?.id ?? d.killerId}` : "";
   return `died on tick ${d.tick}: ${d.cause}${killer}`;
 }

@@ -62,9 +62,12 @@ describe("life score", () => {
     expect(s.score).toBeCloseTo(40 * 30 * C.massScoreFactor, 12);
   });
 
-  /** One full life (to the life cap) of a single policy, alone in a normal arena. */
+  /**
+   * One full life of a single policy, alone in a normal arena, to a 10-minute cap (the default,
+   * 24 hours, would take minutes to simulate and shows the same).
+   */
   const life = (policy: Policy, seed: number): Death => {
-    const world = createWorld({ seed });
+    const world = createWorld({ seed, config: { lifeCap: 6000 } });
     spawnSnake(world, { id: "a", author: "a" });
     while (world.snakes.length > 0) step(world, actionsFor(world, { a: policy }));
     const [death] = world.deaths;

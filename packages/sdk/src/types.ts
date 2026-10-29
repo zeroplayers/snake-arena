@@ -43,7 +43,10 @@ export interface BotInfo {
   visionRadius: number;
   /** Simulation ticks per second of game time (wall-clock speed may differ). */
   tickRate: number;
-  /** The life ends ("retires" with its score) after this many ticks. */
+  /**
+   * Safety cap on a life: a snake still alive after this many ticks "retires" with its score.
+   * 864 000 (24 hours of game time) in the arena, so in practice a life lasts until you die.
+   */
   maxLifeTicks: number;
   /**
    * QuickJS operation budget for one `tick()` call. Going over reuses your previous action and

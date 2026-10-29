@@ -590,6 +590,34 @@ describe("MatchmakerDO", () => {
     expect((await counted()).get(`b${gone.author.slice(1)}`)).toBe(2);
   }, 60_000);
 
+  it("never loses a life its room still holds, however long it lives", async () => {
+    await setup({ openThreshold: 0, roomCheckMs: 0 });
+    await seedBots([{ author: "long", bot: "long" }]);
+    await settle();
+    const [r0] = await openRooms();
+    if (!r0) throw new Error("no room");
+    const [life] = await lives(r0);
+    if (!life) throw new Error("no life");
+    // A life lasts until the snake dies (up to 24 hours of game time): hours after it was issued
+    // the room still holds it, and its bot keeps it.
+    for (let hour = 0; hour < 6; hour++) {
+      await mm("advance", 60 * 60_000);
+      await settle();
+    }
+    expect((await status()).issued).toBe(1);
+    // It ends, and its report never comes: lost `lostAfterMs` after the room last held it, not
+    // at once (it was issued six hours ago).
+    await room(r0, "forget", life.lifeId);
+    await settle();
+    const state = async () =>
+      (await query<{ state: string }>("SELECT state FROM lives WHERE life_id = ?", life.lifeId))[0]
+        ?.state;
+    expect(await state()).toBe("issued");
+    await mm("advance", 31 * 60_000);
+    await settle();
+    expect(await state()).toBe("lost");
+  }, 60_000);
+
   it("asks again for a leave that reached the room before the ticket did", async () => {
     await setup({ maxRooms: 0 });
     await seedBots([{ author: "late", bot: "late" }]);

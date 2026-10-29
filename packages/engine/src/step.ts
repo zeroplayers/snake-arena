@@ -20,7 +20,7 @@ import { layoutSegments } from "./world.ts";
  *     body (`collision`, credited to its owner), or the wall. Snakes in spawn grace
  *     (`spawnGraceTicks`) take part only in the wall: no snake kills them, they kill no snake;
  *  4. survivors eat food in their forward cone (a contested pellet goes to the nearest head);
- *  5. survivors age and score; those at `lifeCap` retire;
+ *  5. survivors age and score; those at `lifeCap` (the 24-hour safety cap) retire;
  *  6. the dead are credited, drop remains and leave; ambient food tops up.
  */
 export function step(world: World, actions: ActionMap = {}, faults: FaultMap = {}): World {

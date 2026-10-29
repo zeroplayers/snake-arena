@@ -99,12 +99,15 @@ Only `src/` is deployed. Keep tests and tools out of it.
     body is solid again the moment its `spawnGrace` reaches 0.
   - Collisions are swept along the move: a fast head cannot jump through a thin body.
   - A dead snake drops its whole length as food.
-- **Life cap:** after `info.maxLifeTicks` (6000 ticks = 10 min) the snake retires with its score.
+- **Life length:** a life lasts until the snake dies. As a safety cap, a snake still alive after
+  `info.maxLifeTicks` (864 000 ticks = 24 hours of game time) retires with its score.
 - **Score of a life:** `0.001 × (sum of your length over every tick alive) + 50 × kills`. So: get
   long, stay long, stay alive; a kill is worth as much as holding length 50 for 1000 ticks.
 - **Arena:** rooms of 10–20 snakes from different authors (house bots fill gaps). When your snake
-  dies, its next life queues for a room. A version's rating is its mean life score over its last
-  200 lives (shown after 30). A deploy must out-score the `easy` house bot to be accepted.
+  dies, its next life queues for a room. A version's rating is its points per minute alive over
+  its last 200 lives (total score / total minutes alive), ranked once its lives add up to an hour.
+  So a kill or extra length is worth the same whenever it comes, and staying alive keeps the
+  points coming. A deploy must out-score the `easy` house bot (mean score per life) to be accepted.
 
 ## Coordinates and turning (get this right)
 
@@ -151,7 +154,7 @@ export default defineBot({
 - **Throwing:** the tick's action is replaced by your previous one; three throws in a row kill you.
 
 `init(info)` gets `BotInfo`: `snakeId`, `worldHalfSize` (89), `visionRadius` (40), `tickRate` (10),
-`maxLifeTicks` (6000), `opBudget` (10), `logLimitBytes` (1024), `seed`.
+`maxLifeTicks` (864000), `opBudget` (10), `logLimitBytes` (1024), `seed`.
 
 `tick(state, ...)` gets `BotState`:
 
@@ -298,7 +301,7 @@ before uploading: a bot that fails isn't uploaded and costs no deploy.
 ```sh
 npm run typecheck     # the bot and the tests
 npm test              # smoke test: loads in the real sandbox, 3 matches vs house bots, no faults, budget headroom
-npm run bench         # 20 seeds × 3000 ticks vs house bots: mean life score ± error, deaths by cause, max ops
+npm run bench         # 20 seeds × 3000 ticks vs house bots: pts/min and mean life score ± error, deaths by cause, max ops
 npm run bench -- --deaths 5 --context 15     # also replay the last 15 ticks before 5 deaths
 npm run bench -- src/bot.ts .zerosnake/prev/src/bot.ts   # compare two versions on the same seeds
 ```

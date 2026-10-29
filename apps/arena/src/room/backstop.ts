@@ -64,6 +64,12 @@ export const WATCH_ABORT_SHARE = 0.6;
 export const WATCH_WALL_SHARE = 1;
 /** Watch length after the first CPU incident in a day (one minute of game time). */
 export const WATCH_TICKS = 600;
+/**
+ * Watch length after the second (ten minutes of game time). It was the life cap, so every life
+ * started and ended under watch; lives now last until the snake dies (up to 24 hours), and a
+ * watch that long would slow the room for hours, so it is its own constant.
+ */
+export const WATCH_REPEAT_TICKS = 6000;
 /** CPU incidents within this window escalate the watch. */
 export const INCIDENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** Watched kills in the kill window, each inside one life's call, that evict that life. */
@@ -279,23 +285,22 @@ export interface WatchWindow {
 
 /**
  * How long to watch after a CPU incident, given how many there were in the last
- * `INCIDENT_WINDOW_MS` (this one included): a minute of game time for the first, a full life
- * (`lifeCap`, so every life in the room starts and ends under watch) for the second, and a day of
- * wall time from the third on. Never shortens a watch already running.
+ * `INCIDENT_WINDOW_MS` (this one included): a minute of game time for the first, ten minutes
+ * (`WATCH_REPEAT_TICKS`) for the second, and a day of wall time from the third on. Never shortens
+ * a watch already running.
  */
 export function watchWindow(
   current: WatchWindow,
   recentIncidents: number,
   tick: number,
   now: number,
-  lifeCap: number,
 ): WatchWindow {
   const next =
     recentIncidents <= 1
       ? { untilTick: tick + WATCH_TICKS, untilMs: 0 }
       : recentIncidents === 2
-        ? { untilTick: tick + lifeCap, untilMs: 0 }
-        : { untilTick: tick + lifeCap, untilMs: now + INCIDENT_WINDOW_MS };
+        ? { untilTick: tick + WATCH_REPEAT_TICKS, untilMs: 0 }
+        : { untilTick: tick + WATCH_REPEAT_TICKS, untilMs: now + INCIDENT_WINDOW_MS };
   return {
     untilTick: Math.max(current.untilTick, next.untilTick),
     untilMs: Math.max(current.untilMs, next.untilMs),

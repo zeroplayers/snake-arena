@@ -86,7 +86,7 @@ hard-coding them.
 | `worldHalfSize` | 89      | the arena is a square around (0, 0): `x` and `y` both lie in ±`worldHalfSize`         |
 | `visionRadius`  | 40      | you see snake points and food at most this far from your head                         |
 | `tickRate`      | 10      | ticks per second of game time (rooms may run faster in wall-clock time)               |
-| `maxLifeTicks`  | 6000    | the life retires after this many ticks                                                |
+| `maxLifeTicks`  | 864000  | safety cap: a life still going after this many ticks (24 h) retires                   |
 | `opBudget`      | 10      | sandbox budget per `tick()` call, see [Limits](limits.md)                             |
 | `logLimitBytes` | 1024    | `log()` bytes kept per tick                                                           |
 | `seed`          |         | seed of this life's `Math.random()`; already applied, useful only to tell lives apart |

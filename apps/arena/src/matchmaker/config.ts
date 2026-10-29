@@ -33,9 +33,13 @@ export interface MatchmakerConfig {
   /** How often to compare a room's lives with the ledger (`status()`), per room. */
   roomCheckMs: number;
   /**
-   * A life issued this long ago that its room doesn't hold and nobody reported is lost: the bot
-   * gets its next life (the lost one still counts toward its quota: it may have run). Well past
-   * a life's longest run (`lifeCap`, 10 min in real time) plus its replay chunk's wait.
+   * A life its room stopped holding this long ago (by the room checks, `status()`; or issued this
+   * long ago and never seen held) that nobody reported is lost: the bot gets its next life (the
+   * lost one still counts toward its quota: it may have run). Counted from when the room last
+   * held it, not from when it was issued: a life lasts until the snake dies (up to 24 hours of
+   * game time, more in wall time), so time since issue says nothing. Once a life ends, its report
+   * waits in the room's outbox for its replay chunk (at most two minutes of game time, two
+   * minutes of wall time in a real-time room) and for retries; this is well past both.
    */
   lostAfterMs: number;
   /** How often to re-read the kill switch (`arena_control`) when nobody calls. */

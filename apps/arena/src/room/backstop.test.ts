@@ -21,6 +21,7 @@ import {
   type Verdict,
   type VersionKill,
   WATCH_ABORT_SHARE,
+  WATCH_REPEAT_TICKS,
   WATCH_STOP_SHARE,
   WATCH_TICKS,
   watchGapMs,
@@ -303,13 +304,15 @@ describe("watchWindow", () => {
   const none = { untilTick: 0, untilMs: 0 };
 
   it("grows with repeated incidents and never shrinks", () => {
-    const first = watchWindow(none, 1, 100, 0, 6000);
+    const first = watchWindow(none, 1, 100, 0);
     expect(first).toEqual({ untilTick: 100 + WATCH_TICKS, untilMs: 0 });
-    const second = watchWindow(first, 2, 200, 0, 6000);
-    expect(second).toEqual({ untilTick: 6200, untilMs: 0 });
-    const third = watchWindow(second, 3, 300, 5, 6000);
-    expect(third).toEqual({ untilTick: 6300, untilMs: 5 + INCIDENT_WINDOW_MS });
-    expect(watchWindow(third, 1, 0, 0, 6000)).toEqual(third);
+    const second = watchWindow(first, 2, 200, 0);
+    expect(second).toEqual({ untilTick: 200 + WATCH_REPEAT_TICKS, untilMs: 0 });
+    const third = watchWindow(second, 3, 300, 5);
+    expect(third).toEqual({ untilTick: 300 + WATCH_REPEAT_TICKS, untilMs: 5 + INCIDENT_WINDOW_MS });
+    expect(watchWindow(third, 1, 0, 0)).toEqual(third);
+    // Ten minutes of game time, not a whole life (up to 24 hours since lives last until death).
+    expect(WATCH_REPEAT_TICKS).toBe(6000);
   });
 
   it("is on while either bound is ahead", () => {

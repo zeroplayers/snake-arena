@@ -667,7 +667,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       this.store.updateMeta((m) => {
         m.kills = kills;
         m.versionKills = tally.kills;
-        m.watch = watchWindow(m.watch, recent, tick, now, DEFAULT_CONFIG.lifeCap);
+        m.watch = watchWindow(m.watch, recent, tick, now);
       });
     }
     return {

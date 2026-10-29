@@ -145,7 +145,7 @@ head touches during its move is what kills it.
 | `wall`      | head crossed the arena edge                                                                                             |
 | `timeout`   | the bot went over its per-tick budget 3 ticks in a row, or over its load budget (see [Limits](limits.md))               |
 | `error`     | the bot threw 3 ticks in a row, failed to load (rejected source, an exception, top-level `await`), or ran out of memory |
-| `retired`   | the life reached the life cap (not a failure: the score is kept)                                                        |
+| `retired`   | the life reached the 24-hour life cap (not a failure: the score is kept), or the platform stopped it (see below)        |
 
 `timeout` and `error` are decided by the sandbox before the tick is simulated: the snake dies
 where it stands without moving.
@@ -161,8 +161,17 @@ snakes dropped as few as one pellet, on the head; rooms and replays from before 
 
 ## Life cap
 
-A life **retires** after **6000 ticks** alive (`lifeCap`), 10 minutes of game time. The bot is
-told this as `info.maxLifeTicks`. Retiring is the best possible end of a life: nothing is lost.
+A life lasts until the snake dies. As a safety cap, a snake still alive after **864 000 ticks**
+(`lifeCap`, 24 hours of game time) **retires**; the bot is told this as `info.maxLifeTicks`.
+Reaching the cap is the best possible end of a life: nothing is lost, and the site shows it as
+"Finished: reached the 24-hour life cap". Rooms run faster than real time while nobody watches,
+so a 24-hour life usually takes a few hours of wall time. (Until the change to long lives the cap
+was 6000 ticks, 10 minutes; rooms and replays from before keep it, see
+[Rule changes](#rule-changes).)
+
+The same `retired` cause also ends a life the platform stops: its version was rolled back,
+archived or banned, or the arena was paused. The site shows that as "Stopped: version no longer
+plays", and such a life isn't rated (a capped one is).
 
 ## Score
 
@@ -177,10 +186,12 @@ score = 0.001 × (sum of your mass over every tick you were alive) + 50 × kills
 bonus per kill:
 
 - staying at mass 100 for 1000 ticks earns 100 points, the same as 2 kills;
-- a full life (6000 ticks) at mass 100 earns 600;
+- staying at mass 100 for a minute (600 ticks) earns 60, so mass 100 is worth 60 points per
+  minute alive;
 - dying early ends the sum, so survival matters as much as size.
 
-Only the score of each life counts. Your [rating](rating.md) is the average over many lives.
+Your [rating](rating.md) is your score per minute alive over your recent lives: total score
+divided by total time alive, so a long life weighs as much as the minutes it lasted.
 
 ## Order of one tick
 
@@ -191,7 +202,7 @@ From the comment on `step()` in [`step.ts`](../packages/engine/src/step.ts):
    hunger and re-lays its body.
 3. Collisions are resolved on the new positions; the earliest contact of each head wins.
 4. Survivors eat food in their forward cone.
-5. Survivors age and score; those at the life cap retire.
+5. Survivors age and score; those at the life cap (24 hours) retire.
 6. The dead are credited to their killers and drop remains; ambient food tops up.
 
 Your bot is called **before** each tick with what it sees at that moment (see
@@ -219,7 +230,9 @@ only when more than 10 lives wait (or lives wait and no room is open), at most 4
 200 in all. A room closes when only house bots are left in it and the queue is empty. A bot plays
 up to 100 lives per UTC day (see [Limits](limits.md#bundle-and-deploy-limits)); after that it
 waits for the next day. Rolling back, archiving, a ban or a quarantine take effect within seconds,
-and lives of a version that can no longer play are retired (`retired`, not rated).
+and lives of a version that can no longer play are retired (`retired`, shown as "Stopped:
+version no longer plays", not rated). A life lasts until the snake dies, so a strong bot keeps
+its slot for hours, and its next life queues only once this one ends.
 
 ## Rule changes
 

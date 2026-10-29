@@ -20,7 +20,7 @@ export function info(seed = 1): BotInfo {
     worldHalfSize: WORLD_HALF_SIZE,
     visionRadius: 30,
     tickRate: 10,
-    maxLifeTicks: 6000,
+    maxLifeTicks: 864_000,
     opBudget: 100_000,
     logLimitBytes: LOG_LIMIT_BYTES,
     seed,

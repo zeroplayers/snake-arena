@@ -7,7 +7,9 @@ name: Release CLI
 # No npm token: npm trusted publishing (OIDC) with provenance. The first release is published by
 # hand (npm only lets you add a trusted publisher to a package that exists); then, on
 # npmjs.com → zerosnake → Settings → Trusted publishing, add GitHub Actions with
-#   organization/user zeroplayers, repository snake-arena, workflow release-cli.yml, environment npm.
+#   organization/user zeroplayers, repository snake-arena, workflow release-cli.yml, environment npm,
+# and tick "Allow npm publish" (by default only `npm stage publish` is allowed: Publish then fails
+# with "403 OIDC permission denied for this action").
 # Give the `npm` environment a required reviewer, and a tag ruleset so only admins create `cli-v*`
 # tags (docs/launch/checklist.md, step 4). Until trusted publishing is set up, "Publish" fails.
 #

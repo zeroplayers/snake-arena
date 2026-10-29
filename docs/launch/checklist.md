@@ -71,11 +71,11 @@ curl -fsS https://zerosnake.dev/api/health && curl -fsS https://api.zerosnake.de
 
 ## 3. Make the repository public
 
-**Done**: the repository is public. Checked on 29 October 2026, the "Right after" commands and the
-settings below are still to do: private vulnerability reporting is off (so the "Report a security
-vulnerability" link in the issue chooser and SECURITY.md leads nowhere yet), forks need approval
-only from first-time contributors, branches aren't deleted on merge, the repository has no homepage
-or topics, and Dependabot and secret scanning are off.
+**Done**: the repository is public, and the "Right after" commands below have run (checked on 29
+October 2026): private vulnerability reporting on, fork workflows wait for approval from every
+external contributor, branches are deleted on merge, and the description, homepage and topics are
+set. The settings by hand below are still to do: Dependabot and secret scanning are off, and the
+social preview is GitHub's generated card.
 
 Before flipping, in a terminal with `gh` signed in as an admin of `zeroplayers`:
 

@@ -81,8 +81,11 @@ room checks):
   whose tick moves, rooms): lives reach `lives` only when they end, so the site's liveness check
   reads it.
 - **Stuck rooms.** A room counts as holding a life only while its tick moves between checks, so a
-  room stuck on its lives (outbox full, alarms failing) frees their bots 30 minutes later; and a
-  life held over 48 hours (`maxLifeMs`, more than a capped life can take) is retired.
+  room stuck on its lives (outbox full, alarms failing) frees their bots 30 minutes later. That
+  includes a room held back by its outbox that long (an R2 or D1 outage): once it drains, a bot
+  may briefly have two lives. A life its room reports past the life cap in game time
+  (`overdueLifeTicks`) is retired; wall time says nothing, since a room of heavy bots can take
+  more than two days for a 24-hour life.
 
 The cron (every 30 minutes) pings the matchmaker, which (re)starts the alarm loop after the first
 deploy. `MatchmakerDO.status()` shows the queue and rooms; `configure()` overrides tunables

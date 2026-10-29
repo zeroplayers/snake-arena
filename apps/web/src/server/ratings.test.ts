@@ -470,17 +470,23 @@ describe("rebuilds", () => {
     expect(await rating(v)).toEqual({ ...good, life_seq: 260 });
   });
 
-  it("ignores the old job's commit arriving after a points-per-minute row", async () => {
+  it("rejects the old job's whole commit arriving after points-per-minute rows", async () => {
     const v = await readyBot("a");
+    const w = await readyBot("w");
     await addLives(v, [10, 20, 30]);
+    // `w`'s lives retired at the old cap: counted now, not by the old rules.
+    await addLives(w, [400, 600], { deathCause: "retired", ticks: 6000 });
     await run();
     const good = await rating(v);
+    const kept = await rating(w);
     const before = await progress();
     expect(JSON.parse(good?.recent_scores ?? "").v).toBe(2);
+    expect(kept).not.toBeNull();
     // A run of the job from before long lives, still in flight at the deploy, commits now with
-    // the current `rev`: its per-life upsert (`alive_ticks` untouched) and its cursor move.
+    // the current `rev`: its per-life upsert (`alive_ticks` untouched), its delete of a rating
+    // with fewer than two counted lives by its rules, and its cursor move.
     const rev = before?.rev ?? 0;
-    await d1.db.batch([
+    const commit = d1.db.batch([
       d1.db
         .prepare(
           `INSERT INTO ratings
@@ -495,15 +501,36 @@ describe("rebuilds", () => {
         .bind(v, T0, rev),
       d1.db
         .prepare(
+          `DELETE FROM ratings WHERE version_id IN (SELECT value FROM json_each(?1))
+             AND (SELECT rev FROM rating_progress WHERE id = 1) = ?2`,
+        )
+        .bind(JSON.stringify([w]), rev),
+      d1.db
+        .prepare(
           `UPDATE rating_progress SET rated_seq = max(rated_seq, 99), rev = rev + 1
-           WHERE id = 1 AND rev = ?1`,
+           WHERE id = 1 AND rev = ?1 RETURNING rated_seq, rev`,
         )
         .bind(rev),
     ]);
-    // Both ignored: the row isn't a per-life mean of 2000 on the leaderboard, the cursor didn't
-    // skip ahead.
+    // Its cursor move aborts the batch, which rolls back as a whole: no per-life mean of 2000
+    // on the leaderboard, no deleted rating, no skipped lives.
+    await expect(commit).rejects.toThrow(/old rating job/);
     expect(await rating(v)).toEqual(good);
+    expect(await rating(w)).toEqual(kept);
     expect(await progress()).toEqual(before);
+    // The current job's own deletes and the site's still go through.
+    await d1.db.prepare("DELETE FROM lives WHERE version_id = ?").bind(w).run();
+    await d1.db.prepare("UPDATE ratings SET life_seq = NULL WHERE version_id = ?").bind(w).run();
+    await run();
+    expect(await rating(w)).toBeNull();
+    await d1.db.prepare("DELETE FROM ratings WHERE version_id = ?").bind(v).run();
+    expect(await rating(v)).toBeNull();
+    await d1.db.prepare("UPDATE ratings SET life_seq = NULL").run();
+    await run();
+    expect(await rating(v)).toBeNull();
+    await d1.db.prepare("UPDATE rating_progress SET rated_seq = 0").run();
+    await run();
+    expect(await rating(v)).toEqual({ ...good, life_seq: 3 });
     // A version-1 row that got in some other way is marked and rebuilt.
     await d1.db.prepare("UPDATE rating_progress SET format = 1").run();
     await d1.db

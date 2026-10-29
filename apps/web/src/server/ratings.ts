@@ -27,8 +27,9 @@
  * lives), 2 points per minute. A run that finds 1 first deletes every rating and moves the cursor
  * back to 0 (`resetFormat`), so they are all rebuilt from `lives`, however the old job left them
  * (it runs until this code is deployed, after migration 0014). Then triggers keep a run of the old
- * code that is still in flight out: its cursor moves (`job_rev` not set) and its version-1
- * windows are ignored, and a version-1 row that got in anyway is rebuilt (marked, below).
+ * code that is still in flight out: its commit aborts as a whole, upserts and deletes included
+ * (its cursor move doesn't set `job_rev`), version-1 windows are ignored, and a version-1 row
+ * that got in anyway is rebuilt (marked, below).
  *
  * **Rebuilds.** A row whose state can't be continued (none yet, `life_seq` null, another stint,
  * a window scored differently or in the old per-life format) is rebuilt from `lives`: the last 200

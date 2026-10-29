@@ -88,7 +88,7 @@ export class FakeRoom extends DurableObject<Env> {
         max_snakes INTEGER NOT NULL, state TEXT NOT NULL, tick INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS lives (seq INTEGER PRIMARY KEY AUTOINCREMENT,
         life_id TEXT NOT NULL UNIQUE, version_id TEXT NOT NULL, author TEXT NOT NULL,
-        leaving INTEGER NOT NULL DEFAULT 0);
+        leaving INTEGER NOT NULL DEFAULT 0, start_tick INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS violations (seq INTEGER PRIMARY KEY AUTOINCREMENT, what TEXT);
     `);
   }
@@ -144,6 +144,12 @@ export class FakeRoom extends DurableObject<Env> {
 
   async status(): Promise<RoomStatus> {
     const meta = this.meta();
+    const starts = new Map(
+      this.ctx.storage.sql
+        .exec<{ life_id: string; start_tick: number }>("SELECT life_id, start_tick FROM lives")
+        .toArray()
+        .map((r) => [r.life_id, r.start_tick]),
+    );
     return {
       roomId: meta?.roomId ?? null,
       state: meta?.state ?? "new",
@@ -155,7 +161,7 @@ export class FakeRoom extends DurableObject<Env> {
         versionId: l.versionId,
         author: l.author,
         house: null,
-        lifeTick: 0,
+        lifeTick: (meta?.tick ?? 0) - (starts.get(l.lifeId) ?? 0),
         mass: 0,
       })),
       pending: [],
@@ -184,6 +190,11 @@ export class FakeRoom extends DurableObject<Env> {
   }
 
   /** Loses a life without telling anyone (a bug, or lost storage). */
+  /** Moves the room's tick on by `ticks` without a batch (a long stretch of play). */
+  async advanceTicks(ticks: number): Promise<void> {
+    this.ctx.storage.sql.exec("UPDATE meta SET tick = tick + ? WHERE id = 1", ticks);
+  }
+
   async forget(lifeId: string): Promise<void> {
     this.ctx.storage.sql.exec("DELETE FROM lives WHERE life_id = ?", lifeId);
   }
@@ -276,10 +287,11 @@ export class FakeRoom extends DurableObject<Env> {
       );
     }
     this.ctx.storage.sql.exec(
-      "INSERT INTO lives (life_id, version_id, author) VALUES (?, ?, ?)",
+      "INSERT INTO lives (life_id, version_id, author, start_tick) VALUES (?, ?, ?, ?)",
       ticket.lifeId,
       ticket.versionId,
       ticket.author,
+      this.meta()?.tick ?? 0,
     );
   }
 }

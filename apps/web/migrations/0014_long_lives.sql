@@ -48,11 +48,14 @@ ALTER TABLE `rating_progress` ADD `job_rev` integer DEFAULT 0 NOT NULL;--> state
 -- it sees `format = 1`, deletes every rating, moves the cursor back to 0 and sets `format = 2`, so
 -- every rating is rebuilt from `lives` (each holds `start_tick` and `end_tick`), whatever the old
 -- job did between this migration and the site's deploy. From then on these triggers keep the old
--- code out: a cursor move that changes `rev` without setting `job_rev` to it (only the new job
--- does) is ignored, and so is a rating with a version-1 window (scores without lengths).
+-- code out. A cursor move that changes `rev` without setting `job_rev` to it (only the new job
+-- does) aborts: a job commit is one D1 batch, a transaction, with the cursor move last, so a run
+-- of the old code still in flight loses its whole commit, upserts and deletes included (a delete
+-- trigger couldn't tell its deletes from the site's rollbacks or a deleted account's cascade).
+-- A rating with a version-1 window (scores without lengths) is ignored too.
 CREATE TRIGGER `rating_progress_current_job` BEFORE UPDATE ON `rating_progress`
 WHEN OLD.`format` >= 2 AND NEW.`rev` IS NOT OLD.`rev` AND NEW.`job_rev` IS NOT NEW.`rev` BEGIN
-	SELECT RAISE(IGNORE);
+	SELECT RAISE(ABORT, 'old rating job: its commit is refused since the ratings format changed');
 END;--> statement-breakpoint
 CREATE TRIGGER `ratings_no_v1_insert` BEFORE INSERT ON `ratings`
 WHEN json_extract(NEW.`recent_scores`, '$.v') = 1 AND (SELECT `format` FROM `rating_progress` WHERE `id` = 1) >= 2 BEGIN

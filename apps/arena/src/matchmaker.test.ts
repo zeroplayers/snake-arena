@@ -652,18 +652,32 @@ describe("MatchmakerDO", () => {
     expect((await status()).waiting).toBe(1);
   }, 60_000);
 
-  it("retires a life held longer than any life can last", async () => {
-    await setup({ openThreshold: 0, roomCheckMs: 0, maxLifeMs: 3 * 60 * 60_000 });
+  it("keeps a slow room's life to the cap however long it takes, and retires one past it", async () => {
+    await setup({ openThreshold: 0, roomCheckMs: 0 });
     await seedBots([{ author: "forever", bot: "forever" }]);
     await settle();
     const [r0] = await openRooms();
     if (!r0) throw new Error("no room");
     const [life] = await lives(r0);
     if (!life) throw new Error("no life");
-    for (let hour = 0; hour < 4; hour++) {
+    // A slow room (heavy bots): 14 100 ticks an hour of wall time, about 4 per second. Two days
+    // in, its life is still well under the cap (864 000 ticks); past 61 hours it is over it.
+    for (let hour = 0; hour < 64; hour++) {
+      await room(r0, "advanceTicks", 14_000);
       await step(r0);
       await mm("advance", 60 * 60_000);
       await settle();
+      if (hour === 47) {
+        // Two days of wall time, 676 800 ticks old: a healthy life on its way to the cap.
+        expect((await lives(r0)).find((l) => l.lifeId === life.lifeId)?.leaving).toBe(false);
+        expect((await status()).issued).toBe(1);
+      }
+      if ((await lives(r0)).find((l) => l.lifeId === life.lifeId)?.leaving) {
+        // Retired once its room reported it past the cap (874 200 ticks at 62 hours), the leave
+        // reaching the room by the next check: not at 48 hours of wall time.
+        expect(hour).toBe(62);
+        break;
+      }
     }
     // Asked to leave: the room retires it at its next batch, and the bot is freed by the report.
     expect((await lives(r0)).find((l) => l.lifeId === life.lifeId)?.leaving).toBe(true);

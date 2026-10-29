@@ -3,6 +3,7 @@ import { Grid } from "./grid.ts";
 import { hungerDecay, lifeScore, segmentCountForMass, sizeForMass } from "./growth.ts";
 import { clamp, cos, exitTime, firstContact, sin, squareNorm, wrapAngle } from "./math.ts";
 import { type Rng, rngFromState } from "./rng.ts";
+import { spawnGraceLeft } from "./spawn.ts";
 import type { ActionMap, Death, DeathCause, FaultMap, Food, Snake, Vec2, World } from "./types.ts";
 import { layoutSegments } from "./world.ts";
 
@@ -16,7 +17,8 @@ import { layoutSegments } from "./world.ts";
  *     hunger and re-lays its body;
  *  3. collisions are resolved simultaneously on the new positions — the earliest thing a head
  *     touches during its move wins: another head (smaller mass dies, equal both die), another
- *     body (`collision`, credited to its owner), or the wall;
+ *     body (`collision`, credited to its owner), or the wall. Snakes in spawn grace
+ *     (`spawnGraceTicks`) take part only in the wall: no snake kills them, they kill no snake;
  *  4. survivors eat food in their forward cone (a contested pellet goes to the nearest head);
  *  5. survivors age and score; those at `lifeCap` retire;
  *  6. the dead are credited, drop remains and leave; ambient food tops up.
@@ -153,21 +155,31 @@ export function quantizeTurn(turn: unknown): number {
 
 type Die = (i: number, t: number, cause: DeathCause, killer: number) => void;
 
-/** Head × head contacts first (they shadow body hits between the same pair), then head × body. */
+/**
+ * Head × head contacts first (they shadow body hits between the same pair), then head × body.
+ * A snake in spawn grace is left out of both: its head hits nothing, its body isn't solid.
+ */
 function resolveCollisions(world: World, s: Scratch, die: Die): void {
   const snakes = world.snakes;
   const n = snakes.length;
   const contact = s.contact;
   contact.fill(0, 0, n * n);
+  const ghost = s.ghost;
 
   let maxSize = 0;
-  for (const snake of snakes) if (snake.size > maxSize) maxSize = snake.size;
+  for (let i = 0; i < n; i++) {
+    const snake = snakes[i] as Snake;
+    if (snake.size > maxSize) maxSize = snake.size;
+    ghost[i] = spawnGraceLeft(snake, world.config) > 0 ? 1 : 0;
+  }
 
   for (let i = 0; i < n; i++) {
+    if (ghost[i] === 1) continue;
     const a = snakes[i] as Snake;
     const ax0 = s.x0[i] as number;
     const ay0 = s.y0[i] as number;
     for (let j = i + 1; j < n; j++) {
+      if (ghost[j] === 1) continue;
       const b = snakes[j] as Snake;
       const bx0 = s.x0[j] as number;
       const by0 = s.y0[j] as number;
@@ -182,12 +194,13 @@ function resolveCollisions(world: World, s: Scratch, die: Die): void {
     }
   }
 
-  // Bodies (segment 1 onwards) of every snake, dying or not, into the hash.
+  // Bodies (segment 1 onwards) of every snake out of grace, dying or not, into the hash.
   let m = 0;
-  for (let i = 0; i < n; i++) m += (snakes[i] as Snake).segments.length - 1;
+  for (let i = 0; i < n; i++) if (ghost[i] === 0) m += (snakes[i] as Snake).segments.length - 1;
   s.ensureSegments(m);
   m = 0;
   for (let i = 0; i < n; i++) {
+    if (ghost[i] === 1) continue;
     const segs = (snakes[i] as Snake).segments;
     for (let k = 1; k < segs.length; k++) {
       const p = segs[k] as Vec2;
@@ -201,6 +214,7 @@ function resolveCollisions(world: World, s: Scratch, die: Die): void {
   grid.build(m, s.segX, s.segY);
 
   for (let i = 0; i < n; i++) {
+    if (ghost[i] === 1) continue;
     const a = snakes[i] as Snake;
     const x0 = s.x0[i] as number;
     const y0 = s.y0[i] as number;
@@ -327,6 +341,8 @@ class Scratch {
   deathT = new Float64Array(0);
   killer = new Int32Array(0);
   contact = new Uint8Array(0);
+  /** 1 for snakes in spawn grace this tick. */
+  ghost = new Uint8Array(0);
   segX = new Float64Array(0);
   segY = new Float64Array(0);
   segOwner = new Int32Array(0);
@@ -344,6 +360,7 @@ class Scratch {
     this.deathT = new Float64Array(cap);
     this.killer = new Int32Array(cap);
     this.contact = new Uint8Array(cap * cap);
+    this.ghost = new Uint8Array(cap);
   }
 
   ensureSegments(m: number): void {

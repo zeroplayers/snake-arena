@@ -140,7 +140,9 @@ describe("bad bots are rejected with a clear reason", () => {
   it(
     "a suicidal bot: runs clean but scores below easy, mostly wall deaths",
     async () => {
-      const report = await runChecks(input(BAD_BOTS.suicidal), QUICK);
+      // The full check: on QUICK's 3 × 400 ticks easy's bar swings with any change to how a
+      // room plays out (safe spawns, #102, moved it from 20 to 12 here).
+      const report = await runChecks(input(BAD_BOTS.suicidal));
       const text = rejected(report);
       expect(report.run.status).toBe("pass");
       expect(report.qualify.status).toBe("fail");
@@ -158,7 +160,8 @@ describe("bad bots are rejected with a clear reason", () => {
   it(
     "a bot that only survives (circles, never eats) does not qualify",
     async () => {
-      const report = await runChecks(input(BAD_BOTS.circler), QUICK);
+      // The full check, as above: on QUICK the circler collects a kill on seed 101 since #102.
+      const report = await runChecks(input(BAD_BOTS.circler));
       rejected(report);
       expect(report.run.status).toBe("pass");
       expect(report.qualify.status).toBe("fail");

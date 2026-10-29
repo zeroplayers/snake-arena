@@ -90,10 +90,24 @@ export interface EngineConfig {
   // --- Spawning ------------------------------------------------------------------------------
   /** New snakes spawn within the centred square of half-side arenaHalfSize × this. */
   spawnHalfSizeFactor: number;
-  /** Preferred clear distance from other snakes' segments at spawn. */
+  /**
+   * A spawn point with this much room (between body circles) to every other snake's body, head
+   * and the road its head takes next is good enough; failing that, the roomiest point is taken.
+   * The old spawn (`spawnCandidates` absent) only measured it to body points.
+   */
   spawnClearance: number;
-  /** Random positions tried before settling for the last one. */
+  /** Random positions the old spawn tries before settling for the last one. */
   spawnAttempts: number;
+  /**
+   * Random positions scored per spawn (#102). Absent (worlds saved before it) or 0: the old
+   * spawn, the first of `spawnAttempts` positions clear of bodies, facing the centre.
+   */
+  spawnCandidates: number;
+  /**
+   * For its first this many ticks a new snake takes no part in snake-to-snake collisions (#102):
+   * its body isn't solid and nothing but the wall kills it. Absent (worlds saved before it): 0.
+   */
+  spawnGraceTicks: number;
 
   // --- Vision (bot state) --------------------------------------------------------------------
   /** A bot sees snake points and food at most this far from its head. */
@@ -160,6 +174,8 @@ export const DEFAULT_CONFIG: Readonly<EngineConfig> = Object.freeze({
   spawnHalfSizeFactor: 0.8,
   spawnClearance: 10,
   spawnAttempts: 30,
+  spawnCandidates: 24,
+  spawnGraceTicks: 15,
 
   visionRadius: 40,
   visionMaxSnakes: 32,

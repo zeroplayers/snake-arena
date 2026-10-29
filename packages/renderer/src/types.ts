@@ -29,6 +29,8 @@ export interface RenderSnake {
   /** Body half-width. Defaults to a value derived from `length`. */
   readonly radius?: number;
   readonly skin?: SnakeSkin;
+  /** Drawn see-through: it can't collide yet (a newborn in spawn grace). */
+  readonly ghost?: boolean;
 }
 
 export interface RenderFood {

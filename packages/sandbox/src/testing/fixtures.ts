@@ -61,6 +61,7 @@ export function makeStates(count: number): BotState[] {
         radius: 2,
         turnRate: 0.1,
         boosting: false,
+        spawnGrace: 0,
         segments: [head, { x: head.x - 2, y: head.y }],
       },
       snakes: [
@@ -72,6 +73,7 @@ export function makeStates(count: number): BotState[] {
           head: enemyAt,
           angle: Math.PI,
           boosting: false,
+          spawnGrace: 0,
           segments: [enemyAt, { x: enemyAt.x + 2, y: enemyAt.y }],
         },
       ],

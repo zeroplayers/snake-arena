@@ -51,6 +51,7 @@ describe("buildBotState", () => {
       radius: me.size / 2,
       turnRate: world.config.turnRate,
       boosting: true,
+      spawnGrace: world.config.spawnGraceTicks - 1,
       segments: me.segments,
     });
     // y is up: heading π/2 moved the head towards +y.

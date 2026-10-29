@@ -2,6 +2,7 @@ import type { BotInfo, BotState, Food as FoodView, SnakeView, Vec } from "@zeros
 import { TICK_RATE } from "./config.ts";
 import { foodIndex } from "./food.ts";
 import { squareNorm } from "./math.ts";
+import { spawnGraceLeft } from "./spawn.ts";
 import type { Food, Snake, SnakeId, Vec2, World } from "./types.ts";
 
 /**
@@ -111,6 +112,7 @@ export function buildBotState(world: World, snake: Snake | SnakeId): BotState {
       head: headVisible ? point(other.head) : null,
       angle: headVisible ? other.angle : null,
       boosting: other.boosting,
+      spawnGrace: spawnGraceLeft(other, c),
       segments: (kept[s] ?? visible).map((k) => point(other.segments[k] as Vec2)),
     };
   });
@@ -152,6 +154,7 @@ export function buildBotState(world: World, snake: Snake | SnakeId): BotState {
       radius: me.size / 2,
       turnRate: c.turnRate,
       boosting: me.boosting,
+      spawnGrace: spawnGraceLeft(me, c),
       segments: selfSegments.map((k) => point(me.segments[k] as Vec2)),
     },
     snakes,

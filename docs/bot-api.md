@@ -122,6 +122,7 @@ Passed to every `tick`. Plain JSON data.
 | `turnRate` | max heading change per tick at `turn = ±1` (0.25); read it, don't hard-code it                    |
 | `boosting` | whether you boosted last tick                                                                     |
 | `segments` | body points head to tail; at most 128, evenly downsampled, head and tail kept                     |
+| `spawnGrace` | ticks of [spawn grace](rules.md#collisions-and-death) left, the coming one included (15 when a life starts, counting down to 0); while above 0 no snake can kill you and you kill none |
 
 ### `snakes[]` (`SnakeView`)
 
@@ -135,6 +136,7 @@ Passed to every `tick`. Plain JSON data.
 | `angle`    | its heading, or `null` if its head is outside your vision                                    |
 | `boosting` | whether it boosted last tick                                                                 |
 | `segments` | only its points within your vision, head to tail; may have gaps and may be downsampled       |
+| `spawnGrace` | its spawn grace left: while above 0 its body isn't solid and it can't kill you, nor you it |
 
 Treat bodies as circles of `radius` around each point; the spacing between listed points is not
 guaranteed.

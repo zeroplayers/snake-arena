@@ -119,8 +119,11 @@ By hand on github.com → the repository → **Settings**:
 ## 4. Publish the CLI to npm
 
 **Done**: `zerosnake@0.1.0` is on npm (`latest`), and `npx zerosnake@0.1.0 init` and `test` work
-from an empty npm cache on macOS. Trusted publishing and the GitHub side below are still to do: the
-repository has no `npm` environment and no tag ruleset yet, so `release-cli.yml` can't publish.
+from an empty npm cache on macOS. The GitHub side below is set up (checked on 29 October 2026): the
+`npm` environment requires the owner's review, and the "CLI release tags" ruleset lets only admins
+create, move or delete `cli-v*` tags. The npm side (trusted publisher, tokens disallowed) was set
+by the owner; npm doesn't show it publicly, so the first tag release (cli-v0.1.1) is its check: a
+403 or 404 at "Publish" means one of the four trusted-publisher fields doesn't match.
 
 You need an npmjs.com account with two-factor authentication on ("Authorization and writes").
 
@@ -150,9 +153,9 @@ versions; publishing the tarball with `npm` uploads exactly what you listed.
 
 Then, for later releases without tokens, on npmjs.com → **zerosnake** → Settings:
 
-- [ ] **Trusted Publisher** → GitHub Actions: organization or user `zeroplayers`, repository
+- [x] **Trusted Publisher** → GitHub Actions: organization or user `zeroplayers`, repository
   `snake-arena`, workflow filename `release-cli.yml`, environment `npm`.
-- [ ] **Publishing access** → "Require two-factor authentication and disallow tokens".
+- [x] **Publishing access** → "Require two-factor authentication and disallow tokens".
 
 And on GitHub, so that every release needs you:
 

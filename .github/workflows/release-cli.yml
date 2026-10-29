@@ -88,4 +88,5 @@ jobs:
       # Trusted publishing needs npm 11.5.1+; current Node 24 releases bundle a newer one.
       - run: npm --version
       - name: Publish
-        run: npm publish pack/zerosnake-*.tgz --access public --provenance
+        # "./": without it npm reads pack/zerosnake-x.tgz as a GitHub owner/repo shorthand.
+        run: npm publish ./pack/zerosnake-*.tgz --access public --provenance

@@ -867,6 +867,93 @@ button.button:disabled {
   margin: 0;
 }
 
+/* Product Hunt's badge under the first steps, with a snake running round it (ProductHuntBadge). */
+.ph-badge {
+  position: relative;
+  justify-self: start;
+  display: block;
+  padding: 7px;
+  border-radius: 17px;
+  line-height: 0;
+  transition: transform 0.15s ease;
+}
+
+.ph-badge img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 10px;
+}
+
+.ph-snake {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  fill: none;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 4px var(--green-primary));
+}
+
+/*
+ * A zero-length dash with round caps is a dot, so the body is sixteen dots 1.1 apart along the
+ * rect's 100-unit perimeter, beaded like the arena's snakes, and the head a bigger dot in front.
+ */
+.ph-snake-body {
+  stroke: var(--green-primary);
+  stroke-width: 6;
+  stroke-dasharray: 0.001 1.1 0.001 1.1 0.001 1.1 0.001 1.1 0.001 1.1 0.001 1.1 0.001 1.1 0.001 1.1
+    0.001 1.1 0.001 1.1 0.001 1.1 0.001 1.1 0.001 1.1 0.001 1.1 0.001 1.1 0.001 83.484;
+  animation: ph-slither 6s linear infinite;
+}
+
+.ph-snake-head {
+  stroke: var(--green-secondary);
+  stroke-width: 9;
+  stroke-dasharray: 0.001 99.999;
+  stroke-dashoffset: -17.6;
+  animation: ph-slither-head 6s linear infinite;
+}
+
+.ph-badge:hover,
+.ph-badge:focus-visible {
+  transform: translateY(-2px);
+}
+
+.ph-badge:hover .ph-snake,
+.ph-badge:focus-visible .ph-snake {
+  filter: drop-shadow(0 0 8px var(--green-primary));
+}
+
+@keyframes ph-slither {
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+
+@keyframes ph-slither-head {
+  from {
+    stroke-dashoffset: -17.6;
+  }
+
+  to {
+    stroke-dashoffset: -117.6;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ph-snake-body,
+  .ph-snake-head {
+    animation: none;
+  }
+
+  .ph-badge {
+    transition: none;
+  }
+}
+
 @media (min-width: 860px) {
   .landing-hero {
     grid-template-areas: "head arena" "cta arena" "body arena";

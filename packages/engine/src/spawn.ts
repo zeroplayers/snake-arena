@@ -80,12 +80,37 @@ function isClear(world: World, x: number, y: number, clearance: number): boolean
   return true;
 }
 
-/** Threat points: room at (x, y) is min(distance − pad) over them. */
-interface Threats {
-  x: number[];
-  y: number[];
-  pad: number[];
+/**
+ * Threat points: room at (x, y) is min(distance − pad) over the first `n`. Reused between spawns
+ * (a spawn in a full room looks at hundreds); they never carry state from one to the next.
+ */
+class Threats {
+  n = 0;
+  x = new Float64Array(256);
+  y = new Float64Array(256);
+  pad = new Float64Array(256);
+
+  push(x: number, y: number, pad: number): void {
+    if (this.n === this.x.length) {
+      const grow = (a: Float64Array) => {
+        const b = new Float64Array(a.length * 2);
+        b.set(a);
+        return b;
+      };
+      this.x = grow(this.x);
+      this.y = grow(this.y);
+      this.pad = grow(this.pad);
+    }
+    this.x[this.n] = x;
+    this.y[this.n] = y;
+    this.pad[this.n] = pad;
+    this.n++;
+  }
 }
+
+const allThreats = new Threats();
+const nearThreats = new Threats();
+const roadThreats = new Threats();
 
 function safeSpawn(world: World, rng: Rng, radius: number): SpawnPoint {
   const c = world.config;
@@ -111,25 +136,20 @@ function safeSpawn(world: World, rng: Rng, radius: number): SpawnPoint {
 }
 
 function threatsOf(world: World, radius: number): Threats {
-  const t: Threats = { x: [], y: [], pad: [] };
+  const t = allThreats;
+  t.n = 0;
   for (const s of world.snakes) {
     const r = radius + s.size / 2;
     const segs = s.segments;
     for (let k = 1; k < segs.length; k++) {
       const p = segs[k] as { x: number; y: number };
-      t.x.push(p.x);
-      t.y.push(p.y);
-      t.pad.push(r);
+      t.push(p.x, p.y, r);
     }
     const dx = cos(s.angle) * s.speed;
     const dy = sin(s.angle) * s.speed;
-    t.x.push(s.head.x);
-    t.y.push(s.head.y);
-    t.pad.push(r + HEAD_REACH * s.speed);
+    t.push(s.head.x, s.head.y, r + HEAD_REACH * s.speed);
     for (let tick = ROAD_STEP; tick <= LOOK_AHEAD; tick += ROAD_STEP) {
-      t.x.push(s.head.x + dx * tick);
-      t.y.push(s.head.y + dy * tick);
-      t.pad.push(r + ROAD_SPREAD * s.speed * tick);
+      t.push(s.head.x + dx * tick, s.head.y + dy * tick, r + ROAD_SPREAD * s.speed * tick);
     }
   }
   return t;
@@ -138,7 +158,7 @@ function threatsOf(world: World, radius: number): Threats {
 /** Room at (x, y), or anything ≥ `enough` once it is known to be at least that. */
 function roomAt(t: Threats, x: number, y: number, enough: number): number {
   let room = Number.POSITIVE_INFINITY;
-  for (let i = 0; i < t.x.length; i++) {
+  for (let i = 0; i < t.n; i++) {
     const pad = t.pad[i] as number;
     const dx = (t.x[i] as number) - x;
     const dy = (t.y[i] as number) - y;
@@ -161,15 +181,14 @@ function openHeading(world: World, all: Threats, x: number, y: number, radius: n
   const toCentre = atan2(-y, -x);
   const road = c.speed * LOOK_AHEAD;
   // Only threats that could come within `enough` of the road matter.
-  const near: Threats = { x: [], y: [], pad: [] };
-  for (let i = 0; i < all.x.length; i++) {
+  const near = nearThreats;
+  near.n = 0;
+  for (let i = 0; i < all.n; i++) {
     const dx = (all.x[i] as number) - x;
     const dy = (all.y[i] as number) - y;
     const reach = road + enough + (all.pad[i] as number);
     if (dx * dx + dy * dy > reach * reach) continue;
-    near.x.push(all.x[i] as number);
-    near.y.push(all.y[i] as number);
-    near.pad.push(all.pad[i] as number);
+    near.push(all.x[i] as number, all.y[i] as number, all.pad[i] as number);
   }
 
   let bestAngle = toCentre;
@@ -178,14 +197,29 @@ function openHeading(world: World, all: Threats, x: number, y: number, radius: n
   for (let k = 0; k < HEADINGS; k++) {
     const offset = ((k + 1) >> 1) * (k % 2 === 1 ? 1 : -1);
     const angle = k === 0 ? toCentre : wrapAngle(toCentre + (offset * TAU) / HEADINGS);
-    const dx = cos(angle) * c.speed;
-    const dy = sin(angle) * c.speed;
+    const ux = cos(angle);
+    const uy = sin(angle);
+    // Of those, only threats beside this heading's road can come within `enough` of it (with a
+    // hair of slack, so dropping the others changes no result).
+    const beside = roadThreats;
+    beside.n = 0;
+    for (let i = 0; i < near.n; i++) {
+      const ox = (near.x[i] as number) - x;
+      const oy = (near.y[i] as number) - y;
+      const reach = enough + (near.pad[i] as number) + 1e-6;
+      const along = ox * ux + oy * uy;
+      if (along < ROAD_STEP * c.speed - reach || along > road + reach) continue;
+      if (Math.abs(oy * ux - ox * uy) > reach) continue;
+      beside.push(near.x[i] as number, near.y[i] as number, near.pad[i] as number);
+    }
+    const dx = ux * c.speed;
+    const dy = uy * c.speed;
     let room = enough;
     for (let tick = ROAD_STEP; tick <= LOOK_AHEAD && room > best; tick += ROAD_STEP) {
       const px = x + dx * tick;
       const py = y + dy * tick;
       const wall = c.arenaHalfSize - squareNorm(px, py) - radius;
-      room = Math.min(room, wall, roomAt(near, px, py, room));
+      room = Math.min(room, wall, roomAt(beside, px, py, room));
     }
     if (room > best) {
       best = room;

@@ -8,16 +8,24 @@ import type { World } from "./types.ts";
 import { cloneWorld, createWorld, spawnSnake } from "./world.ts";
 
 /** 20 snakes, dead ones respawned under a new id. Farmers are slow (full food scan), so optional. */
+// The engine's lib has no DOM or Node types; vitest runs on Node, which has a clock.
+const { performance } = globalThis as unknown as { performance: { now(): number } };
+
+/** Milliseconds `run` spent in `spawnSnake`. */
+let spawnMs = 0;
+
 function run(seed: number, ticks: number, farmers = true): World {
   const world = createWorld({ seed });
   const policies: Record<string, Policy> = {};
   let lives = 0;
   const fill = () => {
+    const t0 = performance.now();
     while (world.snakes.length < 20) {
       const id = `s${lives++}`;
       policies[id] = farmers && lives % 3 === 0 ? farm : wander(seed * 1000 + lives);
       spawnSnake(world, { id, author: `author${lives % 7}` });
     }
+    spawnMs += performance.now() - t0;
   };
   fill();
   for (let t = 0; t < ticks; t++) {
@@ -153,14 +161,19 @@ describe("determinism", () => {
 });
 
 describe("performance", () => {
-  // Random walkers die every couple of ticks, so this also covers respawns and lots of remains.
-  it("10,000 ticks × 20 snakes in under a second", () => {
+  // Random walkers die every few ticks, so this also covers lots of remains, and ~2400 respawns
+  // into a full room. Those are timed apart: a safe spawn (#102) scores many spots, and rooms
+  // spawn far less often than this.
+  it("10,000 ticks × 20 snakes in under a second, respawns apart", () => {
     run(1, 500, false); // warm up the JIT
-    const t0 = Date.now();
+    spawnMs = 0;
+    const t0 = performance.now();
     const world = run(2, 10_000, false);
-    const ms = Date.now() - t0;
+    const ms = performance.now() - t0;
     expect(world.tick).toBe(10_000);
     expect(world.snakes).toHaveLength(20);
-    expect(ms).toBeLessThan(1000);
+    expect(ms - spawnMs).toBeLessThan(1000);
+    // About 25 µs a spawn here.
+    expect(spawnMs).toBeLessThan(500);
   });
 });

@@ -8,6 +8,7 @@ import {
   buildBotInfo,
   buildBotState,
   createWorld,
+  type EngineConfig,
   type Snake,
   spawnSnake,
   step,
@@ -20,6 +21,8 @@ export interface MatchOptions {
   /** One snake slot per entry, e.g. `["easy", "medium", "hard", "easy", "medium", "hard"]`. */
   lineup: readonly HouseBotName[];
   ticks: number;
+  /** Rules other than the defaults, e.g. an old `turnRate` to compare with. */
+  config?: Partial<EngineConfig>;
 }
 
 /** One snake slot over a whole match: it respawns as the same bot after every death. */
@@ -40,8 +43,8 @@ export interface SlotResult {
  * frame before `step`, and a slot respawns right after each death. Fully deterministic for a
  * given seed and lineup.
  */
-export function runMatch({ seed, lineup, ticks }: MatchOptions): SlotResult[] {
-  const world = createWorld({ seed });
+export function runMatch({ seed, lineup, ticks, config }: MatchOptions): SlotResult[] {
+  const world = createWorld({ seed, ...(config && { config }) });
   const { log } = createTickLog();
   const slots: SlotResult[] = lineup.map((bot) => ({
     bot,

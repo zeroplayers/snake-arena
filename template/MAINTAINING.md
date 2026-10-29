@@ -75,14 +75,16 @@ pnpm --filter zerosnake margin --sets 1000    # the real checks on 1000 seed set
 ```
 
 It prints the distribution of the margin (mean score per life / easy's in the same seat) and the
-budget used. Use `--from` for seed sets nobody tuned on. The current bot on the square arena (#76,
-October 2026; corners rounded off to 3 turning radii), with the real checks: no failures on 600 seed
-sets (`--from 100000`: lowest 1.06×, 1% 1.54×, 5% 2.08×, median 4.20×) and one on 600 more minified
-(`--from 200000 --minify`: set 200310 at 0.84×, easy 93.9 per life against 79.4; 1% 1.48×, 5% 2.15×,
-median 4.43×), so 1 failure and 12 sets below 1.5× in 1200; at most 0.7× of the per-tick budget on
-its costliest tick and 0.2× of the suite's average allowance. (On the round arena it had 1 failure
-in 3600 sets, 1% about 1.55×, median about 4.7×.) `easy`'s own mean score per life ranges from under
-10 to over 150 between seed sets (median about 30), and its best sets come from long lucky lives and
+budget used. Use `--from` for seed sets nobody tuned on. The current bot at `turnRate` 0.4 (#98,
+October 2026; look-ahead 2 U-turns, margins 0.5, tuned on sets 300000+), with the real checks: no
+failures on 600 seed sets (`--from 100000`: lowest 1.14×, 1% 1.42×, 5% 1.74×, median 3.71×) and 3
+on 600 more minified (`--from 200000 --minify`: lowest set 200203 at 0.63×, easy 152.7 per life
+against 95.7; 1% 1.39×, 5% 1.73×, median 3.86×), so 3 failures and 25 sets below 1.5× in 1200; at
+most 0.4× of the per-tick budget on its costliest tick and 0.14× of the suite's average allowance.
+The sharper turn made `easy` stronger (about 40 per life instead of 30: it dies less), more than
+the bot. (At `turnRate` 0.25 the previous bot had 1 failure and 12 sets below 1.5× in the same
+1200, 1% 1.54×, median 4.20×; on the round arena 1 failure in 3600 sets.) `easy`'s own mean score per life ranges from under
+10 to over 150 between seed sets (median about 40), and its best sets come from long lucky lives and
 kills, which a bot that avoids everyone can't always match. Watch the 1% figure and the failures.
 `cli.test.ts` checks three fixed seed sets at ≥ 1.5×; the CLI's other tests use a bot whose seeds
 never change (`packages/cli/src/testing/passing-bot.ts`), so a change here doesn't put them at risk.

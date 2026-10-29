@@ -1,3 +1,5 @@
+import { stateHash } from "./hash.ts";
+
 /**
  * Every tunable coefficient of the simulation. A world stores its config, so replays stay
  * reproducible after the defaults change.
@@ -19,7 +21,10 @@ export interface EngineConfig {
   speed: number;
   /** Speed multiplier while boosting. */
   boostMultiplier: number;
-  /** Max heading change per tick at `turn = ±1`. */
+  /**
+   * Max heading change per tick at `turn = ±1`. The tightest circle a snake can drive has radius
+   * `speed / turnRate` (doubled while boosting).
+   */
   turnRate: number;
 
   // --- Growth (original `snake_growth_simulation_guide.md`) ----------------------------------
@@ -136,7 +141,8 @@ export const DEFAULT_CONFIG: Readonly<EngineConfig> = Object.freeze({
 
   speed: 1.5,
   boostMultiplier: 2,
-  turnRate: 0.25,
+  // Radius 3.75 turning circle at normal speed (#98; 0.25 and radius 6 before).
+  turnRate: 0.4,
 
   minSize: 1,
   maxSize: 5,
@@ -185,6 +191,27 @@ export const DEFAULT_CONFIG: Readonly<EngineConfig> = Object.freeze({
 
   gridCellSize: 8,
 });
+
+/**
+ * Whether two configs play the same game: equal in every key but the internals that don't affect
+ * results (`gridCellSize`). A room's saved world keeps the config it started with, so after the
+ * defaults change this tells which rooms still run the old rules.
+ */
+export function sameRules(a: Readonly<EngineConfig>, b: Readonly<EngineConfig>): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)] as (keyof EngineConfig)[]);
+  for (const key of keys) if (key !== "gridCellSize" && a[key] !== b[key]) return false;
+  return true;
+}
+
+/**
+ * A short fingerprint of a config's rules (8 hex digits): equal for configs {@link sameRules}
+ * calls the same, almost surely different otherwise. The CLI sends its engine's with a deploy,
+ * so the server can tell a version was tested locally on other rules than the arena's.
+ */
+export function rulesId(config: Readonly<EngineConfig>): string {
+  const { gridCellSize: _, ...rules } = config;
+  return stateHash(rules).toString(16).padStart(8, "0");
+}
 
 export function createConfig(overrides: Partial<EngineConfig> = {}): EngineConfig {
   return { ...DEFAULT_CONFIG, ...overrides };

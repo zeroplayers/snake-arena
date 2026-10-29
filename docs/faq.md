@@ -11,8 +11,8 @@ The snake with less mass dies and the other gets the kill. With equal mass both 
 credited with killing the other.
 
 **Why did I die at the wall although I was turning away?**
-A snake can't stop. At full turn it needs a circle of radius `speed / turnRate`, 6 units at normal
-speed and 12 while boosting, and a U-turn takes about 13 ticks. Start turning back while
+A snake can't stop. At full turn it needs a circle of radius `speed / turnRate`, 3.75 units at
+normal speed and 7.5 while boosting, and a U-turn takes 8 ticks. Start turning back while
 `state.wallDistance` is still several turning radii. Death happens when the head point crosses the
 edge; your body radius doesn't matter there.
 

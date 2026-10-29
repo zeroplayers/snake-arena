@@ -28,14 +28,17 @@ import {
 
 /** Headings to try when the way to the target is blocked: ours, then every 45° to both sides. */
 const FEELERS = [0, 1, -1, 2, -2, 3, -3, 4].map((k) => (k * Math.PI) / 4);
-/** How many ticks ahead every road is checked. */
-const LOOKAHEAD_TICKS = 24;
+/**
+ * How far ahead every road is checked, in U-turns (a U-turn takes π / turnRate ticks: 8 at the
+ * default 0.4). Further only makes the bot shy: it can always turn away within that time.
+ */
+const LOOKAHEAD_U_TURNS = 2;
 /** Extra space (world units) to keep from other bodies, on top of both radii. */
-const BODY_MARGIN = 1;
+const BODY_MARGIN = 0.5;
 /** Extra space to keep from the road ahead of another head. */
-const HEAD_MARGIN = 1;
+const HEAD_MARGIN = 0.5;
 /** Other heads can turn: the space kept from their road grows by this share of a tick's move per tick. */
-const HEAD_SPREAD = 0.2;
+const HEAD_SPREAD = 0.1;
 /** Turn straight away from the wall when it is closer than this many turning radii. */
 const WALL_TURN_RADII = 1;
 /**
@@ -77,7 +80,7 @@ export default defineBot({
     //    longest (ties: the one closest to where we wanted to go).
     const danger = dangerAround(state);
     let turn = target ? steerToward(self, target) : 0;
-    if (safeTicks(self, target ?? self.angle, danger) < LOOKAHEAD_TICKS) {
+    if (safeTicks(self, target ?? self.angle, danger) < danger.ticks) {
       mode = "avoid";
       const wanted = target ? angleTo(self.head, target) : self.angle;
       const miss = (heading: number) => Math.abs(angleDiff(heading, wanted));
@@ -89,7 +92,7 @@ export default defineBot({
       let bestCost = Number.POSITIVE_INFINITY;
       for (const heading of headings) {
         if (miss(heading) >= bestCost) break;
-        const lost = LOOKAHEAD_TICKS - safeTicks(self, heading, danger);
+        const lost = danger.ticks - safeTicks(self, heading, danger);
         const cost = lost * 10 + miss(heading);
         if (cost < bestCost) {
           bestCost = cost;
@@ -112,7 +115,7 @@ export default defineBot({
   },
 });
 
-/** Radius of the tightest circle we can drive: speed / turnRate (about 6 units by default). */
+/** Radius of the tightest circle we can drive: speed / turnRate (3.75 units by default). */
 function turnRadius(self: Pick<SelfState, "speed" | "turnRate">): number {
   return self.turnRate > 0 ? self.speed / self.turnRate : Number.POSITIVE_INFINITY;
 }
@@ -141,6 +144,8 @@ interface Head extends Vec {
 
 /** What the head must stay clear of. */
 interface Danger {
+  /** How many ticks ahead roads are checked. */
+  ticks: number;
   /** Nearest first. */
   bodies: Body[];
   heads: Head[];
@@ -151,7 +156,8 @@ interface Danger {
 /** Every visible body point near our head, every visible head, and the size of the arena. */
 function dangerAround(state: BotState): Danger {
   const { self } = state;
-  const range = self.speed * LOOKAHEAD_TICKS;
+  const ticks = self.turnRate > 0 ? Math.ceil((LOOKAHEAD_U_TURNS * Math.PI) / self.turnRate) : 1;
+  const range = self.speed * ticks;
   const bodies: Body[] = [];
   const heads: Head[] = [];
   for (const snake of state.snakes) {
@@ -180,19 +186,19 @@ function dangerAround(state: BotState): Danger {
   }
   bodies.sort((a, b) => a.reach - b.reach);
   const arenaHalfSize = Math.max(Math.abs(self.head.x), Math.abs(self.head.y)) + state.wallDistance;
-  return { bodies, heads, arenaHalfSize };
+  return { ticks, bodies, heads, arenaHalfSize };
 }
 
 /**
  * Drives forward tick by tick the way the engine does (`angle -= turn * turnRate`, then move
  * `speed`), turning toward `aim` (a heading, or a point to drive over and then go straight on),
  * and returns how many ticks pass before the head would touch a body, the road another head has
- * taken by then, or the wall. Returns {@link LOOKAHEAD_TICKS} if it stays clear the whole time.
+ * taken by then, or the wall. Returns `danger.ticks` if it stays clear the whole time.
  */
 function safeTicks(self: SelfState, aim: number | Vec, danger: Danger): number {
   const me = { head: { ...self.head }, angle: self.angle, turnRate: self.turnRate };
   const wall = danger.arenaHalfSize - self.radius;
-  for (let t = 1; t <= LOOKAHEAD_TICKS; t++) {
+  for (let t = 1; t <= danger.ticks; t++) {
     // Food within reach is eaten: from there on, straight on.
     if (typeof aim !== "number" && distance(me.head, aim) < self.radius * 6) aim = me.angle;
     const turn = typeof aim === "number" ? turnToward(me, aim) : steerToward(me, aim);
@@ -219,7 +225,7 @@ function safeTicks(self: SelfState, aim: number | Vec, danger: Danger): number {
       if (dx * dx + dy * dy < r * r) return t - 1;
     }
   }
-  return LOOKAHEAD_TICKS;
+  return danger.ticks;
 }
 
 /**

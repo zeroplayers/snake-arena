@@ -119,7 +119,7 @@ Passed to every `tick`. Plain JSON data.
 | `length`     | your **mass** (not a segment count): grows by eating, shrinks with hunger and boost; drives score        |
 | `speed`      | distance moved last tick (1.5, or 3 when boosting)                                                       |
 | `radius`     | body radius (`size / 2`); collisions use it                                                              |
-| `turnRate`   | max heading change per tick at `turn = ±1` (0.25); read it, don't hard-code it                           |
+| `turnRate`   | max heading change per tick at `turn = ±1` (0.4); read it, don't hard-code it                            |
 | `boosting`   | whether you boosted last tick                                                                            |
 | `segments`   | body points head to tail; at most 128, evenly downsampled, head and tail kept                            |
 | `spawnGrace` | ticks of [spawn grace](rules.md#collisions-and-death) left (15 at birth, down to 0): no kills either way |

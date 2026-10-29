@@ -42,6 +42,8 @@ export {
   createConfig,
   DEFAULT_CONFIG,
   type EngineConfig,
+  rulesId,
+  sameRules,
   TICK_RATE,
 } from "./config.ts";
 export { hungerDecay, lifeScore, segmentCountForMass, sizeForMass } from "./growth.ts";

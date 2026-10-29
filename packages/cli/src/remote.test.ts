@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatReport, runChecks } from "@zerosnake/checks";
+import { DEFAULT_CONFIG, rulesId } from "@zerosnake/engine";
 import {
   type DeployRequest,
   printable,
@@ -223,7 +224,11 @@ describe("zerosnake deploy", () => {
     expect(body.bundle).toContain("export");
     expect(body.sources.map((s) => s.path)).toEqual(["src/bot.ts", "src/tuning.ts"]);
     expect(body.sources[0]?.content).toBe(PASSING_BOT);
-    expect(body.meta).toMatchObject({ cliVersion: expect.any(String), message: "first try" });
+    expect(body.meta).toMatchObject({
+      cliVersion: expect.any(String),
+      rules: rulesId(DEFAULT_CONFIG),
+      message: "first try",
+    });
     expect(upload?.headers.get("idempotency-key")).toMatch(/^[0-9a-f-]{36}$/);
     expect(arena.calls("GET", /versions\/1$/).length).toBeGreaterThanOrEqual(2);
   }, 120_000);

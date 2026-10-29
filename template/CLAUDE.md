@@ -71,10 +71,10 @@ Only `src/` is deployed. Keep tests and tools out of it.
   (that call's `normal`), not toward the centre.
 - **Time:** fixed ticks, `info.tickRate` (10) per second of game time. Rooms without spectators run
   faster than real time; nothing depends on wall-clock time.
-- **Movement:** every tick the snake turns by up to `self.turnRate` radians (0.25), then moves
+- **Movement:** every tick the snake turns by up to `self.turnRate` radians (0.4), then moves
   `self.speed` units (1.5) forward. It never stops. The tightest circle it can drive has radius
-  `speed / turnRate` (6 units; 12 while boosting, because boosting doubles speed but not turn rate).
-  A U-turn needs about twice that much room.
+  `speed / turnRate` (3.75 units; 7.5 while boosting, because boosting doubles speed but not turn
+  rate). A U-turn takes 8 ticks and needs about twice that much room.
 - **Boost:** `boost: true` doubles speed (to 3) and burns 1 length per tick, dropped as food behind
   your tail. Refused below length 5. It is expensive: you start at length 10.
 - **Length** (`self.length`, the engine's "mass") grows by eating food and decays every tick from

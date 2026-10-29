@@ -56,14 +56,14 @@ describe("castRay", () => {
 });
 
 describe("pathClearance", () => {
-  const me = self(); // turn radius 1.5 / 0.25 = 6
+  const me = self(); // turn radius 1.5 / 0.4 = 3.75
 
   it("follows the turning circle before going straight", () => {
-    // A left U-turn ends 12 above the start heading west; a dot there blocks it, not the
+    // A left U-turn ends 7.5 above the start heading west; a dot there blocks it, not the
     // straight road.
-    const dot = [{ x: 0, y: 12, r: 1 }];
+    const dot = [{ x: 0, y: 7.5, r: 1 }];
     expect(pathClearance(me, 0, dot, 100, 30)).toBe(30);
-    expect(pathClearance(me, Math.PI, dot, 100, 30)).toBeLessThan(6 * Math.PI);
+    expect(pathClearance(me, Math.PI, dot, 100, 30)).toBeLessThan(3.75 * Math.PI);
     expect(pathClearance(me, -Math.PI, dot, 100, 30)).toBe(30);
   });
 
@@ -119,7 +119,7 @@ describe("steer", () => {
   it("takes the desired heading exactly when it is open", () => {
     const s = steer(state(), [], 0.1, opts);
     expect(s.angle).toBeCloseTo(0.1);
-    expect(s.turn).toBeCloseTo(-0.4);
+    expect(s.turn).toBeCloseTo(-0.1 / 0.4);
   });
 
   it("turns the way it planned for a U-turn", () => {

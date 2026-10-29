@@ -112,7 +112,7 @@ export default defineBot({
   },
 });
 
-/** Radius of the tightest circle we can drive: speed / turnRate (about 6 units by default). */
+/** Radius of the tightest circle we can drive: speed / turnRate (3.75 units by default). */
 function turnRadius(self: Pick<SelfState, "speed" | "turnRate">): number {
   return self.turnRate > 0 ? self.speed / self.turnRate : Number.POSITIVE_INFINITY;
 }

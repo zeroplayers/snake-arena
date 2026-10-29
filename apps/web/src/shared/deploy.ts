@@ -73,6 +73,11 @@ export interface DeployRequest {
 export interface DeployMeta {
   cliVersion?: string;
   sdkVersion?: string;
+  /**
+   * `rulesId` of the CLI's engine config: the rules its local `test` played. Absent from CLIs
+   * before 0.1.1 (they played `turnRate` 0.25, #98).
+   */
+  rules?: string;
   /** Free text, like a commit message (≤ 200 characters). */
   message?: string;
 }

@@ -10,6 +10,7 @@ import { join } from "node:path";
 import {
   CHECK_JOB_VERSION,
   type CheckJob,
+  type DeployMeta,
   SOURCE_ARCHIVE_FORMAT,
   type SourceArchive,
   type SourceFile,
@@ -54,7 +55,13 @@ export interface Harness {
   deploy(
     bot: string,
     bundle: string,
-    options?: { n?: number; sources?: SourceFile[]; enqueuedAt?: number | null },
+    options?: {
+      n?: number;
+      sources?: SourceFile[];
+      enqueuedAt?: number | null;
+      /** `versions.meta`: what the CLI sent along. */
+      meta?: DeployMeta;
+    },
   ): Promise<Deployed>;
   /** Hands `job` to the consumer as one batch from `queue`, as delivery number `attempts`. */
   deliver(
@@ -197,10 +204,18 @@ export async function createHarness({
           .bind(botId, ownerId, bot, bot),
         db
           .prepare(
-            `INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key, enqueued_at)
-             VALUES (?, ?, ?, 'validating', ?, ?, ?)`,
+            `INSERT INTO versions (id, bot_id, n, status, bundle_key, source_key, enqueued_at, meta)
+             VALUES (?, ?, ?, 'validating', ?, ?, ?, ?)`,
           )
-          .bind(versionId, botId, n, bundleKey, sourceKey, enqueuedAt),
+          .bind(
+            versionId,
+            botId,
+            n,
+            bundleKey,
+            sourceKey,
+            enqueuedAt,
+            options.meta ? JSON.stringify(options.meta) : null,
+          ),
       ]);
       const job: CheckJob = {
         v: CHECK_JOB_VERSION,

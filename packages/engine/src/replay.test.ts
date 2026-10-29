@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_CONFIG } from "./config.ts";
 import { hashWorld } from "./hash.ts";
+import { wrapAngle } from "./math.ts";
 import {
   BitModel,
   F64Model,
@@ -23,11 +25,11 @@ import {
   replayChunkVersion,
 } from "./replay.ts";
 import { createRng } from "./rng.ts";
-import { quantizeTurn, TURN_STEPS } from "./step.ts";
+import { quantizeTurn, step, TURN_STEPS } from "./step.ts";
 import { actionsFor, farm, type Policy, wander } from "./testing/policies.ts";
 import { place } from "./testing/setup.ts";
 import type { Fault, World } from "./types.ts";
-import { cloneWorld, createWorld } from "./world.ts";
+import { cloneWorld, createWorld, spawnSnake } from "./world.ts";
 
 interface Recording {
   chunks: Uint8Array[];
@@ -323,6 +325,34 @@ describe("replay", () => {
         expect(hashWorld(player.seek(t))).toBe(hashes[t]);
       }
     }
+  });
+  it("plays a room back on the config it was recorded with, not today's defaults", () => {
+    // A room recorded before #98 turned at 0.25 rad/tick; the default is 0.4 now.
+    const old = 0.25;
+    expect(DEFAULT_CONFIG.turnRate).not.toBe(old);
+    const world = createWorld({ seed: 5, config: { turnRate: old } });
+    const chunks: Uint8Array[] = [];
+    const recorder = new ReplayRecorder(world, { onChunk: (b) => chunks.push(b), hashEvery: 1 });
+    recorder.spawn({ id: "a", author: "alice" });
+    const angles = [world.snakes[0]?.angle ?? 0];
+    for (let t = 0; t < 8; t++) {
+      recorder.step({ a: { turn: 1 } });
+      angles.push(world.snakes[0]?.angle ?? 0);
+    }
+    recorder.flush();
+
+    const player = new ReplayPlayer(chunks);
+    expect(player.world.config.turnRate).toBe(old);
+    for (let t = 1; t <= 8; t++) {
+      const snake = player.next().snakes[0];
+      expect(snake?.angle).toBe(angles[t]);
+      expect(Math.abs(wrapAngle((angles[t - 1] ?? 0) - (snake?.angle ?? 0)))).toBeCloseTo(old, 12);
+    }
+    // The same inputs on today's rules end somewhere else: the player can't have used them.
+    const today = createWorld({ seed: 5 });
+    spawnSnake(today, { id: "a", author: "alice" });
+    for (let t = 0; t < 8; t++) step(today, { a: { turn: 1 } });
+    expect(today.snakes[0]?.angle).not.toBe(angles[8]);
   });
 });
 

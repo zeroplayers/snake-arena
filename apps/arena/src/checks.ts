@@ -24,9 +24,11 @@
  *   `METRICS` binding; `@zerosnake/observability`), and a structured log of each.
  */
 import { LIMITS, runChecks, type SourceFile as SizedSource } from "@zerosnake/checks";
+import { DEFAULT_CONFIG, rulesId } from "@zerosnake/engine";
 import { log, type MetricsDataset, writeMetric } from "@zerosnake/observability";
 import {
   type CheckJob,
+  type DeployMeta,
   isCheckJob,
   SOURCE_ARCHIVE_FORMAT,
   type SourceArchive,
@@ -152,7 +154,7 @@ export async function checkVersion(job: CheckJob, env: ChecksEnv): Promise<Check
 
   const suite = await runChecks({ bundle: bundleText, sources }, { wasmModule });
   const report = versionReport(suite);
-  if (!suite.passed) return reject(report);
+  if (!suite.passed) return reject(noteOtherRules(report, version.meta));
   const outcome = await markPassed(
     env.DB,
     version,
@@ -162,6 +164,26 @@ export async function checkVersion(job: CheckJob, env: ChecksEnv): Promise<Check
   );
   // Passed, but its bot was archived meanwhile.
   return { outcome, reason: outcome === "rejected" ? "bot_archived" : null };
+}
+
+/**
+ * A CLI tests a version locally on its own engine's rules. When those aren't the arena's (an
+ * older CLI after a rule change: `zerosnake@0.1.0` plays `turnRate` 0.25, #98), its `test` can
+ * pass a version that plays differently here, so a rejection for how it played (`seeds`,
+ * `qualification`) says why the two can disagree. The verdict itself stays the arena's.
+ */
+export function noteOtherRules(report: VersionReport, meta: DeployMeta | null): VersionReport {
+  if (meta?.cliVersion === undefined || meta.rules === rulesId(DEFAULT_CONFIG)) return report;
+  const failed = report.checks.find((c) => !c.ok);
+  if (failed?.name !== "seeds" && failed?.name !== "qualification") return report;
+  const which =
+    meta.rules === undefined
+      ? `zerosnake ${meta.cliVersion} plays a turn rate of 0.25; the arena's is ${DEFAULT_CONFIG.turnRate}`
+      : `zerosnake ${meta.cliVersion}`;
+  failed.message +=
+    `. Your CLI tested this version on other rules than the arena's (${which}), so its ` +
+    "`zerosnake test` can disagree with this verdict: update it (`npx zerosnake@latest`) and test again";
+  return report;
 }
 
 /** The `checks.finished` metric and log of one job (or reaped version). */

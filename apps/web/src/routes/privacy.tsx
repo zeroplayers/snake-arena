@@ -1,10 +1,20 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ContactEmail, LegalPage } from "../components/LegalPage";
 import { LEGAL, MINIMUM_AGE } from "../legal";
+import { canonical, pageMeta } from "../lib/meta";
 import { TRACE_RETENTION_DAYS } from "../shared";
 
 export const Route = createFileRoute("/privacy")({
-  head: () => ({ meta: [{ title: "Privacy Policy · ZeroSnake Arena" }] }),
+  head: () => ({
+    meta: [
+      ...pageMeta(
+        "Privacy Policy",
+        "What ZeroSnake Arena stores about you and your bots, why, for how long, and how to export or delete it.",
+      ),
+      ...canonical("/privacy").meta,
+    ],
+    links: canonical("/privacy").links,
+  }),
   component: Privacy,
 });
 

@@ -4,6 +4,7 @@ import { DEATH_CAUSES, formatDateTime, formatTicks } from "../components/format"
 import { Empty, PageError, PagePending } from "../components/PageState";
 import { ReplayViewer } from "../components/ReplayViewer";
 import { TracePanel } from "../components/TracePanel";
+import { canonical, pageMeta } from "../lib/meta";
 import { getReplayPage } from "../server/pages";
 import { getReplayTrace, type ReplayTrace } from "../server/traces";
 import { REPLAY_EXPIRED_MESSAGE } from "../shared/replay";
@@ -15,15 +16,21 @@ export const Route = createFileRoute("/replay/$id")({
     if (!life) throw notFound();
     return life;
   },
-  head: ({ loaderData }) => ({
-    meta: [
-      {
-        title: loaderData
-          ? `Replay: ${loaderData.botName} v${loaderData.version} by @${loaderData.author} · ZeroSnake Arena`
-          : "Replay · ZeroSnake Arena",
-      },
-    ],
-  }),
+  head: ({ loaderData, params }) => {
+    const { meta, links } = canonical(`/replay/${params.id}`);
+    return {
+      meta: [
+        ...(loaderData
+          ? pageMeta(
+              `Replay: ${loaderData.botName} v${loaderData.version} by @${loaderData.author}`,
+              `Watch ${loaderData.botName}, a snake bot by @${loaderData.author}, play one life in ZeroSnake Arena.`,
+            )
+          : pageMeta("Replay")),
+        ...meta,
+      ],
+      links,
+    };
+  },
   component: ReplayPage,
   pendingComponent: PagePending,
   errorComponent: PageError,

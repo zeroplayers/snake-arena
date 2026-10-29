@@ -27,3 +27,6 @@ export const SHOWCASE_PATH = "/api/showcase";
  * The CLI's `DEFAULT_URL` must match (a test checks): published CLIs keep it, so it's permanent.
  */
 export const SITE_URL = "https://zerosnake.dev";
+
+/** The CLI's npm page (`packages/cli`, published as `zerosnake`). */
+export const NPM_URL = "https://www.npmjs.com/package/zerosnake";

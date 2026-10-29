@@ -83,7 +83,7 @@ describe("landing page", () => {
         claudePromptWorks()
           ? CLI_PUBLISHED
             ? "#by-hand"
-            : "/docs/getting-started#before-the-packages-are-published"
+            : "/docs/getting-started#working-from-a-checkout"
           : "#start",
       ]),
     );
@@ -162,9 +162,7 @@ describe.each([
     const html = await render();
     const links = hrefs(html);
     expect(links.some((href) => href.startsWith(REPO.url))).toBe(repo);
-    expect(links.includes("/docs/getting-started#before-the-packages-are-published")).toBe(
-      repo && !cli,
-    );
+    expect(links.includes("/docs/getting-started#working-from-a-checkout")).toBe(repo && !cli);
     expect(html.includes("Running the CLI from a checkout")).toBe(repo && !cli);
     expect(html.includes("from a checkout of the repository")).toBe(repo && !cli);
   });

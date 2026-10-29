@@ -1,8 +1,18 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ContactEmail, LegalPage } from "../components/LegalPage";
+import { canonical, pageMeta } from "../lib/meta";
 
 export const Route = createFileRoute("/acceptable-use")({
-  head: () => ({ meta: [{ title: "Acceptable Use · ZeroSnake Arena" }] }),
+  head: () => ({
+    meta: [
+      ...pageMeta(
+        "Acceptable Use Policy",
+        "What bots and authors may and may not do on ZeroSnake Arena: the sandbox, fair play and abuse.",
+      ),
+      ...canonical("/acceptable-use").meta,
+    ],
+    links: canonical("/acceptable-use").links,
+  }),
   component: AcceptableUse,
 });
 

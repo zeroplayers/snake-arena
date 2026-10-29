@@ -13,8 +13,11 @@ import { formatBytes, measureLimits, type SourceFile } from "./limits.ts";
 import {
   emptyStats,
   type FaultDetails,
+  type MatchOptions,
   type MatchResult,
   playMatch,
+  playMatchPaused,
+  type Seat,
   type TickStats,
 } from "./match.ts";
 import {
@@ -56,6 +59,12 @@ export interface CheckOptions {
   budget?: Partial<SuiteBudget>;
   /** Milliseconds, for {@link SuiteBudget.maxMillis}. Default `performance.now`. */
   clock?: () => number;
+  /**
+   * Awaited after each batch of every match (a few hundred ticks, a fraction of a second). The
+   * checks consumer passes a timer, so a check doesn't hold its isolate's event loop for its
+   * whole run (10–20 s of CPU with 20-snake rooms). Doesn't change the report.
+   */
+  pause?: () => Promise<void>;
 }
 
 /**
@@ -84,6 +93,9 @@ export async function runChecks(
   const opBudget = DEFAULT_OP_BUDGET;
   const budget = defaultBudget(seeds.length * ticks, opBudget, options.budget);
   const matchOptions = (seed: number) => ({ seed, ticks, opBudget });
+  const { pause } = options;
+  const play = async (seat: Seat, o: MatchOptions) =>
+    pause ? playMatchPaused(seat, o, pause) : playMatch(seat, o);
 
   const report: CheckReport = {
     version: REPORT_VERSION,
@@ -110,7 +122,7 @@ export async function runChecks(
   // can't tell it apart.
   const matches: MatchResult[] = [];
   for (const seed of seeds) {
-    const m = playMatch(seat, matchOptions(seed));
+    const m = await play(seat, matchOptions(seed));
     if (matches.length === 0 && m.fault?.atLoad && m.fault.life === 1) {
       report.load = loadFailed(m.fault);
       return report;
@@ -128,9 +140,10 @@ export async function runChecks(
   if (report.run.status !== "pass") return report;
 
   // The bar: `easy` playing the candidate's seat on the same seeds.
-  const baseline = seeds.map((seed) =>
-    playMatch({ kind: "house", bot: houseBots.easy }, matchOptions(seed)),
-  );
+  const baseline: MatchResult[] = [];
+  for (const seed of seeds) {
+    baseline.push(await play({ kind: "house", bot: houseBots.easy }, matchOptions(seed)));
+  }
   report.qualify = checkQualify(matches, baseline);
   report.passed = report.qualify.status === "pass";
   return report;

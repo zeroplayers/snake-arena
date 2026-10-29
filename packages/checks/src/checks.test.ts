@@ -57,6 +57,16 @@ describe("honest bots", () => {
       const second = await runChecks(input(medium), QUICK);
       expect(first.passed).toBe(true);
       expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+      // Pausing after each batch (what the checks consumer does) changes nothing.
+      let pauses = 0;
+      const paused = await runChecks(input(medium), {
+        ...QUICK,
+        pause: async () => {
+          pauses++;
+        },
+      });
+      expect(pauses).toBeGreaterThan(QUICK.seeds.length * 2);
+      expect(JSON.stringify(paused)).toBe(JSON.stringify(first));
     },
     FULL,
   );

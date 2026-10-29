@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   bundle,
   createHarness,
@@ -25,7 +25,7 @@ afterAll(async () => {
   await h?.dispose();
 });
 
-/** The `checks.finished` points written since the test's previous call. */
+/** The `checks.finished` points written since the test's previous call (or its start). */
 let seen = 0;
 async function finished() {
   const all = metricsNamed(await h.metricPoints(), "checks.finished");
@@ -33,6 +33,21 @@ async function finished() {
   seen = all.length;
   return fresh;
 }
+
+beforeEach(async () => {
+  // Each test counts its own points only: a check an earlier test left running (it failed while
+  // its delivery was in flight) finishes first, and its point is skipped. A version stays
+  // `validating` until its check ends; every test leaves none (rejected, ready, reaped, gone).
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    const row = await h.db
+      .prepare("SELECT count(*) AS n FROM versions WHERE status = 'validating'")
+      .first<{ n: number }>();
+    if (!row?.n || Date.now() > deadline) break;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  seen = metricsNamed(await h.metricPoints(), "checks.finished").length;
+});
 
 describe("checks consumer metrics", () => {
   it("writes checks.finished for a ready and a rejected version", async () => {

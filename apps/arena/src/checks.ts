@@ -152,7 +152,20 @@ export async function checkVersion(job: CheckJob, env: ChecksEnv): Promise<Check
     return reject(failureReport("input_malformed"));
   }
 
-  const suite = await runChecks({ bundle: bundleText, sources }, { wasmModule });
+  const suite = await runChecks(
+    { bundle: bundleText, sources },
+    {
+      wasmModule,
+      // A check is 10–20 s of CPU (20-snake rooms): give the event loop a turn after each batch
+      // of a match, so the isolate (and whatever else it serves) isn't held for the whole run.
+      pause: () => new Promise((r) => setTimeout(r, 0)),
+      // workerd's clock only moves on I/O, so before the pauses it stood still for the whole
+      // suite and the wall-clock cap never applied here; the Worker's CPU limit is the backstop
+      // (`SuiteBudget.maxMillis`). Keep it that way: the pauses would let the clock count the
+      // time other work had the isolate.
+      clock: () => 0,
+    },
+  );
   const report = versionReport(suite);
   if (!suite.passed) return reject(noteOtherRules(report, version.meta));
   const outcome = await markPassed(

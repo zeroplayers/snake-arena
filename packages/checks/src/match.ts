@@ -153,10 +153,41 @@ export function emptyStats(): TickStats {
  */
 export function playMatch(
   seat: Seat,
-  { seed, ticks, opBudget }: MatchOptions,
+  options: MatchOptions,
   trace: RoomTrace = {},
-  disguise: Disguise = disguiseFor(seed),
+  disguise: Disguise = disguiseFor(options.seed),
 ): MatchResult {
+  const steps = matchSteps(seat, options, trace, disguise);
+  for (;;) {
+    const step = steps.next();
+    if (step.done) return step.value;
+  }
+}
+
+/**
+ * {@link playMatch}, awaiting `pause` after each batch (a few hundred ticks): the same match and
+ * result, but the event loop gets a turn every fraction of a second instead of once a match.
+ */
+export async function playMatchPaused(
+  seat: Seat,
+  options: MatchOptions,
+  pause: () => Promise<void>,
+): Promise<MatchResult> {
+  const steps = matchSteps(seat, options, {}, disguiseFor(options.seed));
+  for (;;) {
+    const step = steps.next();
+    if (step.done) return step.value;
+    await pause();
+  }
+}
+
+/** The match, one batch per step. */
+function* matchSteps(
+  seat: Seat,
+  { seed, ticks, opBudget }: MatchOptions,
+  trace: RoomTrace,
+  disguise: Disguise,
+): Generator<void, MatchResult> {
   const world = createWorld({ seed });
   world.tick = disguise.startTick;
   const limits = { opBudget, logLimitBytes: LOG_LIMIT_BYTES };
@@ -341,6 +372,7 @@ export function playMatch(
     });
     for (const e of spawns) if (!stopped()) start(e);
     for (let k = 0; k < batch && !stopped() && !windowOver(); k++) playTick(k === 0 ? retired : []);
+    yield;
   }
 
   const alive = world.snakes.find((s) => s.id === candidateId);

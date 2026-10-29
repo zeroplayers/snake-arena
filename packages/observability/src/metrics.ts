@@ -104,7 +104,8 @@ export const METRICS = {
    * (30 s) per room, never per tick. `mode` is the one it runs in now (real time while
    * spectators watch). Sums over the period: `ticks`, `workUnits` (the sandbox's cost units, a
    * deterministic CPU proxy: workerd doesn't expose CPU time to code; DO CPU itself is in the
-   * Durable Objects metrics), `botTicks`, `batches`, `livesStarted` / `livesEnded` (real lives),
+   * Durable Objects metrics), `botTicks` (sandboxed bot ticks: house bots run natively and
+   * count in neither), `batches`, `livesStarted` / `livesEnded` (real lives),
    * `wallMs` (batch wall time, which the frozen clock only moves on I/O), `watched` (batches in
    * watch mode) and `cut` (batches watch mode ended early). Now: `snakes`, `spectators`, `tick`
    * (the world's; a room whose `tick` doesn't move is stuck). `periodMs` is the time the sums
@@ -153,7 +154,8 @@ export const METRICS = {
    * A room closed: `empty` (only house bots left, nothing queued), `kill_switch` (the arena is
    * stopped), `superseded` (started on older rules, its last real life ended: #98) or `outdated`
    * (saved by an older engine this one can't run, e.g. the round arena). `ticks`: its world's
-   * tick; `lives`: lives that ended in it; `durationMs` since
+   * tick; `lives`: deployed bots' lives that ended in it (house bots, which fill every free
+   * slot, aren't counted; rooms started before this count them); `durationMs` since
    * `start` (0 for rooms started before this was recorded).
    */
   "room.closed": {

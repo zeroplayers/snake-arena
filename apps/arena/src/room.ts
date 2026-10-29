@@ -130,7 +130,8 @@ const REPORT_GRACE_MS = 60_000;
  *     the batch for the worst case (see `limits.ts`);
  *  2. write a marker with the invocation's start time and `sync()` it, so a batch that dies is
  *     noticed by the next alarm;
- *  3. run it (engine + one QuickJS life per snake, recorded by `ReplayRecorder`);
+ *  3. run it (engine + a QuickJS life per deployed version's snake and a native one per house
+ *     bot, `room/house-life.ts`; recorded by `ReplayRecorder`);
  *  4. in one transaction: save the world, the open replay chunk, the roster and what changed in
  *     the lives' traces (`room/trace.ts`, `room/trace-store.ts`), queue the side effects (replay
  *     chunks and finished lives' traces for R2, finished lives for D1 and the matchmaker), clear
@@ -266,6 +267,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
           outboxPerCycle: limits.outboxPerCycle ?? OUTBOX_PER_CYCLE,
         },
         livesEnded: 0,
+        realLivesEnded: 0,
         startedAt: Date.now(),
         lastBatchTicks: 0,
         nextLifeAfter: 0,
@@ -455,7 +457,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     if (!meta) return;
     const sim = await this.loadSim(meta);
     const maxPendingSeq = this.store.lastPendingSeq();
-    const plan = this.plan(meta, sim.roster, sim.world, sim.idleLives, maxPendingSeq);
+    const plan = this.plan(meta, sim.roster, sim.world, sim.idleLifeIds(), maxPendingSeq);
     const watch = watching(meta.watch, sim.world.tick, Date.now());
     // Labels of the lives spectators are about to see (D1 only for versions not seen yet).
     await this.spectators.prepare();
@@ -819,7 +821,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
     meta: Meta,
     roster: readonly RosterEntry[],
     world: World,
-    idleLives: number,
+    idle: readonly string[],
     maxPendingSeq: number,
   ): BatchPlan & { houseRetired: number } {
     const faults = new Map<string, Fault>();
@@ -854,9 +856,23 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       const fillTo = Math.min(meta.fillTo ?? meta.maxSnakes, meta.maxSnakes);
       spawns.push(...houseFill([...staying, ...spawns], fillTo, world.tick));
     }
-    const bots = staying.length + spawns.length;
-    const starts = spawns.length + idleLives;
-    let ticks = meta.limits.batchTicks || batchTicks(bots, starts, meta.limits.cpuBudgetMs);
+    // House bots run natively (`room/house-life.ts`): sized at their own cost, not a sandboxed
+    // bot's worst case.
+    const running = [...staying, ...spawns];
+    const isHouse = new Set(running.filter((e) => e.house).map((e) => e.lifeId));
+    const restarting = idle.filter((id) => !faults.has(id));
+    const houseStarts =
+      spawns.filter((e) => e.house).length + restarting.filter((id) => isHouse.has(id)).length;
+    const starts = spawns.length + restarting.length - houseStarts;
+    let ticks =
+      meta.limits.batchTicks ||
+      batchTicks(
+        running.length - isHouse.size,
+        starts,
+        meta.limits.cpuBudgetMs,
+        isHouse.size,
+        houseStarts,
+      );
     if (this.mode(meta) === "realtime") ticks = Math.min(ticks, REALTIME_BATCH_TICKS);
     return { spawns, faults, ticks, houseRetired: retire.length };
   }
@@ -921,6 +937,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
         this.store.enqueue({ kind: "life", json: JSON.stringify(life), chunkTick, traceKey: key });
       }
       meta.livesEnded += result.ended.length;
+      meta.realLivesEnded = (meta.realLivesEnded ?? 0) + real;
       meta.lastBatchTicks = result.ticks;
       meta.openChunkTick = sim.openChunkTick;
       if (real > 0) meta.nextLifeAfter = 0;
@@ -1127,7 +1144,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       roomId: meta.roomId,
       reason: this.paused ? "kill_switch" : this.superseded() ? "superseded" : "empty",
       ticks: sim.world.tick,
-      lives: meta.livesEnded,
+      lives: meta.realLivesEnded ?? meta.livesEnded,
       durationMs: meta.startedAt ? now - meta.startedAt : 0,
     };
     this.store.transaction(() => {
@@ -1183,7 +1200,7 @@ export class RoomDO extends DurableObject<Env> implements RoomRpc {
       roomId: meta.roomId,
       reason: "outdated",
       ticks: world?.tick ?? 0,
-      lives: meta.livesEnded,
+      lives: meta.realLivesEnded ?? meta.livesEnded,
       durationMs: meta.startedAt ? now - meta.startedAt : 0,
     };
     this.store.transaction(() => {

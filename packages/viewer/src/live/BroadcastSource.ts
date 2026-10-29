@@ -311,7 +311,9 @@ export class BroadcastSource implements MatchSource {
       const life = this.lifeOf(id, d.life);
       life.death = {
         tick,
-        cause: d.cause,
+        // A house bot's only `error` is the room retiring it (to make way for a real life, or the
+        // arena stopping): house bots run natively and never die of their own errors.
+        cause: d.cause === "error" && d.life.house ? "retired" : d.cause,
         killerId: d.killerSlot === null ? null : (this.slotIds.get(d.killerSlot) ?? null),
         score: d.score,
         mass: d.mass,

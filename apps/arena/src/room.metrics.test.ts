@@ -48,9 +48,11 @@ async function stopRoom(name: string): Promise<RoomStatus> {
 describe("RoomDO metrics", () => {
   it("writes room.started, room.batch per batch, life.ended once delivered, room.closed", async () => {
     const dave = await ticket("dave", BOTS.thrower);
-    // Erin circles in open space: she can't die before the stop, whatever the rules.
+    // Erin circles in open space: she can't die before the stop, whatever the rules. Three house
+    // bots, not a full room's crowd, so the space stays open.
     const erin = await ticket("erin", BOTS.circler);
     await startRoom("metered", [dave, erin], {
+      fillTo: 5,
       limits: { chunkTicks: 50, metricsMs: 0, arenaControlPollMs: 0 },
     });
     let s = await run("metered");
@@ -70,15 +72,16 @@ describe("RoomDO metrics", () => {
       // Dave throws every tick: dead by `error` on his third.
       livesEnded: 1,
       snakes: s.snakes.length,
-      // Erin; house bots fill the other slots (18 spawned with the two tickets).
+      // Erin; house bots fill the other slots (3 spawned with the two tickets).
       realLives: 1,
       houseRetired: 0,
       spectators: 0,
       watched: 0,
       cut: 0,
     });
-    expect(s.snakes.length + s.livesEnded).toBe(20);
-    expect(batch?.botTicks).toBeGreaterThan(s.tick);
+    expect(s.snakes.length + s.livesEnded).toBe(5);
+    // Sandboxed bot ticks only (Dave's 3 and Erin's): house bots run natively.
+    expect(batch?.botTicks).toBe(s.tick + 3);
     expect(batch?.workUnits).toBeGreaterThan(0);
     expect(batch?.periodMs).toBeGreaterThanOrEqual(0);
     expect(batch?.wallMs).toBeGreaterThanOrEqual(0);
@@ -115,7 +118,8 @@ describe("RoomDO metrics", () => {
         roomId: "metered",
         reason: "kill_switch",
         ticks: closed.tick,
-        lives: closed.livesEnded,
+        // Dave and Erin: the house bots that died in it aren't counted.
+        lives: 2,
         durationMs: expect.any(Number),
       },
     ]);

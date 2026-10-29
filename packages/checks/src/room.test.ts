@@ -8,6 +8,8 @@ interface Batch {
   ticks: number;
   bots: number;
   starts: number;
+  houseBots: number;
+  houseStarts: number;
   spawns: { id: string; author: string }[];
   /** Snakes alive when the batch was planned (id → author). */
   present: Map<string, string>;
@@ -50,12 +52,15 @@ describe("a check room runs by RoomDO's rules", () => {
     (seed) => {
       const { batches, result } = record(seed);
       expect(result.ticks).toBe(1000);
-      expect(batches.length).toBeGreaterThan(5);
+      // Batches of a few hundred ticks: house bots run natively in RoomDO, sized at their cost.
+      expect(batches.length).toBeGreaterThan(1);
       for (const [k, b] of batches.entries()) {
         // Batch size from the arena's formula, and the next batch starts where this one ended.
-        expect(b.ticks).toBe(batchTicks(b.bots, b.starts));
-        expect(b.starts).toBe(b.spawns.length);
-        expect(b.bots).toBe(b.present.size - b.retired.length + b.starts);
+        // Tickets at a sandboxed bot's worst case, the house fill at a native house bot's cost.
+        expect(b.ticks).toBe(batchTicks(b.bots, b.starts, undefined, b.houseBots, b.houseStarts));
+        expect(b.starts + b.houseStarts).toBe(b.spawns.length);
+        expect(b.houseStarts).toBe(b.spawns.filter((s) => s.author.startsWith("house:")).length);
+        expect(b.bots + b.houseBots).toBe(b.present.size - b.retired.length + b.spawns.length);
         const next = batches[k + 1];
         if (next) expect(next.tick).toBe(b.tick + b.ticks);
 
@@ -81,7 +86,7 @@ describe("a check room runs by RoomDO's rules", () => {
         );
         expect(house).toEqual(expected.map((h) => ({ id: h.lifeId, author: h.author })));
         // Every batch runs the room full.
-        expect(b.bots).toBe(DEFAULT_MAX_SNAKES);
+        expect(b.bots + b.houseBots).toBe(DEFAULT_MAX_SNAKES);
       }
     },
     60_000,

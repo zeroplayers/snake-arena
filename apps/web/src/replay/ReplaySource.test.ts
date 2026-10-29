@@ -71,6 +71,22 @@ function record(ticks = 420, chunkTicks = 150): Recorded {
 
 const rec = record();
 
+it("shows a house bot the room retired as retired, a deployed bot's error as error", () => {
+  const world = createWorld({ seed: 3, config: { arenaHalfSize: 30 } });
+  const chunks: Uint8Array[] = [];
+  const recorder = new ReplayRecorder(world, { chunkTicks: 50, onChunk: (b) => chunks.push(b) });
+  recorder.spawn({ id: "house-medium-0-0", author: "house:medium#2" });
+  recorder.spawn({ id: "life-1", author: "EwHtzo4BxLbOftvbTBy6BjWVEorxGVKa" });
+  recorder.spawn({ id: "life-2", author: "q3Zr8LkP0aWm5TnYx2BcVd7GhJ4sEf9u" });
+  recorder.step({}, { "house-medium-0-0": "error", "life-1": "error" });
+  for (let t = 1; t < 5; t++) recorder.step({});
+  recorder.flush();
+  const replay = new ReplaySource(chunks);
+  expect(replay.life("house-medium-0-0")?.death?.cause).toBe("retired");
+  expect(replay.life("life-1")?.death?.cause).toBe("error");
+  expect(replay.life("life-2")?.death).toBeUndefined();
+});
+
 describe("ReplaySource", () => {
   const source = new ReplaySource(rec.chunks, { title: "test" });
 

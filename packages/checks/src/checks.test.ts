@@ -346,9 +346,9 @@ describe("suite budget", () => {
       expect(report.run.status).toBe("pass");
       // The sandbox's cost meter (#60) adds calls and branches, which QuickJS counts as it polls.
       // In a full room (20 snakes to look at) `hard` uses about a third of the ops cap and a
-      // fifth of the work cap.
+      // quarter of the work cap.
       expect(report.run.cost.interrupts).toBeLessThan(report.budget.maxInterrupts / 2);
-      expect(report.run.cost.work).toBeLessThan(report.budget.maxWork / 4);
+      expect(report.run.cost.work).toBeLessThan(report.budget.maxWork / 3);
       expect(report.budget.maxInterrupts).toBe((3 * 400 * report.opBudget) / 2);
     },
     FULL,

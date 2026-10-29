@@ -58,7 +58,10 @@ export interface Meta {
   fillTo?: number;
   manual: boolean;
   limits: Required<RoomLimits>;
+  /** Lives that ended here, house bots included. */
   livesEnded: number;
+  /** Of those, deployed versions' lives (missing in rooms saved before it was counted). */
+  realLivesEnded?: number;
   /** Wall ms the room started; missing in rooms saved before it was recorded. */
   startedAt?: number;
   lastBatchTicks: number;

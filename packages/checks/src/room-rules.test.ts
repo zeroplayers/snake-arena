@@ -60,8 +60,10 @@ describe("batchTicks", () => {
     expect([batchTicks(5, 0), batchTicks(6, 1), batchTicks(6, 6), batchTicks(1, 0)]).toEqual([
       102, 83, 75, 482,
     ]);
-    // A full room, as every room now runs: 25 ticks, with or without a life starting.
+    // Twenty sandboxed bots: 25 ticks, with or without a life starting.
     expect([batchTicks(20, 0), batchTicks(20, 1)]).toEqual([25, 25]);
+    // One ticket and 19 native house bots (0.25 ms a tick, 1 ms a start), all starting.
+    expect(batchTicks(1, 1, undefined, 19, 19)).toBe(406);
     expect(batchTicks(20, 60)).toBe(1);
   });
 });

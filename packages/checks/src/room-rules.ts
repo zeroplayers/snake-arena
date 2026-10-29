@@ -77,17 +77,29 @@ const WORST_BOT_TICK_MS = DEFAULT_OP_BUDGET * WORST_MS_PER_OP + STATE_MS;
 const INIT_OP_BUDGET = 100;
 const WORST_LIFE_START_MS = 7 + INIT_OP_BUDGET * WORST_MS_PER_OP;
 const ENGINE_TICK_MS = 2;
+const HOUSE_BOT_TICK_MS = 0.25;
+const HOUSE_LIFE_START_MS = 1;
 const BATCH_OVERHEAD_MS = 1_000;
 const MAX_BATCH_TICKS = 500;
 
 /**
- * Ticks for the next batch of an accelerated room: the most whose worst case (every bot at its
- * full budget every tick, plus starting `lifeStarts` lives) stays within `BATCH_CPU_SHARE` of the
- * DO CPU limit.
+ * Ticks for the next batch of an accelerated room: the most whose worst case (every sandboxed bot
+ * at its full budget every tick, plus starting `lifeStarts` sandboxed lives; `houseBots` native
+ * house bots and `houseStarts` house lives at their own cost) stays within `BATCH_CPU_SHARE` of
+ * the DO CPU limit.
  */
-export function batchTicks(bots: number, lifeStarts: number, cpuLimitMs = DO_CPU_LIMIT_MS): number {
+export function batchTicks(
+  bots: number,
+  lifeStarts: number,
+  cpuLimitMs = DO_CPU_LIMIT_MS,
+  houseBots = 0,
+  houseStarts = 0,
+): number {
   const budget =
-    cpuLimitMs * BATCH_CPU_SHARE - BATCH_OVERHEAD_MS - lifeStarts * WORST_LIFE_START_MS;
-  const perTick = bots * WORST_BOT_TICK_MS + ENGINE_TICK_MS;
+    cpuLimitMs * BATCH_CPU_SHARE -
+    BATCH_OVERHEAD_MS -
+    lifeStarts * WORST_LIFE_START_MS -
+    houseStarts * HOUSE_LIFE_START_MS;
+  const perTick = bots * WORST_BOT_TICK_MS + houseBots * HOUSE_BOT_TICK_MS + ENGINE_TICK_MS;
   return Math.max(1, Math.min(MAX_BATCH_TICKS, Math.floor(budget / perTick)));
 }

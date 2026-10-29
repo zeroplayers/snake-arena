@@ -121,7 +121,8 @@ describe("BroadcastSource", () => {
 
     // Lives are known by their slot in the stream; bots by slug and version.
     expect(source.snapshot(1)?.deaths).toEqual(["1.2"]);
-    expect(source.life("1.2")?.death).toMatchObject({ tick: 1, cause: "error", killerId: null });
+    // `c` is a house bot: its only `error` is the room retiring it.
+    expect(source.life("1.2")?.death).toMatchObject({ tick: 1, cause: "retired", killerId: null });
     expect(source.lives().map((l) => [l.id, l.bot, l.author])).toEqual([
       ["1.0", "bot-a v2", "a-author"],
       ["1.1", "bot-b v2", "b-author"],
@@ -129,6 +130,10 @@ describe("BroadcastSource", () => {
     ]);
     expect(source.snapshot(0)?.snakes.map((s) => s.id)).toEqual(["1.0", "1.1", "1.2"]);
     expect(new Set(source.lives().map((l) => l.color)).size).toBe(3);
+
+    // A deployed bot's `error` stays one.
+    latest().deliver(r.ticks(5, "a"));
+    expect(source.life("1.0")?.death).toMatchObject({ tick: 11, cause: "error" });
     source.dispose();
   });
 

@@ -7,6 +7,8 @@ import {
   batchTicks,
   DO_CPU_LIMIT_MS,
   ENGINE_TICK_MS,
+  HOUSE_BOT_TICK_MS,
+  HOUSE_LIFE_START_MS,
   MAX_BATCH_TICKS,
   MAX_BUNDLE_BYTES,
   ROOM_CPU_BUDGET_MS,
@@ -25,6 +27,18 @@ describe("batchTicks", () => {
         expect(worst).toBeLessThanOrEqual(ROOM_CPU_BUDGET_MS * BATCH_CPU_SHARE);
       }
     }
+  });
+
+  it("counts native house bots at their own cost, not a sandboxed bot's", () => {
+    // One deployed bot and 19 house bots, all starting: ~16× longer than 20 sandboxed bots.
+    expect(batchTicks(1, 1, ROOM_CPU_BUDGET_MS, 19, 19)).toBe(397);
+    expect(batchTicks(1, 0, ROOM_CPU_BUDGET_MS, 19, 0)).toBe(414);
+    const ticks = batchTicks(1, 1, ROOM_CPU_BUDGET_MS, 19, 19);
+    const worst =
+      ticks * (WORST_BOT_TICK_MS + 19 * HOUSE_BOT_TICK_MS + ENGINE_TICK_MS) +
+      WORST_LIFE_START_MS +
+      19 * HOUSE_LIFE_START_MS;
+    expect(worst).toBeLessThanOrEqual(ROOM_CPU_BUDGET_MS * BATCH_CPU_SHARE - 1000);
   });
 
   it("gives the numbers in the PR", () => {

@@ -87,8 +87,20 @@ export interface MatchResult {
 
 /** What a test can watch of the room process (to check it against the arena's rules). */
 export interface RoomTrace {
-  /** `retired`: house snakes that make way for tickets (they die on the batch's first tick). */
-  batch?(e: { tick: number; ticks: number; bots: number; starts: number; retired: string[] }): void;
+  /**
+   * `bots` and `starts` count the tickets (sandboxed in the arena), `houseBots` and `houseStarts`
+   * the house fill (native in the arena). `retired`: house snakes that make way for tickets (they
+   * die on the batch's first tick).
+   */
+  batch?(e: {
+    tick: number;
+    ticks: number;
+    bots: number;
+    starts: number;
+    houseBots: number;
+    houseStarts: number;
+    retired: string[];
+  }): void;
   spawn?(e: { tick: number; id: string; author: string }): void;
   death?(e: { tick: number; id: string }): void;
 }
@@ -129,7 +141,7 @@ export function emptyStats(): TickStats {
  * engine config. The room opens at tick 0 or at an older room's tick. Snakes join only at batch
  * boundaries, tickets first (the candidate and the "users", house bots under user names; house
  * snakes make way for those that don't fit), then the house fill takes every free slot. A batch
- * lasts `batchTicks(bots, starts)` ticks.
+ * lasts `batchTicks(bots, starts, _, houseBots, houseStarts)` ticks.
  * The candidate's ticket arrives after a pre-roll, and after each death it rejoins at the next
  * batch, like the users. The match lasts `ticks` ticks from the candidate's first spawn. Names,
  * start tick and pre-roll come from {@link disguiseFor}, so nothing the bot sees says "check"
@@ -310,9 +322,23 @@ export function playMatch(
     )) {
       spawns.push({ lifeId: h.lifeId, author: h.author, ref: { kind: "house", bot: h.house } });
     }
-    const bots = staying.length + spawns.length;
-    const batch = batchTicks(bots, spawns.length);
-    trace.batch?.({ tick: world.tick, ticks: batch, bots, starts: spawns.length, retired });
+    // Sized the way RoomDO sizes it: tickets (sandboxed there) at their worst case, house bots
+    // (native there) at their own cost.
+    const running = [...staying.map(([, m]) => m), ...spawns];
+    const houseBots = running.filter((m) => m.ref.kind === "house").length;
+    const houseStarts = spawns.filter((e) => e.ref.kind === "house").length;
+    const bots = running.length - houseBots;
+    const starts = spawns.length - houseStarts;
+    const batch = batchTicks(bots, starts, undefined, houseBots, houseStarts);
+    trace.batch?.({
+      tick: world.tick,
+      ticks: batch,
+      bots,
+      starts,
+      houseBots,
+      houseStarts,
+      retired,
+    });
     for (const e of spawns) if (!stopped()) start(e);
     for (let k = 0; k < batch && !stopped() && !windowOver(); k++) playTick(k === 0 ? retired : []);
   }

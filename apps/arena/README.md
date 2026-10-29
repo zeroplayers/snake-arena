@@ -47,7 +47,10 @@ room checks):
   tickets (`join`) and asks for them (`nextLife`, while fewer than 20 are real), and retires its
   smallest house snake (then the youngest) for each ticket that doesn't fit. So below the
   threshold waiting lives go into open rooms' house slots, and rooms open only on the threshold,
-  `roomsPerAlarm` (4) at a time up to `maxRooms` (200). A dead house snake is replaced at the
+  `roomsPerAlarm` (4) at a time up to `maxRooms` (200). House bots run natively in the room
+  (`src/room/house-life.ts`: our own deterministic code, ~40× cheaper than in the sandbox),
+  unmetered and never named by the backstop; batches size them at `HOUSE_BOT_TICK_MS`, not a
+  sandboxed bot's worst case. A dead house snake is replaced at the
   next batch, after the room has asked the matchmaker for real lives.
   A room closes by itself when only house bots remain and `nextLife` has nothing for it, except
   that while reports of its finished lives are still in its outbox (they wait for their replay
@@ -130,7 +133,8 @@ is the wall time of a batch's simulation, from its first bot call to its saved r
 moves the clock there): the bots, the engine, the commit and, in watch mode, the markers' syncs
 and random waits. The I/O around it (deliveries, the kill switch read, labels for spectators,
 loading bundles after a restart) is not in it. `workUnits` (`double4`) is the sandbox's
-deterministic cost of the bot code. DO CPU itself is in the dashboard (Workers & Pages →
+deterministic cost of the sandboxed bot code (house bots run natively and add none, nor
+`botTicks`). DO CPU itself is in the dashboard (Workers & Pages →
 `zerosnake-arena-staging` → Metrics → Durable Objects) and the GraphQL dataset
 `durableObjectsInvocationsAdaptiveGroups` (`cpuTime`). `room.crashed` with cause `overrun` /
 `suspect` / `evicted` is a batch killed by (or suspected of) the CPU limit, `overran` a watched

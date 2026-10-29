@@ -71,6 +71,15 @@ export const WORST_LIFE_START_MS = WORST_INSTRUMENT_MS + 7 + INIT_OP_BUDGET * WO
 /** Engine step for a full room, generous. */
 export const ENGINE_TICK_MS = 2;
 /**
+ * One tick of a house bot, which runs natively (`room/house-life.ts`), unmetered: its state and
+ * its decision take ~0.02 ms on average on an M1 in a full room (0.44–0.48 ms a tick for 20 of
+ * them with the engine step), so this is ~7× that on Cloudflare. It is our code, not adversarial:
+ * an average with headroom, not a worst case.
+ */
+export const HOUSE_BOT_TICK_MS = 0.25;
+/** Starting a house bot's life natively (`init`, nothing to instrument), generous. */
+export const HOUSE_LIFE_START_MS = 1;
+/**
  * Loading and persisting the room around a batch (world JSON, replay chunk, roster, and reloading
  * the running lives' traces after an eviction: ≤ 450 KB each, ~40 ms on an M1 for 20 worst-case
  * ones; saving them is per tick, in `STATE_MS`).
@@ -108,8 +117,10 @@ export const NEXT_LIFE_RETRY_MS = 10_000;
 export const SAFETY_ALARM_MS = 1_000;
 
 /**
- * Ticks for the next batch: the most whose worst case (every bot at its full budget every tick,
- * plus starting `lifeStarts` lives) stays within `BATCH_CPU_SHARE` of the room's CPU budget.
+ * Ticks for the next batch: the most whose worst case (every sandboxed bot at its full budget
+ * every tick, plus starting `lifeStarts` sandboxed lives; `houseBots` native house bots and
+ * `houseStarts` house lives at their own cost) stays within `BATCH_CPU_SHARE` of the room's CPU
+ * budget.
  *
  * The sandbox's meter bounds a tick's cost (with #62, also straight-line code, #60), except for
  * what it can't charge (operators on huge strings), which can still run far over this worst case.
@@ -119,9 +130,14 @@ export function batchTicks(
   bots: number,
   lifeStarts: number,
   cpuBudgetMs = ROOM_CPU_BUDGET_MS,
+  houseBots = 0,
+  houseStarts = 0,
 ): number {
   const budget =
-    cpuBudgetMs * BATCH_CPU_SHARE - BATCH_OVERHEAD_MS - lifeStarts * WORST_LIFE_START_MS;
-  const perTick = bots * WORST_BOT_TICK_MS + ENGINE_TICK_MS;
+    cpuBudgetMs * BATCH_CPU_SHARE -
+    BATCH_OVERHEAD_MS -
+    lifeStarts * WORST_LIFE_START_MS -
+    houseStarts * HOUSE_LIFE_START_MS;
+  const perTick = bots * WORST_BOT_TICK_MS + houseBots * HOUSE_BOT_TICK_MS + ENGINE_TICK_MS;
   return Math.max(1, Math.min(MAX_BATCH_TICKS, Math.floor(budget / perTick)));
 }
